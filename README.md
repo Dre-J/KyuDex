@@ -1,4 +1,4 @@
-# KyuDex: 
+# KyuDex
 
 KyuDex is a discord bot programmed using discord.py designed to bring the Pokémon experience to discord servers. Talk, battle and catch pokemon while you chat with others on the platform. You can also complete field directives and maintain your server's ecosystem health from random pollution events.
 
