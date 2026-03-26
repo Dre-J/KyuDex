@@ -1,0 +1,237 @@
+{
+    "cheri-berry": {
+        "type": "cure_status",
+        "target": "paralysis",
+        "icon": "\ud83c\udf3f"
+    },
+    "chesto-berry": {
+        "type": "cure_status",
+        "target": "sleep",
+        "icon": "\ud83c\udf3f"
+    },
+    "pecha-berry": {
+        "type": "cure_status",
+        "target": "poison",
+        "icon": "\ud83c\udf3f"
+    },
+    "rawst-berry": {
+        "type": "cure_status",
+        "target": "burn",
+        "icon": "\ud83c\udf3f"
+    },
+    "aspear-berry": {
+        "type": "cure_status",
+        "target": "all",
+        "icon": "\ud83c\udf3f"
+    },
+    "leppa-berry": {
+        "type": "restore_pp",
+        "value": 10,
+        "icon": "\ud83c\udf38"
+    },
+    "oran-berry": {
+        "type": "heal_pct",
+        "threshold": 0.5,
+        "value": 0.33,
+        "icon": "\ud83c\udf4b"
+    },
+    "persim-berry": {
+        "type": "cure_status",
+        "target": "confusion",
+        "icon": "\ud83c\udf3f"
+    },
+    "lum-berry": {
+        "type": "cure_status",
+        "target": "confusion",
+        "icon": "\ud83c\udf3f"
+    },
+    "sitrus-berry": {
+        "type": "heal_pct",
+        "threshold": 0.5,
+        "value": 0.33,
+        "icon": "\ud83c\udf4b"
+    },
+    "figy-berry": {
+        "type": "heal_pct",
+        "threshold": 0.25,
+        "value": 0.33,
+        "icon": "\ud83c\udf48",
+        "confusion_risk": true
+    },
+    "wiki-berry": {
+        "type": "heal_pct",
+        "threshold": 0.25,
+        "value": 0.33,
+        "icon": "\ud83c\udf48",
+        "confusion_risk": true
+    },
+    "mago-berry": {
+        "type": "heal_pct",
+        "threshold": 0.25,
+        "value": 0.33,
+        "icon": "\ud83c\udf48",
+        "confusion_risk": true
+    },
+    "aguav-berry": {
+        "type": "heal_pct",
+        "threshold": 0.25,
+        "value": 0.33,
+        "icon": "\ud83c\udf48",
+        "confusion_risk": true
+    },
+    "iapapa-berry": {
+        "type": "heal_pct",
+        "threshold": 0.25,
+        "value": 0.33,
+        "icon": "\ud83c\udf48",
+        "confusion_risk": true
+    },
+    "occa-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "passho-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "wacan-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "rindo-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "yache-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "chople-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "kebia-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "shuca-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "coba-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "payapa-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "tanga-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "charti-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "kasib-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "haban-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "colbur-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "babiri-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "chilan-berry": {
+        "type": "resist_damage",
+        "multiplier": 0.5,
+        "icon": "\ud83d\udee1\ufe0f"
+    },
+    "liechi-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "attack",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "ganlon-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "defense",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "salac-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "speed",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "petaya-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "attack",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "apicot-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "defense",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "lansat-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "attack",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "starf-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "attack",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "micle-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "attack",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    },
+    "custap-berry": {
+        "type": "stat_boost",
+        "threshold": 0.25,
+        "stat": "attack",
+        "value": 1,
+        "icon": "\ud83d\udd34"
+    }
+}
