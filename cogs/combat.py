@@ -1,11 +1,13 @@
 import discord
+import os
 import time
 import traceback
 from discord.ext import commands
-import sqlite3
+import aiosqlite
 import random
+import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -21,15 +23,52 @@ WARDEN_ROSTER = {
         'reward_qty': 3,
         'team': [
             {
-                'name': 'scyther',
-                'level': 25,
+                'name': 'kleavor',
+                'level': 30,
+                'nature': 'jolly',
+                'ability': 'sharpness',
                 'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
-                'evs': {'hp': 0, 'attack': 252, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 252},
-                'types': ['bug', 'flying'],
-                'held_item': 'none',
+                'evs': {'hp': 0, 'attack': 252, 'defense': 4, 'sp_atk': 0, 'sp_def': 0, 'speed': 252},
+                'types': ['bug', 'rock'],
+                'held_item': 'focus-sash',
                 'moves': [
-                    {'name': 'aerial-ace', 'power': 60, 'type': 'flying', 'class': 'physical', 'accuracy': 100, 'pp': 20, 'max_pp': 20},
-                    {'name': 'fury-cutter', 'power': 40, 'type': 'bug', 'class': 'physical', 'accuracy': 95, 'pp': 20, 'max_pp': 20}
+                    {'name': 'stone-axe', 'power': 65, 'type': 'rock', 'class': 'physical', 'accuracy': 90, 'pp': 15, 'max_pp': 24},
+                    {'name': 'trailblaze', 'power': 50, 'type': 'grass', 'class': 'physical', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'swords-dance', 'power': 0, 'type': 'normal', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'close-combat', 'power': 120, 'type': 'fighting', 'class': 'physical', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                ]
+            },
+            {
+                'name': 'gligar',
+                'level': 30,
+                'is_shiny': True,
+                'nature': 'impish',
+                'ability': 'immunity',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 252, 'attack': 4, 'defense': 116, 'sp_atk': 0, 'sp_def': 140, 'speed': 0},
+                'types': ['ground', 'flying'],
+                'held_item': 'liechi-berry',
+                'moves': [
+                    {'name': 'earthquake', 'power': 100, 'type': 'ground', 'class': 'physical', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'roost', 'power': 0, 'type': 'flying', 'class': 'status', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'u-turn', 'power': 70, 'type': 'bug', 'class': 'physical', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'toxic', 'power': 0, 'type': 'poison', 'class': 'status', 'accuracy': 90, 'pp': 10, 'max_pp': 16},
+                ]
+            },
+            {
+                'name': 'nidoking',
+                'level': 30,
+                'nature': 'timid',
+                'ability': 'sheer-force',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 0, 'attack': 0, 'defense': 0, 'sp_atk': 252, 'sp_def': 4, 'speed': 252},
+                'types': ['poison', 'ground'],
+                'held_item': 'black-sludge',
+                'moves': [
+                    {'name': 'sludge-wave', 'power': 95, 'type': 'poison', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'earth-power', 'power': 90, 'type': 'ground', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'ice-beam', 'power': 90, 'type': 'ice', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'flamethrower', 'power': 90, 'type': 'fire', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
                 ]
             }
         ]
@@ -43,15 +82,68 @@ WARDEN_ROSTER = {
             {
                 'name': 'gyarados',
                 'level': 40,
+                'is_shiny': True,
+                'nature': 'adamant',
+                'ability': 'intimidate',
                 'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
-                'evs': {'hp': 4, 'attack': 252, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 252},
+                'evs': {'hp': 0, 'attack': 252, 'defense': 0, 'sp_atk': 0, 'sp_def': 4, 'speed': 252},
                 'types': ['water', 'flying'],
-                'held_item': 'mystic-water',
+                'held_item': 'leftovers',
                 'moves': [
-                    {'name': 'waterfall', 'power': 80, 'type': 'water', 'class': 'physical', 'accuracy': 100, 'pp': 15, 'max_pp': 15},
-                    {'name': 'ice-fang', 'power': 65, 'type': 'ice', 'class': 'physical', 'accuracy': 95, 'pp': 15, 'max_pp': 15}
+                    {'name': 'waterfall', 'power': 80, 'type': 'water', 'class': 'physical', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                    {'name': 'dragon-dance', 'power': 0, 'type': 'dragon', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'scale-shot', 'power': 25, 'type': 'dragon', 'class': 'physical', 'accuracy': 90, 'pp': 20, 'max_pp': 32},
+                    {'name': 'earthquake', 'power': 100, 'type': 'ground', 'class': 'physical', 'accuracy': 100, 'pp': 10, 'max_pp': 16}
                 ]
-            }
+            },
+            {
+                'name': 'lapras',
+                'level': 40,
+                'nature': 'modest',
+                'ability': 'shell-armor',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 0, 'attack': 4, 'defense': 196, 'sp_atk': 252, 'sp_def': 0, 'speed': 60},
+                'types': ['water', 'ice'],
+                'held_item': 'sitrus-berry',
+                'moves': [
+                    {'name': 'ice-shard', 'power': 40, 'type': 'ice', 'class': 'physical', 'accuracy': 100, 'pp': 30, 'max_pp': 48},
+                    {'name': 'liquidation', 'power': 85, 'type': 'flying', 'class': 'physical', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'earthquake', 'power': 100, 'type': 'ground', 'class': 'physical', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'dragon-dance', 'power': 0, 'type': 'dragon', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                ]
+            },
+            {
+                'name': 'tentacruel',
+                'level': 40,
+                'nature': 'timid',
+                'ability': 'clear-body',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 252, 'attack': 0, 'defense': 120, 'sp_atk': 0, 'sp_def': 0, 'speed': 136},
+                'types': ['water', 'poison'],
+                'held_item': 'leftovers',
+                'moves': [
+                    {'name': 'acid-spray', 'power': 0, 'type': 'poison', 'class': 'special', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'water-pulse', 'power': 60, 'type': 'water', 'class': 'special', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'barrier', 'power': 0, 'type': 'psychic', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'wrap', 'power': 15, 'type': 'normal', 'class': 'special', 'accuracy': 90, 'pp': 20, 'max_pp': 32},
+                ]
+            },
+            {
+                'name': 'mantine',
+                'level': 40,
+                'nature': 'bold',
+                'ability': 'water-absorb',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 248, 'attack': 0, 'defense': 164, 'sp_atk': 0, 'sp_def': 0, 'speed': 96},
+                'types': ['water', 'flying'],
+                'held_item': 'sitrus-berry',
+                'moves': [
+                    {'name': 'air-slash', 'power': 75, 'type': 'flying', 'class': 'special', 'accuracy': 95, 'pp': 15, 'max_pp': 24},
+                    {'name': 'toxic', 'power': 0, 'type': 'poison', 'class': 'status', 'accuracy': 90, 'pp': 10, 'max_pp': 16},
+                    {'name': 'roost', 'power': 0, 'type': 'flying', 'class': 'status', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'scald', 'power': 80, 'type': 'water', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                ]
+            }         
         ]
     },
     'core': {
@@ -61,17 +153,86 @@ WARDEN_ROSTER = {
         'reward_qty': 1,
         'team': [
             {
-                'name': 'camerupt',
-                'level': 55,
+                'name': 'gigalith',
+                'level': 60,
+                'is_shiny': True,
+                'nature': 'careful',
+                'ability': 'sand-stream',
                 'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
-                'evs': {'hp': 252, 'attack': 0, 'defense': 4, 'sp_atk': 252, 'sp_def': 0, 'speed': 0},
-                'types': ['fire', 'ground'],
-                'held_item': 'charcoal',
+                'evs': {'hp': 252, 'attack': 0, 'defense': 4, 'sp_atk': 0, 'sp_def': 252, 'speed': 0},
+                'types': ['rock'],
+                'held_item': 'terrain-extender',
                 'moves': [
-                    {'name': 'earth-power', 'power': 90, 'type': 'ground', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 10},
-                    {'name': 'lava-plume', 'power': 80, 'type': 'fire', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 15}
+                    {'name': 'stealth-rock', 'power': 0, 'type': 'rock', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'stone-edge', 'power': 100, 'type': 'rock', 'class': 'physical', 'accuracy': 80, 'pp': 5, 'max_pp': 8},
+                    {'name': 'earthquake', 'power': 100, 'type': 'ground', 'class': 'physical', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'protect', 'power': 0, 'type': 'normal', 'class': 'status', 'accuracy': 100, 'pp': 10, 'max_pp': 16}
                 ]
-            }
+            },
+            {
+                'name': 'toxicroak',
+                'level': 60,
+                'nature': 'careful',
+                'ability': 'dry-skin',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 0, 'attack': 252, 'defense': 0, 'sp_atk': 0, 'sp_def': 4, 'speed': 252},
+                'types': ['poison', 'fighting'],
+                'held_item': 'life-orb',
+                'moves': [
+                    {'name': 'sucker-punch', 'power': 70, 'type': 'dark', 'class': 'physical', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'gunk-shot', 'power': 120, 'type': 'poison', 'class': 'physical', 'accuracy': 80, 'pp': 5, 'max_pp': 8},
+                    {'name': 'close-combat', 'power': 120, 'type': 'fighting', 'class': 'physical', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'knock-off', 'power': 65, 'type': 'dark', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32}
+                ]
+            },
+            {
+                'name': 'camerupt',
+                'level': 60,
+                'nature': 'calm',
+                'ability': 'solid-rock',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 252, 'attack': 0, 'defense': 4, 'sp_atk': 0, 'sp_def': 252, 'speed': 0},
+                'types': ['fire', 'ground'],
+                'held_item': 'leftovers',
+                'moves': [
+                    {'name': 'earth-power', 'power': 90, 'type': 'ground', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'lava-plume', 'power': 80, 'type': 'fire', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                    {'name': 'rock-slide', 'power': 75, 'type': 'rock', 'class': 'special', 'accuracy': 90, 'pp': 10, 'max_pp': 16},
+                    {'name': 'roar', 'power': 0, 'type': 'normal', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32}
+                ]
+            },
+            {
+                'name': 'hawlucha',
+                'level': 60,
+                'nature': 'adamant',
+                'ability': 'limber',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 72, 'attack': 252, 'defense': 60, 'sp_atk': 0, 'sp_def': 0, 'speed': 124},
+                'types': ['fighting', 'flying'],
+                'held_item': 'sitrus-berry',
+                'moves': [
+                    {'name': 'flying-press', 'power': 100, 'type': 'fighting', 'class': 'physical', 'accuracy': 95, 'pp': 10, 'max_pp': 16},
+                    {'name': 'roost', 'power': 0, 'type': 'flying', 'class': 'status', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'high-jump-kick', 'power': 130, 'type': 'fighting', 'class': 'physical', 'accuracy': 90, 'pp': 10, 'max_pp': 16},
+                    {'name': 'swords-dance', 'power': 0, 'type': 'normal', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32}
+                ]
+            },
+            {
+                'name': 'coalossal',
+                'level': 60,
+                'nature': 'adamant',
+                'ability': 'flame-body',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 248, 'attack': 0, 'defense': 252, 'sp_atk': 0, 'sp_def': 8, 'speed': 0},
+                'types': ['rock', 'fire'],
+                'held_item': 'passho-berry',
+                'moves': [
+                    {'name': 'flamethrower', 'power': 90, 'type': 'fire', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                    {'name': 'rock-blast', 'power': 25, 'type': 'rock', 'class': 'physical', 'accuracy': 90, 'pp': 10, 'max_pp': 16},
+                    {'name': 'rapid-spin', 'power': 50, 'type': 'normal', 'class': 'physical', 'accuracy': 100, 'pp': 40, 'max_pp': 64},
+                    {'name': 'spikes', 'power': 0, 'type': 'ground', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32}
+                ]
+            },
         ]
     },
     'sprawl': {
@@ -81,27 +242,100 @@ WARDEN_ROSTER = {
         'reward_qty': 1,
         'team': [
             {
-                'name': 'magnezone',
-                'level': 70,
+                'name': 'klefki',
+                'level': 75,
+                'is_shiny': True,
+                'nature': 'calm',
+                'ability': 'prankster',
                 'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
-                'evs': {'hp': 252, 'attack': 0, 'defense': 0, 'sp_atk': 252, 'sp_def': 4, 'speed': 0},
-                'types': ['electric', 'steel'],
-                'held_item': 'magnet',
+                'evs': {'hp': 252, 'attack': 0, 'defense': 4, 'sp_atk': 0, 'sp_def': 252, 'speed': 0},
+                'types': ['steel', 'fairy'],
+                'held_item': 'light-clay',
                 'moves': [
-                    {'name': 'thunderbolt', 'power': 90, 'type': 'electric', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 15},
-                    {'name': 'flash-cannon', 'power': 80, 'type': 'steel', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 10}
+                    {'name': 'reflect', 'power': 0, 'type': 'psychic', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'light-screen', 'power': 0, 'type': 'psychic', 'class': 'status', 'accuracy': 100, 'pp': 30, 'max_pp': 48},
+                    {'name': 'spikes', 'power': 0, 'type': 'ground', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'play-rough', 'power': 90, 'type': 'fairy', 'class': 'physical', 'accuracy': 90, 'pp': 10, 'max_pp': 16}
                 ]
             },
             {
-                'name': 'gengar',
-                'level': 72,
+                'name': 'rotom-wash',
+                'level': 75,
+                'nature': 'bold',
+                'ability': 'levitate',
                 'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
-                'evs': {'hp': 4, 'attack': 0, 'defense': 0, 'sp_atk': 252, 'sp_def': 0, 'speed': 252},
-                'types': ['ghost', 'poison'],
-                'held_item': 'spell-tag',
+                'evs': {'hp': 252, 'attack': 0, 'defense': 160, 'sp_atk': 12, 'sp_def': 84, 'speed': 0},
+                'types': ['electric', 'water'],
+                'held_item': 'leftovers',
                 'moves': [
-                    {'name': 'shadow-ball', 'power': 80, 'type': 'ghost', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 15},
-                    {'name': 'sludge-bomb', 'power': 90, 'type': 'poison', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 10}
+                    {'name': 'volt-switch', 'power': 70, 'type': 'electric', 'class': 'special', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'hydro-pump', 'power': 110, 'type': 'water', 'class': 'special', 'accuracy': 80, 'pp': 5, 'max_pp': 8},
+                    {'name': 'will-o-wisp', 'power': 0, 'type': 'fire', 'class': 'status', 'accuracy': 85, 'pp': 15, 'max_pp': 24},
+                    {'name': 'hex', 'power': 65, 'type': 'ghost', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16}
+                ]
+            },
+            {
+                'name': 'dragonite',
+                'level': 75,
+                'nature': 'jolly',
+                'ability': 'multiscale',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 0, 'attack': 252, 'defense': 4, 'sp_atk': 0, 'sp_def': 0, 'speed': 252},
+                'types': ['dragon', 'flying'],
+                'held_item': 'sitrus-berry',
+                'moves': [
+                    {'name': 'dragon-dance', 'power': 0, 'type': 'dragon', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'extreme-speed', 'power': 80, 'type': 'normal', 'class': 'physical', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'earthquake', 'power': 100, 'type': 'ground', 'class': 'physical', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'ice-spinner', 'power': 80, 'type': 'ice', 'class': 'physical', 'accuracy': 100, 'pp': 15, 'max_pp': 24}
+                ]
+            },
+            {
+                'name': 'gardevoir',
+                'level': 75,
+                'nature': 'timid',
+                'ability': 'trace',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 0, 'attack': 0, 'defense': 0, 'sp_atk': 252, 'sp_def': 4, 'speed': 252},
+                'types': ['psychic', 'fairy'],
+                'held_item': 'babiri-berry',
+                'moves': [
+                    {'name': 'psychic', 'power': 90, 'type': 'psychic', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'moonblast', 'power': 95, 'type': 'fairy', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                    {'name': 'mystical-fire', 'power': 75, 'type': 'fire', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'calm-mind', 'power': 0, 'type': 'psychic', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32}
+                ]
+            },
+            {
+                'name': 'bisharp',
+                'level': 75,
+                'nature': 'adamant',
+                'ability': 'defiant',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 80, 'attack': 252, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 176},
+                'types': ['dark', 'steel'],
+                'held_item': 'chople-berry',
+                'moves': [
+                    {'name': 'sucker-punch', 'power': 70, 'type': 'dark', 'class': 'physical', 'accuracy': 100, 'pp': 5, 'max_pp': 8},
+                    {'name': 'iron-head', 'power': 80, 'type': 'steel', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                    {'name': 'swords-dance', 'power': 0, 'type': 'normal', 'class': 'status', 'accuracy': 100, 'pp': 20, 'max_pp': 32},
+                    {'name': 'psycho-cut', 'power': 70, 'type': 'psychic', 'class': 'physical', 'accuracy': 100, 'pp': 20, 'max_pp': 32}
+                ]
+            },
+            {
+                'name': 'kingdra',
+                'level': 75,
+                'nature': 'modest',
+                'ability': 'sniper',
+                'ivs': {'hp': 31, 'attack': 31, 'defense': 31, 'sp_atk': 31, 'sp_def': 31, 'speed': 31},
+                'evs': {'hp': 0, 'attack': 0, 'defense': 0, 'sp_atk': 252, 'sp_def': 4, 'speed': 252},
+                'types': ['water', 'dragon'],
+                'held_item': 'choice-specs',
+                'moves': [
+                    {'name': 'surf', 'power': 90, 'type': 'water', 'class': 'special', 'accuracy': 100, 'pp': 15, 'max_pp': 24},
+                    {'name': 'ice-beam', 'power': 90, 'type': 'ice', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16},
+                    {'name': 'hurricane', 'power': 110, 'type': 'flying', 'class': 'status', 'accuracy': 70, 'pp': 10, 'max_pp': 16},
+                    {'name': 'dragon-pulse', 'power': 85, 'type': 'dragon', 'class': 'special', 'accuracy': 100, 'pp': 10, 'max_pp': 16}
                 ]
             }
         ]
@@ -150,21 +384,21 @@ MAX_MOVES = {
     'normal': {'name': 'Max Strike', 'stat': 'speed', 'change': -1, 'target': 'defender'},
     'fire': {'name': 'Max Flare', 'weather': 'sun'},
     'water': {'name': 'Max Geyser', 'weather': 'rain'},
-    'electric': {'name': 'Max Lightning'}, 
-    'grass': {'name': 'Max Overgrowth'},
+    'electric': {'name': 'Max Lightning', 'terrain': 'electric'}, 
+    'grass': {'name': 'Max Overgrowth', 'terrain': 'grassy'},
     'ice': {'name': 'Max Hailstorm', 'weather': 'hail'},
     'fighting': {'name': 'Max Knuckle', 'stat': 'attack', 'change': 1, 'target': 'attacker'},
-    'poison': {'name': 'Max Ooze', 'stat': 'sp_atk', 'change': 1, 'target': 'attacker'},
-    'ground': {'name': 'Max Quake', 'stat': 'sp_def', 'change': 1, 'target': 'attacker'},
+    'poison': {'name': 'Max Ooze', 'stat': 'special-attack', 'change': 1, 'target': 'attacker'},
+    'ground': {'name': 'Max Quake', 'stat': 'special-defense', 'change': 1, 'target': 'attacker'},
     'flying': {'name': 'Max Airstream', 'stat': 'speed', 'change': 1, 'target': 'attacker'},
-    'psychic': {'name': 'Max Mindstorm'},
-    'bug': {'name': 'Max Flutterby', 'stat': 'sp_atk', 'change': -1, 'target': 'defender'},
+    'psychic': {'name': 'Max Mindstorm', 'terrain': 'psychic'},
+    'bug': {'name': 'Max Flutterby', 'stat': 'special-attack', 'change': -1, 'target': 'defender'},
     'rock': {'name': 'Max Rockfall', 'weather': 'sand'},
     'ghost': {'name': 'Max Phantasm', 'stat': 'defense', 'change': -1, 'target': 'defender'},
     'dragon': {'name': 'Max Wyrmwind', 'stat': 'attack', 'change': -1, 'target': 'defender'},
-    'dark': {'name': 'Max Darkness', 'stat': 'sp_def', 'change': -1, 'target': 'defender'},
+    'dark': {'name': 'Max Darkness', 'stat': 'special-defense', 'change': -1, 'target': 'defender'},
     'steel': {'name': 'Max Steelspike', 'stat': 'defense', 'change': 1, 'target': 'attacker'},
-    'fairy': {'name': 'Max Starfall'}
+    'fairy': {'name': 'Max Starfall', 'terrain': 'misty'}
 }
 
 WEATHER_MOVES = {
@@ -203,7 +437,49 @@ Z_CRYSTAL_TYPES = {
     'rockium-z': 'rock', 'ghostium-z': 'ghost', 'dragonium-z': 'dragon',
     'darkinium-z': 'dark', 'steelium-z': 'steel', 'fairium-z': 'fairy'
 }
-def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state, combat_log):
+
+TWO_TURN_MOVES = {
+                            'solar-beam': {'msg': "absorbed light!", 'skip_weather': ['sun', 'extremely-harsh-sunlight']},
+                            'solar-blade': {'msg': "absorbed light!", 'skip_weather': ['sun', 'extremely-harsh-sunlight']},
+                            'dig': {'msg': "burrowed its way under the ground!", 'invuln': 'underground'},
+                            'fly': {'msg': "flew up high!", 'invuln': 'air'},
+                            'bounce': {'msg': "sprang up!", 'invuln': 'air'},
+                            'razor-wind': {'msg': "whipped up a whirlwind!"},
+                            'dive': {'msg': "hid underwater!", 'invuln': 'underwater'},
+                            'phantom-force': {'msg': "vanished instantly!", 'invuln': 'phantom'},
+                            'meteor-beam': {'msg': "is overflowing with space power!", 'boost': ('sp_atk', 1)},
+                            'skull-bash': {'msg': "tucked in its head!", 'boost': ('defense', 1)}
+                        }
+
+pivot_moves = ['u-turn', 'volt-switch', 'flip-turn', 'baton-pass', 'parting-shot', 'chilly-reception']
+
+phaze_moves = ['roar', 'whirlwind', 'dragon-tail', 'circle-throw']
+
+RAMPAGE_MOVES = ['outrage', 'petal-dance', 'thrash', 'raging-fury']
+                    
+OHKO_MOVES = ['fissure', 'horn-drill', 'guillotine', 'sheer-cold']
+
+RECHARGE_MOVES = [
+                        'hyper-beam', 'giga-impact', 'frenzy-plant', 'blast-burn', 
+                        'hydro-cannon', 'roar-of-time', 'rock-wrecker', 'prismatic-laser', 
+                        'meteor-assault', 'eternabeam',
+                    ]
+
+TERRAIN_MOVES = {
+                        'electric-terrain': 'electric',
+                        'grassy-terrain': 'grassy',
+                        'misty-terrain': 'misty',
+                        'psychic-terrain': 'psychic'
+                    }
+
+TERRAIN_MESSAGES = {
+    'electric': "⚡ An electric current ran across the battlefield!",
+    'grassy': "🌿 Grass grew to cover the battlefield!",
+    'misty': "🌫️ Mist swirled around the battlefield!",
+    'psychic': "👁️ The battlefield got weird!"
+}
+
+async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state, combat_log):
     """Executes passive biological traits for a SINGLE specimen entering the biome."""
 
     # ==========================================
@@ -214,57 +490,94 @@ def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state,
     held_item = (entering_combatant.get('held_item') or "").lower().replace(' ', '-')
     
     is_primal_eligible = (base_name == 'groudon' and held_item == 'red-orb') or (base_name == 'kyogre' and held_item == 'blue-orb')
-    
+    # 🚨 DEBUG PRINT: Check your console when the battle starts!
+    if base_name in ['groudon', 'kyogre']:
+        print(f"DEBUG: Found {base_name}. Held Item: '{held_item}'. Eligible for Primal? {is_primal_eligible}")
     # The 'primal' string check prevents recursive stat-stacking if they swap out and back in!
     if is_primal_eligible and 'primal' not in entering_combatant['name'].lower():
         try:
-            target_form = f"{base_name}-primal"
+            target_form = f"%{base_name}%primal%"
             
             # Access the database to fetch the prehistoric biology
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name = ?", (target_form,))
-            primal_data = cursor.fetchone()
+            # aiosqlite context managers!
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ?", (target_form,)) as cursor:
+                    primal_data = await cursor.fetchone()
             
-            if primal_data:
-                form_id, form_name = primal_data
-                
-                cursor.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,))
-                db_stats = {row[0]: row[1] for row in cursor.fetchall()}
-                
-                cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,))
-                new_types = [row[0] for row in cursor.fetchall()]
-                
-                # Apply the stat transformation
-                level = entering_combatant.get('level', 50)
-                base_hp = db_stats.get('hp', 50)
-                new_max_hp = math.floor((2 * base_hp + 15) * level / 100) + level + 10
-                
-                hp_diff = new_max_hp - entering_combatant['max_hp']
-                entering_combatant['max_hp'] = new_max_hp
-                entering_combatant['current_hp'] = max(1, entering_combatant['current_hp'] + hp_diff)
-                
-                entering_combatant['stats'] = {
-                    'attack': math.floor((2 * db_stats.get('attack', 50) + 15) * level / 100) + 5,
-                    'defense': math.floor((2 * db_stats.get('defense', 50) + 15) * level / 100) + 5,
-                    'sp_atk': math.floor((2 * db_stats.get('special-attack', 50) + 15) * level / 100) + 5,
-                    'sp_def': math.floor((2 * db_stats.get('special-defense', 50) + 15) * level / 100) + 5,
-                    'speed': math.floor((2 * db_stats.get('speed', 50) + 15) * level / 100) + 5
-                }
-                
-                entering_combatant['pokedex_id'] = form_id
-                entering_combatant['name'] = form_name
-                entering_combatant['types'] = new_types
-                
-                # 🚨 INJECT THE PRIMAL ABILITY DIRECTLY INTO THEIR MEMORY!
-                if base_name == 'groudon':
-                    entering_combatant['ability'] = 'desolate-land'
-                elif base_name == 'kyogre':
-                    entering_combatant['ability'] = 'primordial-sea'
+                if primal_data:
+                    form_id, form_name = primal_data
                     
-                combat_log += f"🌋 **{owner_str.strip()} {base_name.capitalize()}** underwent Primal Reversion and restored its true power as **{form_name.replace('-', ' ').title()}**!\n"
-            
-            conn.close()
+                    async with db.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,)) as cursor:
+                        db_stats_raw = await cursor.fetchall()
+                    db_stats = {row[0]: row[1] for row in db_stats_raw}
+                    
+                    async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,)) as cursor:
+                        new_types_raw = await cursor.fetchall() # 🚨 3. Await the fetch!
+                    new_types = [row[0] for row in new_types_raw]
+                    
+                    # Apply the stat transformation
+                    level = entering_combatant.get('level', 50)
+                    base_hp = db_stats.get('hp', 50)
+                    new_max_hp = math.floor((2 * base_hp + 15) * level / 100) + level + 10
+                    
+                    hp_diff = new_max_hp - entering_combatant['max_hp']
+                    entering_combatant['max_hp'] = new_max_hp
+                    entering_combatant['current_hp'] = max(1, entering_combatant['current_hp'] + hp_diff)
+                    
+                    # 1. Safely extract their actual genetics and training (default to 15/0 if missing)
+                    iv_hp = entering_combatant.get('iv_hp', 15)
+                    ev_hp = entering_combatant.get('ev_hp', 0)
+                    
+                    # 2. Calculate true Primal HP
+                    base_hp = db_stats.get('hp', 50)
+                    new_max_hp = math.floor((2 * base_hp + iv_hp + math.floor(ev_hp / 4)) * level / 100) + level + 10
+                    
+                    hp_diff = new_max_hp - entering_combatant['max_hp']
+                    entering_combatant['max_hp'] = new_max_hp
+                    entering_combatant['current_hp'] = max(1, entering_combatant['current_hp'] + hp_diff)
+                    
+                    # 🚨 FIX: Safely extract real IVs and EVs from the payload!
+                    ivs = entering_combatant.get('ivs', {})
+                    evs = entering_combatant.get('evs', {})
+
+                    # 3. Helper to calculate other stats safely
+                    def calc_stat(stat_key, db_key):
+                        base = db_stats.get(db_key, 50)
+                        iv = ivs.get(stat_key, 15)
+                        ev = evs.get(stat_key, 0)
+                        return math.floor((2 * base + iv + math.floor(ev / 4)) * level / 100) + 5
+                    # 4. Apply true Primal Stats
+                    # Apply true Primal Stats
+                    base_hp = db_stats.get('hp', 50)
+                    iv_hp = ivs.get('hp', 15)
+                    ev_hp = evs.get('hp', 0)
+                    new_max_hp = math.floor((2 * base_hp + iv_hp + math.floor(ev_hp / 4)) * level / 100) + level + 10
+
+                    hp_diff = new_max_hp - entering_combatant['max_hp']
+                    entering_combatant['max_hp'] = new_max_hp
+                    entering_combatant['current_hp'] = max(1, entering_combatant['current_hp'] + hp_diff)
+
+                    entering_combatant['stats'] = {
+                        'attack': calc_stat('attack', 'attack'),
+                        'defense': calc_stat('defense', 'defense'),
+                        'sp_atk': calc_stat('sp_atk', 'special-attack'),
+                        'sp_def': calc_stat('sp_def', 'special-defense'),
+                        'speed': calc_stat('speed', 'speed')
+                    }
+
+                    entering_combatant['pokedex_id'] = form_id
+                    entering_combatant['name'] = form_name
+                    entering_combatant['types'] = new_types
+                    
+                    # 🚨 INJECT THE PRIMAL ABILITY DIRECTLY INTO THEIR MEMORY!
+                    if base_name == 'groudon':
+                        entering_combatant['ability'] = 'desolate-land'
+                    elif base_name == 'kyogre':
+                        entering_combatant['ability'] = 'primordial-sea'
+                        
+                    combat_log += f"🌋 **{owner_str.strip()} {base_name.capitalize()}** underwent Primal Reversion and restored its true power as **{form_name.replace('-', ' ').title()}**!\n"
+                else:
+                    print(f"DEBUG: Could not find '{target_form}' in the base_pokemon_species table!")
         except Exception as e:
             print(f"DEBUG: Failed Primal Reversion: {e}")
 
@@ -328,6 +641,136 @@ def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state,
 
     return combat_log
 
+class EvolutionConfirmView(discord.ui.View):
+    def __init__(self, cog, user_id, pokemon_data, target_species_data):
+        super().__init__(timeout=120.0)
+        self.cog = cog
+        self.user_id = user_id
+        self.pokemon = pokemon_data
+        
+        # Unpack the tuple we are now passing in!
+        self.target_id = target_species_data[0]
+        self.target_name = target_species_data[1]
+
+    @discord.ui.button(label="Allow Mutation", style=discord.ButtonStyle.success, emoji="✨")
+    async def confirm_evo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            print(f"[DEBUG BUTTON] Clicked by: {interaction.user.id} | Expected: {self.user_id}")
+
+            # Prevent other users from clicking the button
+            if str(interaction.user.id) != str(self.user_id):
+                return await interaction.response.send_message("You cannot interfere with this specimen's ecology!", ephemeral=True)
+            
+            # Disable buttons so they can't be spammed
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self)
+            
+            base_name = self.pokemon['name'].lower()
+            current_ability = self.pokemon.get('ability', '').lower().replace(' ', '-')
+            response_msg = f"🧬 **{self.pokemon['name'].capitalize()}** successfully mutated into **{self.target_name.capitalize()}**!"
+
+            # Apply the permanent evolution to the database
+            async with aiosqlite.connect(DB_FILE) as db:
+                
+                # 1. Fetch pre-evolution abilities to determine the genetic "slot" (Standard 1, Standard 2, or Hidden)
+                async with db.execute("SELECT standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (self.pokemon['pokedex_id'],)) as cursor:
+                    base_ab_row = await cursor.fetchone()
+                
+                base_standards = [a.strip().lower().replace(' ', '-') for a in base_ab_row[0].split(',')] if base_ab_row and base_ab_row[0] else []
+                base_hiddens = [a.strip().lower().replace(' ', '-') for a in base_ab_row[1].split(',')] if base_ab_row and base_ab_row[1] else []
+
+                slot_type = 'standard'
+                slot_index = 0
+                if current_ability in base_hiddens:
+                    slot_type = 'hidden'
+                    slot_index = base_hiddens.index(current_ability)
+                elif current_ability in base_standards:
+                    slot_type = 'standard'
+                    slot_index = base_standards.index(current_ability)
+
+                # 2. Fetch post-evolution abilities
+                async with db.execute("SELECT standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (self.target_id,)) as cursor:
+                    target_ab_row = await cursor.fetchone()
+                
+                target_standards = [a.strip().lower().replace(' ', '-') for a in target_ab_row[0].split(',')] if target_ab_row and target_ab_row[0] else []
+                target_hiddens = [a.strip().lower().replace(' ', '-') for a in target_ab_row[1].split(',')] if target_ab_row and target_ab_row[1] else []
+
+                # 3. Determine the new ability based on ecological inheritance
+                new_ability = None
+                if current_ability in target_standards or current_ability in target_hiddens:
+                    new_ability = current_ability  # Keep the exact same ability if the new species has it
+                elif slot_type == 'hidden' and target_hiddens:
+                    new_ability = target_hiddens[min(slot_index, len(target_hiddens) - 1)]  # Inherit corresponding Hidden Ability
+                elif target_standards:
+                    new_ability = target_standards[min(slot_index, len(target_standards) - 1)]  # Inherit corresponding Standard slot
+
+                # 4. Update the pokedex_id and new ability
+                if new_ability:
+                    await db.execute(
+                        "UPDATE caught_pokemon SET pokedex_id = ?, ability = ? WHERE instance_id = ?", 
+                        (self.target_id, new_ability, self.pokemon['instance_id'])
+                    )
+                    
+                    # Optional: Let the user know the ability changed!
+                    if new_ability != current_ability:
+                        response_msg += f"\n✨ Its ability became **{new_ability.replace('-', ' ').title()}**!"
+                else:
+                    await db.execute(
+                        "UPDATE caught_pokemon SET pokedex_id = ? WHERE instance_id = ?", 
+                        (self.target_id, self.pokemon['instance_id'])
+                    )
+                
+                # ==========================================
+                # DIRECTIVE TRACKER: KINETIC MATURATION
+                # ==========================================
+                await db.execute("""
+                    UPDATE field_directives
+                    SET current_progress = current_progress + 1
+                    WHERE user_id = ? AND objective_type = 'trigger_mutation' 
+                    AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
+                """, (self.user_id, base_name))
+
+                async with db.execute("""
+                    SELECT required_amount, current_progress 
+                    FROM field_directives
+                    WHERE user_id = ? AND objective_type = 'trigger_mutation' 
+                    AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
+                """, (self.user_id, base_name)) as cursor:
+                    mut_row = await cursor.fetchone()
+                
+                if mut_row and mut_row[1] == mut_row[0]:
+                    response_msg += "\n\n📡 **Directive Complete:** Kinetic Maturation Study concluded! Run `!claim` to receive your funding."
+
+                await db.commit()
+            
+            await interaction.followup.send(response_msg)
+            
+        except Exception as e:
+            print(f"\n🚨 CRITICAL BUTTON CRASH (confirm_evo): {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send("⚠️ A critical biological error occurred during mutation.", ephemeral=True)
+
+    @discord.ui.button(label="Suppress", style=discord.ButtonStyle.danger, emoji="🛑")
+    async def cancel_evo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # 🚨 THE DEBUG TRACKER:
+            print(f"[DEBUG BUTTON] Clicked by: {interaction.user.id} (Type: {type(interaction.user.id)}) | Expected: {self.user_id} (Type: {type(self.user_id)})")
+
+            if str(interaction.user.id) != str(self.user_id):
+                return await interaction.response.send_message("This isn't your specimen!", ephemeral=True)
+                
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self)
+            
+            await interaction.followup.send(f"🛑 You halted **{self.pokemon['name'].capitalize()}**'s mutation process. It remains unchanged.")
+            
+        except Exception as e:
+            print(f"\n🚨 CRITICAL BUTTON CRASH (cancel_evo): {e}")
+            traceback.print_exc()
+
 class PvPForcedSwapMenu(discord.ui.View):
     def __init__(self, cog, state, player_id):
         super().__init__(timeout=60)
@@ -339,8 +782,11 @@ class PvPForcedSwapMenu(discord.ui.View):
         is_p1 = (player_id == state['p1_id'])
         team = state['p1_team'] if is_p1 else state['p2_team']
 
+        # Grab the spatial pointer for the specimen currently on the field
+        active_idx = state['p1_active_index'] if is_p1 else state['p2_active_index']
+
         for i, poke in enumerate(team):
-            if poke['current_hp'] > 0:
+            if poke['current_hp'] > 0 and i != active_idx:
                 btn = discord.ui.Button(label=f"{poke['name'].capitalize()} (HP: {poke['current_hp']})", style=discord.ButtonStyle.success)
                 btn.callback = self.create_swap_callback(i, poke)
                 self.add_item(btn)
@@ -354,6 +800,46 @@ class PvPForcedSwapMenu(discord.ui.View):
             self.state['commits'][self.player_id] = {'type': 'forced_swap', 'data': idx}
             await interaction.response.edit_message(content=f"🔒 Locked in: Deploying **{poke['name'].capitalize()}**!", view=None)
             await self.cog.check_pvp_commits(self.state)
+        return swap_callback
+
+class MidTurnSwapMenu(discord.ui.View):
+    def __init__(self, cog, state, player_id):
+        super().__init__(timeout=120) # Give them 2 minutes to think!
+        self.cog = cog
+        self.state = state
+        self.player_id = player_id
+        
+        # THE SYNCHRONOUS LOCK
+        # We use an asyncio Event to pause the main thread until a button is clicked!
+        self.swap_event = asyncio.Event()
+        self.selected_index = None
+
+        is_p1 = (player_id == state.get('p1_id', player_id)) # Failsafe for PvE vs PvP state dicts
+        team_key = 'p1_team' if 'p1_id' in state else 'player_team'
+        team = state[team_key]
+        
+        active_key = 'p1_active_index' if 'p1_id' in state else 'active_player_index'
+        active_idx = state[active_key]
+
+        # Draw the healthy bench buttons
+        for i, poke in enumerate(team):
+            if poke['current_hp'] > 0 and i != active_idx:
+                btn = discord.ui.Button(label=f"{poke['name'].capitalize()} (HP: {poke['current_hp']})", style=discord.ButtonStyle.success)
+                btn.callback = self.create_swap_callback(i, poke)
+                self.add_item(btn)
+
+    def create_swap_callback(self, idx, poke):
+        async def swap_callback(interaction: discord.Interaction):
+            if str(interaction.user.id) != str(self.player_id):
+                return await interaction.response.send_message("⚠️ You cannot make this substitution!", ephemeral=True)
+            
+            # 1. Lock in the choice and update the Discord message so they know it worked
+            self.selected_index = idx
+            await interaction.response.edit_message(content=f"🔒 Withdrawing... Deploying **{poke['name'].capitalize()}**!", view=None)
+            
+            # 2. TRIGGER THE EVENT! This instantly unpauses the handle_move/process_pvp_turn loop!
+            self.swap_event.set()
+            
         return swap_callback
 
 class PvPDashboard(discord.ui.View):
@@ -390,7 +876,7 @@ class PvPDashboard(discord.ui.View):
         active_poke = self.state['p1_team' if is_p1 else 'p2_team'][active_idx]
 
         # Spawn the private terminal
-        view = PvPMoveMenu(self.cog, self.state, user_id, active_poke)
+        view = await PvPMoveMenu.create(self.cog, self.state, user_id, active_poke)
         await interaction.response.send_message(f"Commanding {active_poke['name'].capitalize()}...", view=view, ephemeral=True)
 
     @discord.ui.button(label="Swap 🔄", style=discord.ButtonStyle.secondary)
@@ -400,10 +886,38 @@ class PvPDashboard(discord.ui.View):
         if self.state['commits'][user_id] is not None:
             return await interaction.response.send_message("🔒 You have already locked in your tactical decision!", ephemeral=True)
 
+        # ==========================================
+        # 🚨 THE TRAP FIREWALL
+        # ==========================================
+        # 1. Identify which researcher clicked the button
+        is_p1 = (user_id == str(self.state['p1_id']))
+        active_idx = self.state['p1_active_index'] if is_p1 else self.state['p2_active_index']
+        team_key = 'p1_team' if is_p1 else 'p2_team'
+        opp_team_key = 'p2_team' if is_p1 else 'p1_team'
+        opp_active_idx = self.state['p2_active_index'] if is_p1 else self.state['p1_active_index']
+        
+        # 2. Grab their active biological specimen
+        active_poke = self.state[team_key][active_idx]
+        opp_poke = self.state[opp_team_key][opp_active_idx]
+        
+        opp_ability = (opp_poke.get('ability') or '').lower().replace(' ', '-')
+        my_types = active_poke.get('types', [])
+        volatiles = active_poke.get('volatile_statuses', {})
+        
+        # 🚨 THE ULTIMATE SPATIAL LOCK (PvP)
+        is_trapped = (
+            volatiles.get('partially_trapped', 0) > 0 or 
+            volatiles.get('hard_trapped') or
+            (opp_ability == 'shadow-tag' and 'ghost' not in my_types) # Ghost-types are immune to trapping!
+        )
+        if is_trapped:
+            return await interaction.response.send_message("⚠️ Your active specimen is trapped and cannot be withdrawn!", ephemeral=True)
+        # ==========================================
+
         # Spawn the private terminal
         view = PvPSwapMenu(self.cog, self.state, user_id)
         await interaction.response.send_message("Select a benched specimen to deploy:", view=view, ephemeral=True)
-        
+
 class PvPMoveMenu(discord.ui.View):
     def __init__(self, cog, state, player_id, active_poke):
         super().__init__(timeout=60)
@@ -417,9 +931,20 @@ class PvPMoveMenu(discord.ui.View):
         self.z_toggled = False
         
         print(f"\n=== DEBUG: Initializing PvPMoveMenu for {player_id} ===")
-        self.build_ui()
 
-    def build_ui(self):
+    @classmethod
+    async def create(cls, cog, state, player_id, active_poke):
+        """Asynchronous factory to safely build and hydrate the view."""
+        # 1. Instantiate the class normally
+        view = cls(cog, state, player_id, active_poke)
+        
+        # 2. Await the database calls/button refreshes
+        await view.build_ui()
+        
+        # 3. Return the fully prepared view
+        return view
+    
+    async def build_ui(self):
         """Clears and redraws the buttons dynamically based on toggle states and held items."""
         try:
             print("DEBUG: build_ui() triggered. Clearing old items...")
@@ -430,7 +955,14 @@ class PvPMoveMenu(discord.ui.View):
             key_items = self.state['p1_key_items'] if is_p1 else self.state['p2_key_items']
             
             held_item = (self.active_poke.get('held_item') or "").lower().replace(' ', '-')
-            
+            # THE TEMPORAL LOCK FLAG
+            is_charging = self.active_poke.get('volatile_statuses', {}).get('charging')
+            is_recharging = self.active_poke.get('volatile_statuses', {}).get('recharging')
+            is_rampage = self.active_poke.get('volatile_statuses', {}).get('rampage')
+
+            if is_rampage: 
+                is_charging = is_rampage['move']
+                
             # Safely get the Z-Crystal type
             allowed_z_type = None
             if 'Z_CRYSTAL_TYPES' in globals():
@@ -442,58 +974,64 @@ class PvPMoveMenu(discord.ui.View):
             # ROW 0: ADAPTATION TOGGLES
             # ==========================================
             print(f"DEBUG: adp_state['used'] = {adp_state['used']}")
-            if not adp_state['used']:
-                # ---MEGA & G-MAX DATABASE CHECK ---
-                base_name = self.active_poke['name'].split('-')[0].lower().strip()
-                
-                import sqlite3
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-                cursor.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ? OR name LIKE ?", 
-                               (f"{base_name}-mega%", f"{base_name}-gmax%"))
-                available_forms = cursor.fetchall()
-                conn.close()
-                
-                mega_forms = [f for f in available_forms if '-mega' in f[1]]
-                gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
+            if not is_charging:
+                if not adp_state['used']:
+                    # ---MEGA & G-MAX DATABASE CHECK ---
+                    base_name = self.active_poke['name'].split('-')[0].lower().strip()
+                    held_item = self.active_poke.get('held_item', 'none').lower() # Ensure this is declared!
+                    
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ? OR name LIKE ?", 
+                                    (f"{base_name}-mega%", f"{base_name}-gmax%")) as cursor:
+                            available_forms = await cursor.fetchall()
+                    
+                    mega_forms = [f for f in available_forms if '-mega' in f[1]]
+                    gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
 
-                # 1. DYNAMAX / GIGANTAMAX
-                if key_items.get('dynamax_band'):
-                    has_gmax = self.active_poke.get('gmax_factor', False) or self.active_poke.get('gmax_factor', 0) == 1
-                    
-                    # Ensure they actually have a G-Max form in the database before labeling it Gigantamax
-                    btn_label = "Gigantamax" if (has_gmax and gmax_form) else "Dynamax"
-                    
-                    dyna_style = discord.ButtonStyle.success if self.pending_transformation == 'dynamax' else discord.ButtonStyle.danger
-                    dyna_btn = discord.ui.Button(label=btn_label, style=dyna_style, emoji="🔴", row=0)
-                    dyna_btn.callback = self.create_transform_callback('dynamax')
-                    self.add_item(dyna_btn)
-                    
-                # 2. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
-                has_mega_stone = ('ite' in held_item)
-                has_dragon_ascent = (base_name == 'rayquaza' and any(m['name'] == 'dragon-ascent' for m in self.active_poke['moves']))
-                is_eternal = base_name == 'floette-eternal'
-                is_raichu_alola = base_name == 'raichu-alola'
+                    # 1. DYNAMAX / GIGANTAMAX
+                    if key_items.get('dynamax_band'):
+                        has_gmax = self.active_poke.get('gmax_factor', False) or self.active_poke.get('gmax_factor', 0) == 1
+                        
+                        # Ensure they actually have a G-Max form in the database before labeling it Gigantamax
+                        btn_label = "Gigantamax" if (has_gmax and gmax_form) else "Dynamax"
+                        
+                        dyna_style = discord.ButtonStyle.success if self.pending_transformation == 'dynamax' else discord.ButtonStyle.danger
+                        dyna_btn = discord.ui.Button(label=btn_label, style=dyna_style, emoji="🔴", row=0)
+                        dyna_btn.callback = self.create_transform_callback('dynamax')
+                        self.add_item(dyna_btn)
+                        
+                    # 2. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
+                    has_mega_stone = ('ite' in held_item)
+                    has_dragon_ascent = (base_name == 'rayquaza' and any(m['name'] == 'dragon-ascent' for m in self.active_poke['moves']))
+                    is_eternal = base_name == 'floette-eternal'
+                    is_raichu_alola = base_name == 'raichu-alola'
 
-                # Normal Floettes (all flower colors) cannot Mega Evolve!
-                if base_name.startswith('floette') and not is_eternal:
-                    has_mega_stone = False
-                # Alolan raichu can't mega evolve
-                if base_name.startswith('raichu') and not is_raichu_alola:
-                    has_mega_stone = False
+                    # Normal Floettes (all flower colors) cannot Mega Evolve!
+                    if base_name.startswith('floette') and not is_eternal:
+                        has_mega_stone = False
+                    # Alolan raichu can't mega evolve
+                    if base_name.startswith('raichu') and not is_raichu_alola:
+                        has_mega_stone = False
 
-                if mega_forms and (has_mega_stone or has_dragon_ascent or is_eternal) and key_items.get('mega_bracelet'):
-                    mega_style = discord.ButtonStyle.success if self.pending_transformation == 'mega' else discord.ButtonStyle.danger
-                    mega_btn = discord.ui.Button(label="Mega Evolve", style=mega_style, emoji="🧬", row=0)
-                    mega_btn.callback = self.create_transform_callback('mega')
-                    self.add_item(mega_btn)
+                    if mega_forms and (has_mega_stone or has_dragon_ascent or is_eternal) and key_items.get('mega_bracelet'):
+                        mega_style = discord.ButtonStyle.success if self.pending_transformation == 'mega' else discord.ButtonStyle.danger
+                        
+                        # 🚨 FIX: Dynamic UI styling for Z-Megas!
+                        btn_label = "⚡ Z-Mega Evolve" if held_item.endswith('-z') else "🧬 Mega Evolve"
+                        
+                        mega_btn = discord.ui.Button(label=btn_label, style=mega_style, row=0)
+                        mega_btn.callback = self.create_transform_callback('mega')
+                        self.add_item(mega_btn)
+                        
+                    # 3. Z-MOVES
+                    # 🚨 FIX: Ensure Z-Mega stones don't accidentally trigger the standard elemental Z-Move button
+                    is_true_z_crystal = held_item.endswith('-z') and not has_mega_stone
                     
-                # 3. Z-MOVES
-                if key_items.get('z_ring') and allowed_z_type:
-                    z_style = discord.ButtonStyle.success if self.z_toggled else discord.ButtonStyle.danger
-                    z_btn = discord.ui.Button(label="Z-Power", style=z_style, emoji="💎", row=0)
-                    z_btn.callback = self.z_toggle_callback
-                    self.add_item(z_btn)
+                    if key_items.get('z_ring') and allowed_z_type and is_true_z_crystal:
+                        z_style = discord.ButtonStyle.success if self.z_toggled else discord.ButtonStyle.danger
+                        z_btn = discord.ui.Button(label="Z-Power", style=z_style, emoji="💎", row=0)
+                        z_btn.callback = self.z_toggle_callback
+                        self.add_item(z_btn)
 
             # ==========================================
             # ROW 1: ATTACK COMMANDS
@@ -505,6 +1043,9 @@ class PvPMoveMenu(discord.ui.View):
             # --- CHOICE LOCK SETUP ---
             choice_lock_move = self.active_poke.get('volatile_statuses', {}).get('choice_lock')
             has_choice_item = held_item in ['choice-band', 'choice-specs', 'choice-scarf']
+
+
+
             print(f"DEBUG UI BUILD: Lock Move is '{choice_lock_move}', Has Choice Item: {has_choice_item}") # Tripwire 4
             for move in self.active_poke['moves']:
                 m_type = move.get('type', 'normal')
@@ -580,10 +1121,38 @@ class PvPMoveMenu(discord.ui.View):
                 # --- 3. STANDARD MOVES ---
                 else:
                     label_str = f"{move['name'].replace('-', ' ').title()} ({move['pp']}/{move['max_pp']})"
+                    override_name = None
+
+                    if is_recharging:
+                        # 🚨 THE RECHARGE UI LOCK
+                        btn = discord.ui.Button(
+                            label="⏳ Exhausted (Must Recharge)", 
+                            style=discord.ButtonStyle.danger, 
+                            custom_id="move_recharge_dummy",
+                            row=1
+                        )
+                        
+                        # We can reuse your existing fallback/Struggle logic to just pass a dummy move payload
+                        dummy_move = {'name': 'recharge', 'pp': 1, 'max_pp': 1}
+                        btn.callback = self.create_move_callback(dummy_move, override_name="Recharge")
+                        self.add_item(btn)
                     
+                    # ==========================================
+                    # 🚨 THE TEMPORAL UI LOCK OVERRIDE
+                    # ==========================================
+                    elif is_charging:
+                        # If they are charging, disable every button EXCEPT the one they are locked into
+                        is_disabled = (move['name'] != is_charging)
+                        btn_style = discord.ButtonStyle.danger if not is_disabled else discord.ButtonStyle.secondary
+                        label_str = f"⏳ Execute {move['name'].replace('-', ' ').title()}" if not is_disabled else move['name'].capitalize()
+                    else:
+                        # If they aren't charging, determine style normally!
+                        btn_style = discord.ButtonStyle.primary if move['pp'] > 0 else discord.ButtonStyle.secondary
+                    # ====
+
                     btn = discord.ui.Button(
                         label=label_str[:80], 
-                        style=discord.ButtonStyle.primary, 
+                        style=btn_style, 
                         disabled=is_disabled,
                         row=1
                     )
@@ -609,7 +1178,7 @@ class PvPMoveMenu(discord.ui.View):
                     self.z_toggled = False
                     print("DEBUG: Toggled ON.")
                     
-                self.build_ui()
+                await self.build_ui()
                 await interaction.response.edit_message(view=self)
                 print("DEBUG: Discord message successfully updated.")
                 
@@ -631,7 +1200,7 @@ class PvPMoveMenu(discord.ui.View):
             else:
                 print("DEBUG: Z-Power toggled OFF.")
                 
-            self.build_ui()
+            await self.build_ui()
             await interaction.response.edit_message(view=self)
             print("DEBUG: Discord message successfully updated.")
             
@@ -663,18 +1232,28 @@ class PvPMoveMenu(discord.ui.View):
                 display_name = override_name if override_name else move['name'].replace('-', ' ').title()
 
                 # ==========================================
+                # 🚨 TEMPORAL OVERRIDE: TWO-TURN MOVES 
+                # ==========================================
+                if 'volatile_statuses' not in self.active_poke:
+                    self.active_poke['volatile_statuses'] = {}
+                    
+                is_charging = self.active_poke['volatile_statuses'].get('charging')
+                if is_charging:
+                    search_name = is_charging # Force the engine to use the charging move!
+                    display_name = is_charging.replace('-', ' ').title()
+                # ==========================================
+
+                # ==========================================
                 # THE 17-VARIABLE PAYLOAD HYDRATION
                 # ==========================================
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-                cursor.execute("""
+                async with aiosqlite.connect(DB_FILE) as db:
+                    async with db.execute("""
                     SELECT name, type, power, accuracy, damage_class, pp, priority,
                         target, ailment, ailment_chance, stat_name, stat_change, stat_chance, 
                         status_type, status_chance, healing, drain
                     FROM base_moves WHERE name = ?
-                """, (search_name,))
-                p_row = cursor.fetchone()
-                conn.close()
+                """, (search_name,)) as cursor:
+                        p_row = await cursor.fetchone()
                 
                 if p_row:
                     final_move = {
@@ -872,33 +1451,33 @@ class MoveReplacementView(discord.ui.View):
         # The value will be 'move_1', 'move_2', 'move_3', or 'move_4'
         target_column = interaction.data['values'][0] 
         
-        conn = sqlite3.connect(DB_FILE) # Ensure DB_FILE is accessible here!
-        cursor = conn.cursor()
         
         try:
-            cursor.execute("BEGIN TRANSACTION")
-            
-            # 1. DOUBLE-CHECK INVENTORY (In case they spent it while the menu was open)
-            cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (self.user_id,))
-            funds = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'memory-spore'", (self.user_id,))
-            spores = cursor.fetchone()
-            spore_qty = spores[0] if spores else 0
-            
-            if funds < 500 or spore_qty < 1:
-                conn.rollback()
-                return await interaction.followup.send("❌ **Transaction Failed:** You no longer have the required 500 Eco Tokens and 1 Memory Spore.", ephemeral=True)
+            async with aiosqlite.connect(DB_FILE) as db:
+                await db.execute("BEGIN TRANSACTION")
                 
-            # 2. DEDUCT THE RESOURCES
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens - 500 WHERE user_id = ?", (self.user_id,))
-            cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'memory-spore'", (self.user_id,))
-            
-            # 3. OVERWRITE THE GENETIC CODE
-            # Using f-strings for the column name is safe here because target_column is strictly generated by our own code ('move_1' to 'move_4')
-            cursor.execute(f"UPDATE caught_pokemon SET {target_column} = ? WHERE instance_id = ?", (self.new_move, self.instance_id))
-            
-            conn.commit()
+                # 1. DOUBLE-CHECK INVENTORY (In case they spent it while the menu was open)
+                async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (self.user_id,)) as cursor:
+                    funds_row = cursor.fetchone()[0]
+                    funds = funds_row[0] if funds_row else 0
+                
+                async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'memory-spore'", (self.user_id,)) as cursor:
+                    spores_row = await cursor.fetchone()
+                    spore_qty = spores_row[0] if spores_row else 0
+                
+                if funds < 500 or spore_qty < 1:
+                    await db.rollback() # Safely abort the transaction
+                    return await interaction.followup.send("❌ **Transaction Failed:** You no longer have the required 500 Eco Tokens and 1 Memory Spore.", ephemeral=True)
+                
+                # 2. DEDUCT THE RESOURCES
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens - 500 WHERE user_id = ?", (self.user_id,))
+                await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'memory-spore'", (self.user_id,))
+                
+                # 3. OVERWRITE THE GENETIC CODE
+                # Using f-strings for the column name is safe here because target_column is strictly generated by our own code ('move_1' to 'move_4')
+                await db.execute(f"UPDATE caught_pokemon SET {target_column} = ? WHERE instance_id = ?", (self.new_move, self.instance_id))
+                
+                await db.commit()
             
             # 4. UPDATE THE UI
             embed = discord.Embed(
@@ -909,11 +1488,8 @@ class MoveReplacementView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=None)
             
         except Exception as e:
-            conn.rollback()
             print(f"Neural Rewrite Error: {e}")
             await interaction.followup.send("❌ A critical laboratory error occurred.", ephemeral=True)
-        finally:
-            conn.close()
 
     async def cancel_callback(self, interaction: discord.Interaction):
         if str(interaction.user.id) != self.user_id:
@@ -952,20 +1528,21 @@ class TeachMenu(discord.ui.View):
             
         custom_id = interaction.data['custom_id']
         slot_num = custom_id.split('_')[1] # Extracts '1', '2', '3', or '4'
+        # 🚨 SECURITY FIREWALL: Ensure the user isn't spoofing the button ID!
+        if slot_num not in ['1', '2', '3', '4']:
+            return await interaction.response.send_message("⚠️ Invalid move slot detected!", ephemeral=True)
+        
         forgotten_move = custom_id.split('_')[2]
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
-        # 1. Consume the TM
-        cursor.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (self.user_id, self.new_move))
         
-        # 2. Overwrite the specific move slot
-        col_name = f"move_{slot_num}"
-        cursor.execute(f"UPDATE caught_pokemon SET {col_name} = ? WHERE instance_id = ?", (self.new_move, self.instance_id))
-        
-        conn.commit()
-        conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
+            # 1. Consume the TM
+            await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (self.user_id, self.new_move))
+
+            # 2. Overwrite the specific move slot
+            col_name = f"move_{slot_num}"
+            await db.execute(f"UPDATE caught_pokemon SET {col_name} = ? WHERE instance_id = ?", (self.new_move, self.instance_id))
+            
+            await db.commit()
 
         # Disable all buttons
         for child in self.children:
@@ -1037,7 +1614,7 @@ class DetailedMovepoolPaginator(discord.ui.View):
                 inline=False
             )
 
-        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Use !learn [Move Name] [Slot 1-4]")
+        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Use !learn [pokemon] [Slot 1-4] [Move Name]")
         return embed
 
     @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary)
@@ -1140,7 +1717,17 @@ class SwapMenu(discord.ui.View):
                     state['adaptation']['active'] = False
                     state['adaptation']['turns'] = 0
                     print(f"DEBUG: Stripped adaptation from {p_active['name']}.")
-                
+            
+            # ==========================================
+            # 🚨 NEW: PRIMORDIAL WEATHER VOLUNTARY CLEAR
+            # ==========================================
+            weather_cleared_msg = ""
+            if state.get('weather', {}).get('primordial', False):
+                if p_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']:
+                    state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
+                    weather_cleared_msg = f"🌤️ The primordial weather dissipated as {p_active['name'].capitalize()} retreated!\n"
+            # ==========================================
+
             state['active_player_index'] = selected_index
             new_active = state['player_team'][selected_index]
             n_active = state['npc_team'][state['active_npc_index']]
@@ -1151,7 +1738,7 @@ class SwapMenu(discord.ui.View):
                 combat_log = f"You sent out **{new_active['name'].capitalize()}**!\n"
                 
                 try:
-                    combat_log = trigger_single_entry_ability(new_active, n_active, "Your", state, combat_log)
+                    combat_log = await trigger_single_entry_ability(new_active, n_active, "Your", state, combat_log)
                     hazard_log = apply_entry_hazards(new_active, state['player_hazards'], TYPE_CHART, "Your")
                     if hazard_log: combat_log += hazard_log
 
@@ -1186,7 +1773,8 @@ class SwapMenu(discord.ui.View):
             else:
                 combat_log = f"**Turn {state['turn_number']}**\n\n"
                 combat_log += f"You recalled your specimen and sent out **{new_active['name'].capitalize()}**!\n"
-
+                if weather_cleared_msg:
+                    combat_log += weather_cleared_msg
                 # ==========================================
                 # GENERATE THE NEW IMAGE!
                 # ==========================================
@@ -1209,7 +1797,7 @@ class SwapMenu(discord.ui.View):
                 # However, generating it prevents the pointer corruption bug before the handoff!
                 #    
                 try:
-                    combat_log = trigger_single_entry_ability(new_active, n_active, "Your", state, combat_log)
+                    combat_log = await trigger_single_entry_ability(new_active, n_active, "Your", state, combat_log)
                     hazard_log = apply_entry_hazards(new_active, state['player_hazards'], TYPE_CHART, "Your")
                     if hazard_log: combat_log += hazard_log
                     # Did the hazards trigger a berry?
@@ -1224,16 +1812,13 @@ class SwapMenu(discord.ui.View):
                         chosen_move = random.choice(available_moves)
                         chosen_move['pp'] -= 1 
                         
-
-                        conn = sqlite3.connect(DB_FILE)
-                        cursor = conn.cursor()
-                        cursor.execute("""
+                        async with aiosqlite.connect(DB_FILE) as db:
+                            async with db.execute("""
                             SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance, 
                                 stat_name, stat_change, stat_chance, healing, drain, name, priority
                             FROM base_moves WHERE name = ?
-                        """, (chosen_move['name'],))
-                        n_row = cursor.fetchone()
-                        conn.close()
+                        """, (chosen_move['name'],)) as cursor:
+                                n_row = await cursor.fetchone()
                         
                         if n_row:
                             # Perfectly mapped all 14 variables
@@ -1254,7 +1839,10 @@ class SwapMenu(discord.ui.View):
                                     n_active, new_active, n_move_stats, 
                                     weather=state.get('weather', {'type': 'none'})['type'], 
                                     target_hazards=state['player_hazards'], # The NPC attacks the Player's habitat
-                                    user_hazards=state['npc_hazards']       # The NPC's own habitat
+                                    user_hazards=state['npc_hazards'],
+                                    terrain=state.get('terrain', {'type': 'none'})['type'],
+                                    wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                                    gravity=state.get('field', {}).get('gravity', 0) > 0
                                 )
                                 new_active['current_hp'] = max(0, new_active['current_hp'] - dmg)
                                 if msg: combat_log += f"*{msg}*\n"
@@ -1263,7 +1851,7 @@ class SwapMenu(discord.ui.View):
                 else:
                     combat_log += f"💀 Your **{new_active['name'].capitalize()}** couldn't survive the treacherous habitat!\n"
 
-                self.main_battle_view.refresh_buttons()
+                await self.main_battle_view.refresh_buttons()
                 print("DEBUG: Handoff to main_battle_view.process_turn_end (Voluntary Swap)")
                 await self.main_battle_view.process_turn_end(interaction, combat_log)
 
@@ -1336,11 +1924,9 @@ class ItemSelect(discord.ui.View):
             return await interaction.followup.send("You cannot use that item on a fainted specimen! Use a Revive.", ephemeral=True)
 
         # --- 2. CONSUME THE ITEM ---
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (self.user_id, selected_item))
-        conn.commit()
-        conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (self.user_id, selected_item))
+            await db.commit()
 
         # --- 3. APPLY THE MEDICAL EFFECT ---
         combat_log = f"**Turn {state['turn_number']}** begins!\n\n"
@@ -1396,7 +1982,18 @@ class BattleDashboard(discord.ui.View):
         self.cog = cog
         self.user_id = str(user_id)
         self.ctx = ctx
-        self.refresh_buttons()
+    
+    @classmethod
+    async def create(cls, cog, user_id, ctx):
+        """Asynchronous factory to safely build and hydrate the view."""
+        # 1. Instantiate the class normally
+        view = cls(cog, user_id, ctx)
+        
+        # 2. Await the database calls/button refreshes
+        await view.refresh_buttons()
+        
+        # 3. Return the fully prepared view
+        return view
 
     async def render_dashboard(self, interaction, combat_log):
         """Helper function to redraw the UI after a Forced Swap without advancing the turn."""
@@ -1435,7 +2032,7 @@ class BattleDashboard(discord.ui.View):
             n_hazards=state.get('npc_hazards')
         )
         # ==========================================
-        self.refresh_buttons()
+        await self.refresh_buttons()
         # Dynamically grab the new randomized filename!
         if battle_file:
                 embed.set_image(url=f"attachment://{battle_file.filename}")
@@ -1443,67 +2040,33 @@ class BattleDashboard(discord.ui.View):
         else:
             await interaction.edit_original_response(embed=embed, view=self, attachments=[])
 
-    async def check_for_evolution(self, cursor, conn, user_id, specimen, combat_log):
-            """Checks if a specimen has hit its genetic threshold for level-based evolution."""
-            current_pokedex_id = specimen['pokedex_id']
-            current_level = specimen['level']
-            instance_id = specimen['instance_id']
-            current_name = specimen['name']
+    async def check_for_evolution(self, db, user_id, specimen, combat_log):
+        """Checks if a specimen has hit its genetic threshold for level-based evolution."""
+        current_pokedex_id = specimen['pokedex_id']
+        current_level = specimen['level']
+        current_name = specimen['name']
 
-            # 1. Check the Metamorphosis Rulebook for level-based triggers
-            cursor.execute("""
-                SELECT er.evolved_species_id, s.name 
-                FROM evolution_rules er
-                JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
-                WHERE er.base_species_id = ? 
-                AND er.trigger_name = 'level-up' 
-                AND er.min_level <= ?
-            """, (current_pokedex_id, current_level))
+        # 1. Check the Metamorphosis Rulebook for level-based triggers
+        async with db.execute("""
+            SELECT er.evolved_species_id, s.name 
+            FROM evolution_rules er
+            JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+            WHERE er.base_species_id = ? 
+            AND er.trigger_name = 'level-up' 
+            AND er.min_level <= ?
+        """, (current_pokedex_id, current_level)) as cursor:
+            evo_data = await cursor.fetchone()
+        
+        # 2. If an evolution is found, return the prompt and the new species ID!
+        if evo_data:
+            new_pokedex_id, evolved_into_name = evo_data
             
-            evo_data = cursor.fetchone()
+            # Store the base evolution message (This prompts the user, it doesn't confirm it)
+            evo_msg = f"🌟 **{current_name.capitalize()}** reached Level {current_level} and is reacting to the accumulated biomass! It looks ready to evolve into **{evolved_into_name.capitalize()}**!\n"
             
-            # 2. If an evolution is found, mutate the database and return a success message!
-            if evo_data:
-                new_pokedex_id, evolved_into_name = evo_data
-                
-                # Update the specific Pokémon's genetics
-                cursor.execute("UPDATE caught_pokemon SET pokedex_id = ? WHERE instance_id = ?", (new_pokedex_id, instance_id))
-                
+            return evo_msg, (new_pokedex_id, evolved_into_name)
             
-                specimen['pokedex_id'] = new_pokedex_id
-                specimen['name'] = evolved_into_name
-                
-                # Store the base evolution message
-                evo_msg = f"🌟 **{current_name.capitalize()}** reached Level {current_level} and evolved into **{evolved_into_name.capitalize()}**!\n"
-                
-                # ==========================================
-                # DIRECTIVE TRACKER: KINETIC MATURATION (EVOLUTION)
-                # ==========================================
-                # We track either a specific species mutation or an 'any' mutation
-                cursor.execute("""
-                    UPDATE field_directives
-                    SET current_progress = current_progress + 1
-                    WHERE user_id = ? AND objective_type = 'trigger_mutation' 
-                    AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
-                """, (user_id, current_name.lower()))
-
-                cursor.execute("""
-                    SELECT required_amount, current_progress 
-                    FROM field_directives
-                    WHERE user_id = ? AND objective_type = 'trigger_mutation' 
-                    AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
-                """, (user_id, current_name.lower()))
-                
-                mut_row = cursor.fetchone()
-                
-                # If the tracker just hit its target, append the alert!
-                if mut_row and mut_row[1] == mut_row[0]:
-                    evo_msg += "📡 **Directive Complete:** Kinetic Maturation Study concluded! Run `!claim` to receive your funding.\n"
-                # ==========================================
-                
-                return evo_msg
-                
-            return "" # No evolution occurred
+        return None, None # No evolution occurred
     
     async def handle_transformation(self, interaction: discord.Interaction):
         if str(interaction.user.id) != self.user_id:
@@ -1539,7 +2102,7 @@ class BattleDashboard(discord.ui.View):
                 state['adaptation']['z_toggled'] = not state['adaptation']['z_toggled']
                 
                 # Instantly redraw the UI and exit the function. No turn is consumed!
-                self.refresh_buttons()
+                await self.refresh_buttons()
                 return await interaction.edit_original_response(view=self)
             # ==========================================
 
@@ -1578,29 +2141,29 @@ class BattleDashboard(discord.ui.View):
                 
             else:
                 print("DEBUG: Applying Mega/G-Max logic. Connecting to DB...")
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-                cursor.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,))
-                raw_stats = cursor.fetchall()
-                
-                cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,))
-                new_types = [row[0] for row in cursor.fetchall()]
-                
-                #  Fetch the mutated biological ability!
-                try:
-                    # Query the species table directly to extract the genetic trait!
-                    cursor.execute("SELECT standard_abilities FROM base_pokemon_species WHERE pokedex_id = ?", (form_id,))
-                    ab_data = cursor.fetchone()
+                async with aiosqlite.connect(DB_FILE) as db:
+                    # Fetch Stats
+                    async with db.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,)) as cursor:
+                        raw_stats = await cursor.fetchall()
                     
-                    # Ensure we actually grabbed a valid string before mutating the state
-                    if ab_data and ab_data[0]:
-                        # Slice the string at the comma, grab the first ability, and sanitize it!
-                        raw_ability = ab_data[0].split(',')[0].strip()
-                        p_active['ability'] = raw_ability.lower().replace(' ', '-')
-                except Exception as e:
-                    print(f"DEBUG: Could not fetch Mega Ability: {e}")
+                    # Fetch Types
+                    async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,)) as cursor:
+                        type_rows = await cursor.fetchall()
+                        new_types = [row[0] for row in type_rows]
                     
-                conn.close()
+                    #  Fetch the mutated biological ability!
+                    try:
+                        # Query the species table directly to extract the genetic trait!
+                        async with db.execute("SELECT standard_abilities FROM base_pokemon_species WHERE pokedex_id = ?", (form_id,)) as cursor:
+                            ab_data = await cursor.fetchone()
+                        
+                        # Ensure we actually grabbed a valid string before mutating the state
+                        if ab_data and ab_data[0]:
+                            # Slice the string at the comma, grab the first ability, and sanitize it!
+                            raw_ability = ab_data[0].split(',')[0].strip()
+                            p_active['ability'] = raw_ability.lower().replace(' ', '-')
+                    except Exception as e:
+                        print(f"DEBUG: Could not fetch Mega Ability: {e}")
                 
                 if not raw_stats:
                     print(f"CRITICAL DEBUG: No stats found in database for ID {form_id}!")
@@ -1649,7 +2212,7 @@ class BattleDashboard(discord.ui.View):
                 
                 # Trigger the biological entry hook so Snow Warning/Drought activates instantly!
                 try:
-                    log_msg = trigger_single_entry_ability(p_active, n_active, "Your", state, log_msg)
+                    log_msg = await trigger_single_entry_ability(p_active, n_active, "Your", state, log_msg)
                 except Exception as e:
                     print(f"DEBUG: Failed to trigger mega ability hook: {e}")
 
@@ -1692,7 +2255,7 @@ class BattleDashboard(discord.ui.View):
             # Dynamically grab the new randomized filename!
             if battle_file:
                 embed.set_image(url=f"attachment://{battle_file.filename}")
-            self.refresh_buttons() 
+            await self.refresh_buttons() 
             
             await interaction.edit_original_response(embed=embed, view=self, attachments=[battle_file])
             print("=== DEBUG: handle_transformation COMPLETE ===")
@@ -1703,11 +2266,13 @@ class BattleDashboard(discord.ui.View):
             await interaction.followup.send("A critical engine failure occurred during Hyper-Adaptation.", ephemeral=True)
 
 
-    def refresh_buttons(self):
+    async def refresh_buttons(self):
         """Dynamically builds the UI buttons so they can be easily redrawn after a faint."""
         self.clear_items()
         state = self.cog.active_battles[self.user_id]
         p_active = state['player_team'][state['active_player_index']]
+
+        n_active = state['npc_team'][state['active_npc_index']]
 
         # Check if the specimen has ANY energy left across all moves
         total_pp = sum(m['pp'] for m in p_active['moves'])
@@ -1721,6 +2286,10 @@ class BattleDashboard(discord.ui.View):
         choice_lock_move = p_active.get('volatile_statuses', {}).get('choice_lock')
         has_choice_item = held_item in ['choice-band', 'choice-specs', 'choice-scarf']
 
+        # THE TEMPORAL LOCK FLAG
+        is_charging = p_active.get('volatile_statuses', {}).get('charging')
+        is_recharging = p_active.get('volatile_statuses', {}).get('recharging')
+
         
         # ==========================================
         # 1. Draw Combat Behaviors (Row 0)
@@ -1729,7 +2298,17 @@ class BattleDashboard(discord.ui.View):
         is_maxed = state['adaptation'].get('active') and state['adaptation'].get('type') in ['dynamax', 'gmax']
 
 
-        if total_pp <= 0:
+        # 🚨 THE RECHARGE UI LOCK
+        if is_recharging:
+            recharge_btn = discord.ui.Button(
+                label="⏳ Exhausted (Must Recharge)", 
+                style=discord.ButtonStyle.danger, 
+                custom_id="move_recharge_dummy" 
+            )
+            recharge_btn.callback = self.handle_move
+            self.add_item(recharge_btn)
+            
+        elif total_pp <= 0:
             # The Specimen is exhausted! Spawn the Struggle Button.
             struggle_btn = discord.ui.Button(
                 label="Struggle", 
@@ -1761,11 +2340,9 @@ class BattleDashboard(discord.ui.View):
                 
                 # If EITHER the type or class is missing from an older save state, fetch them!
                 if not move_element or not move_class:
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT type, damage_class FROM base_moves WHERE name = ?", (move_name,))
-                    db_res = cursor.fetchone()
-                    conn.close()
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        async with db.execute("SELECT type, damage_class FROM base_moves WHERE name = ?", (move_name,)) as cursor:
+                            db_res = await cursor.fetchone()
                     
                     move_element = db_res[0] if db_res else 'normal'
                     move_class = db_res[1] if db_res else 'physical'
@@ -1814,7 +2391,16 @@ class BattleDashboard(discord.ui.View):
                     btn_style = discord.ButtonStyle.primary if curr_pp > 0 else discord.ButtonStyle.secondary
                     custom_id = f"move_{i}_{move_name}"
                     disabled_flag = is_disabled # 🚨 Mapped!
-                    
+
+                # ==========================================
+                # 🚨 THE TEMPORAL UI LOCK OVERRIDE
+                # ==========================================
+                if is_charging:
+                    disabled_flag = (move_name != is_charging)
+                    btn_style = discord.ButtonStyle.danger if not disabled_flag else discord.ButtonStyle.secondary
+                    btn_label = f"⏳ Execute {move_name.replace('-', ' ').title()}" if not disabled_flag else move_name.capitalize()
+                # ==========================================
+
                 btn = discord.ui.Button(label=btn_label, style=btn_style, custom_id=custom_id, row=0, disabled=disabled_flag)
                 
                 # Only wire the callback if it's an actual, clickable attack
@@ -1822,97 +2408,114 @@ class BattleDashboard(discord.ui.View):
                     btn.callback = self.handle_move
                     
                 self.add_item(btn)
-            
-        # 2. Draw Medical Supplies (Row 1)
-        bag_btn = discord.ui.Button(label="🎒 Open Bag", style=discord.ButtonStyle.success, custom_id="action_bag", row=1)
-        bag_btn.callback = self.open_bag
-        self.add_item(bag_btn)
 
-        # --- The Swap Button ---
-        # We disable it if there are no other healthy specimens on the team!
-        healthy_bench = [p for i, p in enumerate(state['player_team']) if p['current_hp'] > 0 and i != state['active_player_index']]
-        
-        swap_btn = discord.ui.Button(label="🔄 Swap Specimen", style=discord.ButtonStyle.secondary, custom_id="action_swap", row=1)
-        swap_btn.disabled = len(healthy_bench) == 0
-        swap_btn.callback = self.handle_swap
-        self.add_item(swap_btn)
+        if not is_charging and not is_recharging:
 
-        # ==========================================
-        # 3. THE HYPER-ADAPTATION SCANNER (Row 2)
-        # ==========================================
-        if not state['adaptation']['used']:
-            base_name = p_active['name'].split('-')[0]
-            held_item = p_active.get('held_item', 'none').lower()
-            gmax_factor = p_active.get('gmax_factor', False)
-            
-            # Safely grab the key items from memory (defaults to False if missing)
-            key_items = state.get('key_items', {})
+            # 2. Draw Medical Supplies (Row 1)
+            bag_btn = discord.ui.Button(label="🎒 Open Bag", style=discord.ButtonStyle.success, custom_id="action_bag", row=1)
+            bag_btn.callback = self.open_bag
+            self.add_item(bag_btn)
 
-            # We will use this flag to check if we need to spawn the generic Dynamax button
-            gimmick_found = False
+            # --- The Swap Button ---
+            # We disable it if there are no other healthy specimens on the team!
+            healthy_bench = [p for i, p in enumerate(state['player_team']) if p['current_hp'] > 0 and i != state['active_player_index']]
+            # 🚨 THE ULTIMATE SPATIAL LOCK (Player UI)
+            opp_ability = (n_active.get('ability') or '').lower().replace(' ', '-')
+            my_types = p_active.get('types', [])
+            volatiles = p_active.get('volatile_statuses', {})
 
-            # A. Z-MOVE CHECK (Requires Z-Ring)
-            if held_item.endswith('-z') and key_items.get('z_ring'):
-                if state['adaptation'].get('z_toggled', False):
-                    btn = discord.ui.Button(label="🔄 Cancel Z-Power", style=discord.ButtonStyle.secondary, custom_id="transform_0_zmove", row=2)
-                else:
-                    btn = discord.ui.Button(label="🌟 Unleash Z-Move", style=discord.ButtonStyle.primary, custom_id="transform_0_zmove", row=2)
-                btn.callback = self.handle_transformation
-                self.add_item(btn)
-                gimmick_found = True
+            is_trapped = (
+                volatiles.get('partially_trapped', 0) > 0 or 
+                volatiles.get('hard_trapped') or
+                (opp_ability == 'shadow-tag' and 'ghost' not in my_types) # Ghost-types are immune!
+            )
+            swap_btn = discord.ui.Button(label="🔄 Swap Specimen", style=discord.ButtonStyle.secondary, custom_id="action_swap", row=1)
+            swap_btn.disabled = len(healthy_bench) == 0 or is_trapped
+            swap_btn.callback = self.handle_swap
+            self.add_item(swap_btn)
 
-            # B. MEGA & G-MAX DATABASE CHECK
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ? OR name LIKE ?", 
-                           (f"{base_name}-mega%", f"{base_name}-gmax%"))
-            available_forms = cursor.fetchall()
-            conn.close()
-            
-            mega_forms = [f for f in available_forms if '-mega' in f[1]]
-            gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
+            # ==========================================
+            # 3. THE HYPER-ADAPTATION SCANNER (Row 2)
+            # ==========================================
+            if not state['adaptation']['used']:
+                base_name = p_active['name'].split('-')[0]
+                held_item = p_active.get('held_item', 'none').lower()
+                gmax_factor = p_active.get('gmax_factor', False)
+                
+                # Safely grab the key items from memory (defaults to False if missing)
+                key_items = state.get('key_items', {})
 
-            # 1. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
-            has_mega_stone = ('ite' in held_item)
-            has_dragon_ascent = (base_name == 'rayquaza' and any(m['name'] == 'dragon-ascent' for m in p_active['moves']))
-            is_eternal = base_name == 'floette-eternal'
-            is_raichu_alola = base_name == 'raichu-alola'
+                # We will use this flag to check if we need to spawn the generic Dynamax button
+                gimmick_found = False
 
-            # 🚨 FIREWALL: Normal Floettes (all flower colors) cannot Mega Evolve!
-            if base_name.startswith('floette') and not is_eternal:
-                has_mega_stone = False
+                # A. Z-MOVE CHECK (Requires Z-Ring and Z-crystal)
+                if held_item.endswith('-z') and z_crystal_type and key_items.get('z_ring'):
+                    if state['adaptation'].get('z_toggled', False):
+                        btn = discord.ui.Button(label="🔄 Cancel Z-Power", style=discord.ButtonStyle.secondary, custom_id="transform_0_zmove", row=2)
+                    else:
+                        btn = discord.ui.Button(label="🌟 Unleash Z-Move", style=discord.ButtonStyle.primary, custom_id="transform_0_zmove", row=2)
+                    btn.callback = self.handle_transformation
+                    self.add_item(btn)
+                    gimmick_found = True
 
-            if base_name.startswith('raichu') and not is_raichu_alola:
+                # B. MEGA & G-MAX DATABASE CHECK
+                async with aiosqlite.connect(DB_FILE) as db:
+                    async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ? OR name LIKE ?", 
+                                (f"{base_name}-mega%", f"{base_name}-gmax%")) as cursor:
+                        available_forms = await cursor.fetchall()
+                
+                mega_forms = [f for f in available_forms if '-mega' in f[1]]
+                gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
+
+                # 1. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
+                has_mega_stone = ('ite' in held_item)
+                has_dragon_ascent = (base_name == 'rayquaza' and any(m['name'] == 'dragon-ascent' for m in p_active['moves']))
+                is_eternal = base_name == 'floette-eternal'
+                is_raichu_alola = base_name == 'raichu-alola'
+
+                # 🚨 FIREWALL: Normal Floettes (all flower colors) cannot Mega Evolve!
+                if base_name.startswith('floette') and not is_eternal:
                     has_mega_stone = False
+
+                if base_name.startswith('raichu') and not is_raichu_alola:
+                        has_mega_stone = False
+                        
+                if mega_forms and (has_mega_stone or has_dragon_ascent or is_eternal) and key_items.get('mega_bracelet'):
+                    form_id, form_name = mega_forms[0]
                     
-            if mega_forms and (has_mega_stone or has_dragon_ascent or is_eternal) and key_items.get('mega_bracelet'):
-                form_id, form_name = mega_forms[0]
-                
-                if held_item.endswith('-x'):
-                    target = next((f for f in mega_forms if '-mega-x' in f[1]), mega_forms[0])
-                    form_id, form_name = target
-                elif held_item.endswith('-y'):
-                    target = next((f for f in mega_forms if '-mega-y' in f[1]), mega_forms[0])
-                    form_id, form_name = target
+                    # 🚨 FIX 2: Added routing for the Z-Mega forms!
+                    if held_item.endswith('-x'):
+                        target = next((f for f in mega_forms if '-mega-x' in f[1]), mega_forms[0])
+                        form_id, form_name = target
+                    elif held_item.endswith('-y'):
+                        target = next((f for f in mega_forms if '-mega-y' in f[1]), mega_forms[0])
+                        form_id, form_name = target
+                    elif held_item.endswith('-z'):
+                        target = next((f for f in mega_forms if '-mega-z' in f[1]), mega_forms[0])
+                        form_id, form_name = target
+                        
+                    # Dynamic button styling based on whether it's a Z-Mega or Standard Mega
+                    btn_label = "⚡ Z-Mega Evolve" if held_item.endswith('-z') else "🧬 Mega Evolve"
                     
-                btn = discord.ui.Button(label=f"🧬 Mega Evolve", style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
-                btn.callback = self.handle_transformation
-                self.add_item(btn)
-                gimmick_found = True
-            
-            # 2. GIGANTAMAX (Requires Dynamax Band)
-            if gmax_form and gmax_factor and key_items.get('dynamax_band'):
-                form_id, form_name = gmax_form
-                btn = discord.ui.Button(label=f"🌪️ Gigantamax", style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
-                btn.callback = self.handle_transformation
-                self.add_item(btn)
-                gimmick_found = True
+                    btn = discord.ui.Button(label=btn_label, style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
+                    
+                    btn.callback = self.handle_transformation
+                    self.add_item(btn)
+                    gimmick_found = True
                 
-            # 3. GENERIC DYNAMAX (Requires Dynamax Band, only spawns if no other gimmick is ready)
-            if not gimmick_found and key_items.get('dynamax_band'):
-                btn = discord.ui.Button(label="🔴 Dynamax", style=discord.ButtonStyle.danger, custom_id="transform_0_dynamax", row=2)
-                btn.callback = self.handle_transformation
-                self.add_item(btn)
+                # 2. GIGANTAMAX (Requires Dynamax Band)
+                if gmax_form and gmax_factor and key_items.get('dynamax_band'):
+                    form_id, form_name = gmax_form
+                    btn = discord.ui.Button(label=f"🌪️ Gigantamax", style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
+                    btn.callback = self.handle_transformation
+                    self.add_item(btn)
+                    gimmick_found = True
+                    
+                # 3. GENERIC DYNAMAX (Requires Dynamax Band, only spawns if no other gimmick is ready)
+                if not gimmick_found and key_items.get('dynamax_band'):
+                    btn = discord.ui.Button(label="🔴 Dynamax", style=discord.ButtonStyle.danger, custom_id="transform_0_dynamax", row=2)
+                    btn.callback = self.handle_transformation
+                    self.add_item(btn)
 
     async def handle_swap(self, interaction: discord.Interaction):
         if str(interaction.user.id) != self.user_id:
@@ -1928,51 +2531,61 @@ class BattleDashboard(discord.ui.View):
                                         player_shiny=False, npc_shiny=False, 
                                         weather='none', p_status=None, n_status=None, 
                                         p_hazards=None, n_hazards=None):
-            """Fetches high-res official artwork and composites them onto a 2D battlefield canvas with HUD overlays."""
+            """Fetches high-res official artwork from LOCAL DISK and composites them onto a 2D battlefield canvas."""
             
-            base_url = "https://raw.githubusercontent.com/Dre-J/pokebotsprites/refs/heads/master/sprites/pokemon/other/official-artwork"
-            # 🚨 THE TRIPWIRE: Print exactly what IDs the engine is receiving!
             print(f"\n🚨 VISUAL ENGINE DIAGNOSTIC -> Player ID: {player_id} | NPC ID: {npc_id}")
-            p_url = f"{base_url}/shiny/{player_id}.png" if player_shiny else f"{base_url}/{player_id}.png"
-            n_url = f"{base_url}/shiny/{npc_id}.png" if npc_shiny else f"{base_url}/{npc_id}.png"
+            
+            # ==========================================
+            # 1. LOCAL FILE ROUTING
+            # ==========================================
+            base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
+            
+            p_path = os.path.join(base_path, "shiny", f"{player_id}.png") if player_shiny else os.path.join(base_path, f"{player_id}.png")
+            n_path = os.path.join(base_path, "shiny", f"{npc_id}.png") if npc_shiny else os.path.join(base_path, f"{npc_id}.png")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(p_url) as resp1:
-                    p_data = await resp1.read() if resp1.status == 200 else None
-                async with session.get(n_url) as resp2:
-                    n_data = await resp2.read() if resp2.status == 200 else None
-
+            # Fallback bytes (A tiny placeholder image so the bot doesn't crash if a sprite is missing)
             fallback_bytes = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDAT\x08\x99c\xf8\x0f\x04\x00\x09\xfb\x03\xfd\xe3U\xf2\x9c\x00\x00\x00\x00IEND\xaeB`\x82'
             
             try:
-                p_img = Image.open(BytesIO(p_data if p_data else fallback_bytes)).convert("RGBA")
-                n_img = Image.open(BytesIO(n_data if n_data else fallback_bytes)).convert("RGBA")
+                # Load Player Sprite
+                if os.path.exists(p_path):
+                    p_img = Image.open(p_path).convert("RGBA")
+                else:
+                    print(f"⚠️ Missing Local Sprite: {p_path}")
+                    p_img = Image.open(BytesIO(fallback_bytes)).convert("RGBA")
+                    
+                # Load NPC Sprite
+                if os.path.exists(n_path):
+                    n_img = Image.open(n_path).convert("RGBA")
+                else:
+                    print(f"⚠️ Missing Local Sprite: {n_path}")
+                    n_img = Image.open(BytesIO(fallback_bytes)).convert("RGBA")
+                    
             except Exception as e:
-                print(f"PIL Image Error: {e}")
+                print(f"PIL Image Loading Error: {e}")
+                # Ultimate failsafe: Just draw invisible boxes
                 p_img = Image.new('RGBA', (250, 250), (0, 0, 0, 0))
                 n_img = Image.new('RGBA', (250, 250), (0, 0, 0, 0))
 
+            # Mirror the player sprite so it faces the opponent
             p_img = ImageOps.mirror(p_img)
             p_img = p_img.resize((180, 180), Image.Resampling.LANCZOS)
             n_img = n_img.resize((180, 180), Image.Resampling.LANCZOS)
 
             # ==========================================
-            # 1. PROCEDURAL HABITAT BACKGROUND
+            # 2. PROCEDURAL HABITAT BACKGROUND
             # ==========================================
             # Sky Blue top half, Grass Green bottom half
             bg = Image.new('RGBA', (600, 300), (135, 206, 235, 255)) 
             bg_draw = ImageDraw.Draw(bg)
             bg_draw.rectangle([0, 150, 600, 300], fill=(120, 200, 80, 255))
             
-            # (Optional: If you ever want a custom image file, replace the 3 lines above with this:)
-            # bg = Image.open("your_custom_background.png").resize((600, 300)).convert("RGBA")
-
             # Moved NPC down from Y=20 to Y=60 so it clears the HUD
             bg.paste(n_img, (380, 60), n_img)   
             bg.paste(p_img, (70, 80), p_img)  
 
             # ==========================================
-            # 2. TRANSLUCENT HUD OVERLAYS
+            # 3. TRANSLUCENT HUD OVERLAYS
             # ==========================================
             # Pillow requires a separate transparent layer to draw translucent shapes
             overlay = Image.new('RGBA', bg.size, (0, 0, 0, 0))
@@ -2003,12 +2616,12 @@ class BattleDashboard(discord.ui.View):
             def get_color(pct):
                 if pct > 0.5: return (46, 204, 113, 255)  
                 if pct > 0.2: return (241, 196, 15, 255)  
-                return (231, 76, 60, 255)                 
+                return (231, 76, 60, 255)                
 
             font = ImageFont.load_default()
 
             # ==========================================
-            # 3. DRAW WEATHER & STATUS TEXT
+            # 4. DRAW WEATHER & STATUS TEXT
             # ==========================================
             if weather and weather != 'none':
                 w_colors = {'sun': (253, 203, 110), 'rain': (116, 185, 255), 'sand': (225, 177, 44), 'hail': (223, 230, 233)}
@@ -2027,7 +2640,7 @@ class BattleDashboard(discord.ui.View):
                 draw.text((95, 240), f"[{s_name[:3].upper()}]", fill=status_colors.get(s_name, (255, 255, 255)), font=font)
 
             # ==========================================
-            # 4. DRAW HP BARS
+            # 5. DRAW HP BARS
             # ==========================================
             # NPC Bar
             draw.rectangle([400, 35, 400 + bar_width, 35 + bar_height], fill=(50, 50, 50, 255))
@@ -2040,7 +2653,7 @@ class BattleDashboard(discord.ui.View):
             draw.text((105, 260), f"{p_hp} / {p_max_hp}", fill=(255, 255, 255, 255), font=font)
 
             # ==========================================
-            # 5. DRAW ENVIRONMENTAL HAZARDS
+            # 6. DRAW ENVIRONMENTAL HAZARDS
             # ==========================================
             if p_hazards:
                 h_text = []
@@ -2060,6 +2673,7 @@ class BattleDashboard(discord.ui.View):
                 if h_text:
                     draw.text((395, 53), " | ".join(h_text), fill=(178, 190, 195, 255), font=font)
 
+            # Package into Discord File
             buffer = BytesIO()
             bg.save(buffer, format="PNG")
             buffer.seek(0)
@@ -2072,18 +2686,15 @@ class BattleDashboard(discord.ui.View):
         """Queries the user's inventory for medical supplies and opens the Dropdown UI."""
         if str(interaction.user.id) != self.user_id:
             return await interaction.response.send_message("⚠️ This is not your field expedition!", ephemeral=True)
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
         # Fetch any items classified as medical supplies that the user actually owns
         medical_items = ('potion', 'super-potion', 'hyper-potion', 'max-potion', 'full-restore', 'revive', 'full-heal')
         placeholders = ','.join('?' * len(medical_items))
         
         query = f"SELECT item_name, quantity FROM user_inventory WHERE user_id = ? AND item_name IN ({placeholders}) AND quantity > 0"
-        cursor.execute(query, (self.user_id, *medical_items))
-        inventory_data = cursor.fetchall()
-        conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(query, (self.user_id, *medical_items)) as cursor:
+                inventory_data = await cursor.fetchall()
         
         if not inventory_data:
             return await interaction.response.send_message("🎒 Your medical pouch is empty! Requisition supplies from the `!market`.", ephemeral=True)
@@ -2109,415 +2720,479 @@ class BattleDashboard(discord.ui.View):
                 # ==========================================
                 # OPEN THE DATABASE ONCE FOR THE ENTIRE TURN
                 # ==========================================
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-
-                # ==========================================
-                # 1. REGISTER THE PLAYER'S PAYLOAD
-                # ==========================================
-                custom_id = interaction.data['custom_id']
-                is_z_move = custom_id.endswith('_z')
-                is_max_move = custom_id.endswith('_max')
-                
-                # --- FIREWALL: KEY ITEM AUTHORIZATION ---
-                if is_max_move and not state.get('key_items', {}).get('dynamax_band'):
-                    # Close the DB before rejecting the interaction to prevent soft-locks!
-                    conn.close() 
-                    return await interaction.response.send_message("❌ Authorization denied. You do not possess a Dynamax Band.", ephemeral=True)
+                async with aiosqlite.connect(DB_FILE) as db:
+                    # ==========================================
+                    # 1. REGISTER THE PLAYER'S PAYLOAD
+                    # ==========================================
+                    custom_id = interaction.data['custom_id']
+                    is_z_move = custom_id.endswith('_z')
+                    is_max_move = custom_id.endswith('_max')
                     
-                if is_z_move and not state.get('key_items', {}).get('z_ring'):
-                    conn.close()
-                    return await interaction.response.send_message("❌ Authorization denied. You do not possess a Z-Ring.", ephemeral=True)
+                    # --- FIREWALL: KEY ITEM AUTHORIZATION ---
+                    if is_max_move and not state.get('key_items', {}).get('dynamax_band'):
+                        return await interaction.response.send_message("❌ Authorization denied. You do not possess a Dynamax Band.", ephemeral=True)
+                        
+                    if is_z_move and not state.get('key_items', {}).get('z_ring'):
+                        return await interaction.response.send_message("❌ Authorization denied. You do not possess a Z-Ring.", ephemeral=True)
 
-                raw_id_parts = custom_id.split('_')
-                move_name = raw_id_parts[2]
+                    raw_id_parts = custom_id.split('_')
+                    move_name = raw_id_parts[2]
 
-                # APPLY THE PVE CHOICE LOCK 🚨
-                held_item = (p_active.get('held_item') or "").lower().replace(' ', '-')
-                if held_item in ['choice-band', 'choice-specs', 'choice-scarf']:
+                    # ==========================================
+                    # 🚨 TEMPORAL OVERRIDE: TWO-TURN MOVES 
+                    # ==========================================
                     if 'volatile_statuses' not in p_active:
                         p_active['volatile_statuses'] = {}
-                    if not p_active['volatile_statuses'].get('choice_lock'):
-                        p_active['volatile_statuses']['choice_lock'] = move_name
-                # ------------------------------------------
+                        
+                    is_charging = p_active['volatile_statuses'].get('charging')
+                    is_rampage = p_active['volatile_statuses'].get('rampage')
+                    
+                    if is_charging:
+                        move_name = is_charging # Force the engine to use the charging move!
+                    elif is_rampage:
+                        move_name = is_rampage['move'] # Force the rampage move!
 
-                p_available_moves = [m for m in p_active['moves'] if m['pp'] > 0]
-                p_z_display = ""
-                
-                # --- STRUGGLE OVERRIDE (PLAYER) ---
-                if not p_available_moves:
-                    move_name = 'struggle'
-                    p_move_stats = {
-                        'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
-                        'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
-                        'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
-                        'healing': 0, 'drain': 0, 'name': 'struggle', 
-                        'priority': 0 
-                    }
-                    combat_log += f"⚠️ Your **{p_active['name'].capitalize()}** has no energy left!\n"
-                else:
-                    for m in p_active['moves']:
-                        if m['name'] == move_name:
-                            m['pp'] -= 1
-                            break
-                            
+                    # APPLY THE PVE CHOICE LOCK 🚨
+                    held_item = (p_active.get('held_item') or "").lower().replace(' ', '-')
+                    if held_item in ['choice-band', 'choice-specs', 'choice-scarf']:
+                        if 'volatile_statuses' not in p_active:
+                            p_active['volatile_statuses'] = {}
+                        if not p_active['volatile_statuses'].get('choice_lock'):
+                            p_active['volatile_statuses']['choice_lock'] = move_name
+                    # ------------------------------------------
+
+                    p_available_moves = [m for m in p_active['moves'] if m['pp'] > 0]
+                    p_z_display = ""
                     
-                    # Fetch Player Move Data
-                   # Pull all 17 variables in the exact order of the DB Schema!
-                    cursor.execute("""
-                        SELECT name, type, power, accuracy, damage_class, pp, priority,
-                            target, ailment, ailment_chance, stat_name, stat_change, stat_chance, 
-                            status_type, status_chance, healing, drain
-                        FROM base_moves WHERE name = ?
-                    """, (move_name,))
-                    p_row = cursor.fetchone()
-                    
-                    if p_row:
+                    # --- STRUGGLE OVERRIDE (PLAYER) ---
+                    if not p_available_moves:
+                        move_name = 'struggle'
                         p_move_stats = {
-                            'name': p_row[0], 'type': p_row[1], 'power': p_row[2] or 0, 'accuracy': p_row[3] or 100, 
-                            'class': p_row[4], 'pp': p_row[5], 'priority': p_row[6] or 0, 'target': p_row[7], 
-                            'ailment': p_row[8], 'ailment_chance': p_row[9] or 0, 'stat_name': p_row[10], 
-                            'stat_change': p_row[11] or 0, 'stat_chance': p_row[12] or 0,
-                            'status_type': p_row[13], 'status_chance': p_row[14] or 0, # 🚨 New!
-                            'healing': p_row[15] or 0, 'drain': p_row[16] or 0
-                        }
-                    else:
-                        # A complete, fully-mapped dictionary so the physics engine never starves!
-                        print(f"⚠️ WARNING: Player move '{move_name}' not found in DB! Using typeless fallback.")
-                        p_move_stats = {
-                            'type': 'typeless', 'power': 0, 'accuracy': 100, 'class': 'status',
-                            'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
-                            'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
-                            'healing': 0, 'drain': 0, 'name': move_name, 'priority': 0
-                        }
-
-                # Apply Z-Move Mutator if triggered
-                if is_z_move:
-                    state['adaptation']['used'] = True
-                    state['adaptation']['z_toggled'] = False 
-                    if p_move_stats['class'] == 'status':
-                        p_active['current_hp'] = p_active['max_hp']
-                        p_z_display = f"Z-{move_name.replace('-', ' ').title()}"
-                        combat_log += f"🌟 **{p_active['name'].capitalize()}** surrounded itself with Z-Power and fully restored its HP!\n"
-                    else:
-                        p_move_stats['power'] = 175 
-                        p_move_stats['accuracy'] = 1000 
-                        p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
-
-                # Apply Dynamax & G-Max Mutator
-                if is_max_move:
-                    # 1. Clean the string to properly fetch G-Max data!
-                    species_raw = p_active['name'].lower()
-                    species_clean = species_raw.replace(' (dynamax)', '').replace(' (gigantamax)', '').split('-')[0].strip()
-                    gmax_search_key = f"{species_clean}-gmax"
-                    
-                    gmax_data = GMAX_MOVES.get(gmax_search_key)
-                    has_gmax = p_active.get('gmax_factor', False) or p_active.get('gmax_factor', 0) == 1
-                    
-                    is_signature_gmax = False
-                    if has_gmax and gmax_data and p_move_stats['type'] == gmax_data['type']:
-                        p_z_display = gmax_data['name']
-                        is_signature_gmax = True
-                    else:
-                        max_data = MAX_MOVES.get(p_move_stats['type'], {'name': 'Max Strike'})
-                        p_z_display = max_data['name']
-                    
-                    # 2. MAX GUARD INTERCEPTOR
-                    if p_move_stats['class'] == 'status':
-                        p_move_stats['name'] = 'max-guard' # 🚨 Let the physics engine know it's a shield!
-                        p_move_stats['target'] = 'user'    # Target self, not the opponent!
-                        p_move_stats['power'] = 0
-                        p_move_stats['ailment'] = 'none'
-                        p_move_stats['status_type'] = 'none'
-                        p_move_stats['stat_name'] = 'none'
-                        p_z_display = "Max Guard"
-                        
-                    # 3. KINETIC MAX MOVES & SANITIZATION
-                    else:
-                        p_move_stats['power'] = 140 if is_signature_gmax else 130 
-                        p_move_stats['accuracy'] = 1000 
-                        
-                        # Wipe out base move secondary effects!
-                        p_move_stats['ailment'] = 'none' 
-                        p_move_stats['status_type'] = 'none'
-                        p_move_stats['status_chance'] = 0
-                        p_move_stats['stat_name'] = 'none'
-                        p_move_stats['healing'] = 0
-                        p_move_stats['drain'] = 0
-                        
-                        # --- THE G-MAX INTERCEPTOR (Parity with PvP) ---
-                        if is_signature_gmax:
-                            p_move_stats['name'] = gmax_data['name'] # Ensure the physics engine sees the true name
-                            
-                            # Hardcoded Anomalies
-                            if p_z_display == 'G-Max Befuddle':
-                                p_move_stats['ailment'] = random.choice(['poison', 'paralysis', 'sleep'])
-                                p_move_stats['ailment_chance'] = 100
-                            elif p_z_display == 'G-Max Stun Shock':
-                                p_move_stats['ailment'] = random.choice(['poison', 'paralysis'])
-                                p_move_stats['ailment_chance'] = 100
-                                
-                            # Persistent Ecological Disasters
-                            elif p_z_display in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Vocalith']:
-                                p_move_stats['status_type'] = p_z_display.lower().replace('g-max ', '')
-                                p_move_stats['status_chance'] = 100
-                                
-                            # Standard Injections
-                            else:
-                                if 'ailment' in gmax_data:
-                                    p_move_stats['ailment'] = gmax_data['ailment']
-                                    p_move_stats['ailment_chance'] = 100
-                                if 'stat_name' in gmax_data:
-                                    p_move_stats['stat_name'] = gmax_data['stat_name']
-                                    p_move_stats['stat_change'] = gmax_data['stat_change']
-                                    p_move_stats['stat_chance'] = 100
-                                    p_move_stats['target'] = gmax_data.get('target', 'defender')
-                                if 'healing' in gmax_data:
-                                    p_move_stats['healing'] = gmax_data['healing']
-                                    
-                        else:
-                            p_move_stats['name'] = p_z_display # e.g. "Max Strike"
-                            if 'stat' in max_data:
-                                p_move_stats['stat_name'] = max_data['stat']
-                                p_move_stats['stat_change'] = max_data['change']
-                                p_move_stats['stat_chance'] = 100
-                                p_move_stats['target'] = max_data['target']
-
-                # ==========================================
-                # 2. REGISTER THE NPC'S PAYLOAD
-                # ==========================================
-                available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
-                n_move_stats = None
-                npc_move_name = None
-                
-                # --- PHASE 2 - VOLUNTARY FLIGHT AI ---
-                # 1. Gather the benched team
-                alive_bench = [i for i, p in enumerate(state['npc_team']) if p['current_hp'] > 0 and i != state['active_npc_index']]
-                is_swapping = False
-                
-                print(f"DEBUG AI [FLIGHT]: Alive bench indices: {alive_bench}")
-                
-                # Only consider fleeing if we actually have backup!
-                if alive_bench:
-                    p_types = p_active.get('types', [])
-                    n_types = n_active.get('types', [])
-                    
-                    # 2. Assess Threat Level (Defensive Vulnerability)
-                    def_multiplier = 1.0
-                    for p_type in p_types:
-                        for n_type in n_types:
-                            # Note: Ensure TYPE_CHART is accessible here!
-                            def_multiplier *= TYPE_CHART.get(p_type, {}).get(n_type, 1.0)
-                            
-                    print(f"DEBUG AI [FLIGHT]: Player Types: {p_types} | NPC Types: {n_types}")
-                    print(f"DEBUG AI [FLIGHT]: Calculated Defensive Vulnerability: {def_multiplier}x")
-                            
-                    # FLIGHT TRIGGER: Taking 2x damage, or taking 2x damage while below 50% HP
-                    is_critical_threat = def_multiplier >= 2.0
-                    is_injured_threat = (def_multiplier >= 2.0 and n_active['current_hp'] < n_active['max_hp'] * 0.5)
-                    
-                    if is_critical_threat or is_injured_threat:
-                        print(f"DEBUG AI [FLIGHT]: THREAT DETECTED! Critical: {is_critical_threat}, Injured: {is_injured_threat}")
-                        
-                        # 70% chance to retreat (This keeps the AI slightly unpredictable and prone to "mistakes"!)
-                        retreat_roll = random.randint(1, 100)
-                        print(f"DEBUG AI [FLIGHT]: Rolling for retreat... Rolled {retreat_roll}/100 (Needs <= 70)")
-                        
-                        if retreat_roll <= 70:
-                            best_score = -1.0
-                            swap_target_idx = None
-                            
-                            print("DEBUG AI [FLIGHT]: Executing Tactical Analysis on benched specimens...")
-                            
-                            # 3. Find the Optimal Replacement (The Heuristic)
-                            for i in alive_bench:
-                                benched_specimen = state['npc_team'][i]
-                                score = 1.0
-                                b_types = benched_specimen.get('types', [])
-                                
-                                # Offensive Check: Can the bench hit the player hard?
-                                max_off = 0.0
-                                for b_t in b_types:
-                                    for p_t in p_types:
-                                        max_off = max(max_off, TYPE_CHART.get(b_t, {}).get(p_t, 1.0))
-                                score *= (max_off if max_off > 0 else 1.0)
-                                
-                                # Defensive Check: Can the bench resist the player's types?
-                                max_def = 0.0
-                                for p_t in p_types:
-                                    for b_t in b_types:
-                                        max_def = max(max_def, TYPE_CHART.get(p_t, {}).get(b_t, 1.0))
-                                        
-                                if max_def == 0: score *= 4.0      # Immune!
-                                elif max_def < 1.0: score *= 2.0   # Resists!
-                                elif max_def > 1.0: score *= 0.25  # Weakness!
-                                
-                                print(f"DEBUG AI [FLIGHT]: Specimen {benched_specimen['name']} (Types: {b_types}) | Offense: {max_off}x | Defense: {max_def}x | Final Score: {score}")
-                                
-                                if score > best_score:
-                                    best_score = score
-                                    swap_target_idx = i
-                                    
-                            # 4. Execute the Swap BEFORE the turn queue!
-                            # We only swap if the best replacement actually has a tactical advantage (Score > 1.0)
-                            if swap_target_idx is not None and best_score > 1.0:
-                                print(f"DEBUG AI [FLIGHT]: SUCCESS! Swapping to Index {swap_target_idx} (Score: {best_score}).")
-                                combat_log += f"🔄 **Tactical Retreat!** The rival recalled **{n_active['name'].capitalize()}**!\n"
-                                
-                                # Update the state memory
-                                state['active_npc_index'] = swap_target_idx
-                                n_active = state['npc_team'][swap_target_idx]
-                                combat_log += f"The rival deployed **{n_active['name'].capitalize()}**!\n\n"
-                                
-                                # Trigger Entry Hazards / Abilities for the new arrival!
-                                # Make sure trigger_single_entry_ability is accessible here!
-                                combat_log = trigger_single_entry_ability(n_active, p_active, "The rival's", state, combat_log)
-                                
-                                # --- TRIGGER ENVIRONMENTAL HAZARDS ---
-                                hazard_log = apply_entry_hazards(n_active, state['npc_hazards'], TYPE_CHART, "The rival's")
-                                if hazard_log:
-                                    combat_log += hazard_log
-                                # ------------------------------------------
-
-                                is_swapping = True
-                            else:
-                                print(f"DEBUG AI [FLIGHT]: ABORT SWAP. Best benched score was {best_score}. Staying in.")
-                        else:
-                            print("DEBUG AI [FLIGHT]: AI decided to hold its ground despite the threat.")
-                # ------------------------------------------
-                
-                # --- IF NOT SWAPPING, PROCEED TO PICK AN ATTACK ---
-                if not is_swapping:
-                    print("DEBUG AI [ATTACK]: Engaging offensive move selection...")
-
-                    # --- STRUGGLE OVERRIDE ---
-                    if not available_moves:
-                        npc_move_name = 'struggle'
-                        n_move_stats = {
                             'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
                             'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
                             'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
-                            'healing': 0, 'drain': 0, 'name': 'struggle',
+                            'healing': 0, 'drain': 0, 'name': 'struggle', 
                             'priority': 0 
                         }
-                        combat_log += f"⚠️ The rival's **{n_active['name'].capitalize()}** has no energy left!\n"
+                        combat_log += f"⚠️ Your **{p_active['name'].capitalize()}** has no energy left!\n"
                     else:
-                        # --- TACTICAL PRIORITY FILTER (PHASE 3 UTILITY AI) ---
-                        best_moves = []
-                        highest_score = -10000.0
-                        
-                        p_types = p_active.get('types', [])
-                        n_types = n_active.get('types', [])
-                        
-                        # Calculate health percentages for tactical decisions
-                        p_hp_pct = p_active['current_hp'] / max(1, p_active.get('max_hp', 1))
-                        n_hp_pct = n_active['current_hp'] / max(1, n_active.get('max_hp', 1))
-                        
-                        for m in available_moves:
-                            cursor.execute("SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?", (m['name'],))
-                            m_data = cursor.fetchone()
-                            
-                            if m_data:
-                                m_type, m_power, m_class, m_heal, m_target = m_data
-                                m_power = m_power or 0 
-                                m_heal = m_heal or 0
+                        for m in p_active['moves']:
+                            if m['name'] == move_name:
+                                m['pp'] -= 1
+                                break
                                 
-                                score = 10.0 # Base minimum score
-                                
-                                # 1. DAMAGE CALCULATION & THE EXECUTIONER
-                                if m_class != 'status' and m_power > 0:
-                                    multiplier = 1.0
-                                    for p_type in p_types:
-                                        multiplier *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
-                                        
-                                    # STAB (Same Type Attack Bonus) calculation
-                                    if m_type in n_types:
-                                        multiplier *= 1.5
-                                        
-                                    estimated_damage = (m_power * multiplier)
-                                    score += estimated_damage
-                                    
-                                    # The Executioner: Massive bonus if this move is highly likely to KO
-                                    # (We use a rough estimate here to avoid running the full physics engine on every bench move)
-                                    if estimated_damage >= (p_active['current_hp'] * 0.8):
-                                        score += 10000.0 
-                                        
-                                # 2. STATUS & UTILITY SCORING
-                                if m_class == 'status':
-                                    
-                                    # Self-Preservation (Smart Healing)
-                                    if m_heal > 0 or m['name'] in ['roost', 'recover', 'soft-boiled', 'slack-off']:
-                                        if n_hp_pct < 0.4: score += 5000.0    # Bleeding out! Panicked healing!
-                                        elif n_hp_pct > 0.8: score -= 10000.0 # Don't waste a turn overhealing
-                                        else: score += 500.0
-                                        
-                                    # Pathogen Targeting (Smart Status Conditions)
-                                    if m['name'] in ['will-o-wisp', 'toxic', 'thunder-wave', 'spore', 'sleep-powder']:
-                                        if p_active.get('status_condition'):
-                                            score -= 10000.0 # Do not try to burn a poisoned target!
-                                        else:
-                                            score += 800.0
-                                            
-                                    # Tactical Setup (Swords Dance, Calm Mind)
-                                    # 'target' 7 is usually "user" in the PokeAPI schema
-                                    if m_target == 7 and m['name'] not in ['protect', 'detect']:
-                                        if n_hp_pct > 0.7: score += 400.0     # Healthy? Set up!
-                                        elif n_hp_pct < 0.3: score -= 5000.0  # Dying? Do NOT set up!
-                                        
-                                    # Stalling (Smart Protect)
-                                    if m['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield']:
-                                        if state.get('npc_used_protect_last_turn'):
-                                            score -= 10000.0 # Never spam Protect twice
-                                        elif p_active.get('status_condition') or 'leech-seed' in p_active.get('volatile_statuses', {}):
-                                            score += 2000.0 # Player is bleeding out. Stall them!
-                                            
-                                # Lock in the highest score
-                                if score > highest_score:
-                                    highest_score = score
-                                    best_moves = [m] 
-                                elif score == highest_score:
-                                    best_moves.append(m) 
-                                    
-                        chosen_move = random.choice(best_moves) if best_moves else random.choice(available_moves)
                         
-                        # Remember if the NPC used Protect so it doesn't spam it next turn!
-                        state['npc_used_protect_last_turn'] = (chosen_move['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield'])
+                        # Fetch Player Move Data
+                    # Pull all 17 variables in the exact order of the DB Schema!
+                        async with db.execute("""
+                            SELECT name, type, power, accuracy, damage_class, pp, priority,
+                                target, ailment, ailment_chance, stat_name, stat_change, stat_chance, 
+                                status_type, status_chance, healing, drain
+                            FROM base_moves WHERE name = ?
+                        """, (move_name,)) as cursor:
+                            p_row = await cursor.fetchone()
                         
-                        npc_move_name = chosen_move['name']
-                        print(f"DEBUG AI [ATTACK]: Selected '{npc_move_name}' (Score: {highest_score})")
-                        chosen_move['pp'] -= 1 
-                        
-                        cursor.execute("""
-                            SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance, 
-                                stat_name, stat_change, stat_chance, healing, drain, name, priority
-                        FROM base_moves WHERE name = ?
-                        """, (npc_move_name,))
-                        n_row = cursor.fetchone()
-                        
-                        if n_row:
-                            n_move_stats = {
-                                'type': n_row[0], 'power': n_row[1] or 0, 'accuracy': n_row[2] or 100, 'class': n_row[3],
-                                'target': n_row[4], 'ailment': n_row[5], 'ailment_chance': n_row[6] or 0,
-                                'stat_name': n_row[7], 'stat_change': n_row[8] or 0, 'stat_chance': n_row[9] or 0,
-                                'healing': n_row[10] or 0, 'drain': n_row[11] or 0,
-                                'name': n_row[12],
-                                'priority': n_row[13] or 0
+                        if p_row:
+                            p_move_stats = {
+                                'name': p_row[0], 'type': p_row[1], 'power': p_row[2] or 0, 'accuracy': p_row[3] or 100, 
+                                'class': p_row[4], 'pp': p_row[5], 'priority': p_row[6] or 0, 'target': p_row[7], 
+                                'ailment': p_row[8], 'ailment_chance': p_row[9] or 0, 'stat_name': p_row[10], 
+                                'stat_change': p_row[11] or 0, 'stat_chance': p_row[12] or 0,
+                                'status_type': p_row[13], 'status_chance': p_row[14] or 0, # 🚨 New!
+                                'healing': p_row[15] or 0, 'drain': p_row[16] or 0
                             }
                         else:
-                            print(f"⚠️ WARNING: NPC move '{npc_move_name}' not found in DB! Using typeless fallback.")
-                            n_move_stats = {
+                            # A complete, fully-mapped dictionary so the physics engine never starves!
+                            print(f"⚠️ WARNING: Player move '{move_name}' not found in DB! Using typeless fallback.")
+                            p_move_stats = {
                                 'type': 'typeless', 'power': 0, 'accuracy': 100, 'class': 'status',
                                 'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
                                 'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
-                                'healing': 0, 'drain': 0, 'name': npc_move_name, 'priority': 0
+                                'healing': 0, 'drain': 0, 'name': move_name, 'priority': 0
                             }
+
+                    # Apply Z-Move Mutator if triggered
+                    if is_z_move:
+                        state['adaptation']['used'] = True
+                        state['adaptation']['z_toggled'] = False 
+                        if p_move_stats['class'] == 'status':
+                            p_active['current_hp'] = p_active['max_hp']
+                            p_z_display = f"Z-{move_name.replace('-', ' ').title()}"
+                            combat_log += f"🌟 **{p_active['name'].capitalize()}** surrounded itself with Z-Power and fully restored its HP!\n"
+                        else:
+                            p_move_stats['power'] = 175 
+                            p_move_stats['accuracy'] = 1000 
+                            p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
+
+                    # Apply Dynamax & G-Max Mutator
+                    if is_max_move:
+                        # 1. Clean the string to properly fetch G-Max data!
+                        species_raw = p_active['name'].lower()
+                        species_clean = species_raw.replace(' (dynamax)', '').replace(' (gigantamax)', '').split('-')[0].strip()
+                        gmax_search_key = f"{species_clean}-gmax"
                         
-                conn.close()
+                        gmax_data = GMAX_MOVES.get(gmax_search_key)
+                        has_gmax = p_active.get('gmax_factor', False) or p_active.get('gmax_factor', 0) == 1
+                        
+                        is_signature_gmax = False
+                        if has_gmax and gmax_data and p_move_stats['type'] == gmax_data['type']:
+                            p_z_display = gmax_data['name']
+                            is_signature_gmax = True
+                        else:
+                            max_data = MAX_MOVES.get(p_move_stats['type'], {'name': 'Max Strike'})
+                            p_z_display = max_data['name']
+                        
+                        # 2. MAX GUARD INTERCEPTOR
+                        if p_move_stats['class'] == 'status':
+                            p_move_stats['name'] = 'max-guard' # 🚨 Let the physics engine know it's a shield!
+                            p_move_stats['target'] = 'user'    # Target self, not the opponent!
+                            p_move_stats['power'] = 0
+                            p_move_stats['ailment'] = 'none'
+                            p_move_stats['status_type'] = 'none'
+                            p_move_stats['stat_name'] = 'none'
+                            p_z_display = "Max Guard"
+                            
+                        # 3. KINETIC MAX MOVES & SANITIZATION
+                        else:
+                            p_move_stats['power'] = 140 if is_signature_gmax else 130 
+                            p_move_stats['accuracy'] = 1000 
+                            
+                            # Wipe out base move secondary effects!
+                            p_move_stats['ailment'] = 'none' 
+                            p_move_stats['status_type'] = 'none'
+                            p_move_stats['status_chance'] = 0
+                            p_move_stats['stat_name'] = 'none'
+                            p_move_stats['healing'] = 0
+                            p_move_stats['drain'] = 0
+                            
+                            # --- THE G-MAX INTERCEPTOR (Parity with PvP) ---
+                            if is_signature_gmax:
+                                p_move_stats['name'] = gmax_data['name'] # Ensure the physics engine sees the true name
+                                
+                                # Hardcoded Anomalies
+                                if p_z_display == 'G-Max Befuddle':
+                                    p_move_stats['ailment'] = random.choice(['poison', 'paralysis', 'sleep'])
+                                    p_move_stats['ailment_chance'] = 100
+                                elif p_z_display == 'G-Max Stun Shock':
+                                    p_move_stats['ailment'] = random.choice(['poison', 'paralysis'])
+                                    p_move_stats['ailment_chance'] = 100
+                                    
+                                # Persistent Ecological Disasters
+                                elif p_z_display in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Vocalith']:
+                                    p_move_stats['status_type'] = p_z_display.lower().replace('g-max ', '')
+                                    p_move_stats['status_chance'] = 100
+                                    
+                                # Standard Injections
+                                else:
+                                    if 'ailment' in gmax_data:
+                                        p_move_stats['ailment'] = gmax_data['ailment']
+                                        p_move_stats['ailment_chance'] = 100
+                                    if 'stat_name' in gmax_data:
+                                        p_move_stats['stat_name'] = gmax_data['stat_name']
+                                        p_move_stats['stat_change'] = gmax_data['stat_change']
+                                        p_move_stats['stat_chance'] = 100
+                                        p_move_stats['target'] = gmax_data.get('target', 'defender')
+                                    if 'healing' in gmax_data:
+                                        p_move_stats['healing'] = gmax_data['healing']
+                                        
+                            else:
+                                p_move_stats['name'] = p_z_display # e.g. "Max Strike"
+                                if 'stat' in max_data:
+                                    p_move_stats['stat_name'] = max_data['stat']
+                                    p_move_stats['stat_change'] = max_data['change']
+                                    p_move_stats['stat_chance'] = 100
+                                    p_move_stats['target'] = max_data['target']
+
+                    # ==========================================
+                    # 2. REGISTER THE NPC'S PAYLOAD
+                    # ==========================================
+                    available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+                    n_move_stats = None
+                    npc_move_name = None
+                    
+                    # THE NPC TEMPORAL & SPATIAL LOCKS
+                    npc_is_charging = n_active.get('volatile_statuses', {}).get('charging')
+                    npc_is_rampage = n_active.get('volatile_statuses', {}).get('rampage') 
+
+
+                    opp_ability = (p_active.get('ability') or '').lower().replace(' ', '-')
+                    npc_types = n_active.get('types', [])
+                    npc_volatiles = n_active.get('volatile_statuses', {})
+
+                    npc_is_trapped = (
+                        npc_volatiles.get('partially_trapped', 0) > 0 or 
+                        npc_volatiles.get('hard_trapped') or
+                        (opp_ability == 'shadow-tag' and 'ghost' not in npc_types)
+                    )
+                    # --- PHASE 2 - VOLUNTARY FLIGHT AI ---
+                    # 1. Gather the benched team
+                    alive_bench = [i for i, p in enumerate(state['npc_team']) if p['current_hp'] > 0 and i != state['active_npc_index']]
+                    is_swapping = False
+                    
+                    print(f"DEBUG AI [FLIGHT]: Alive bench indices: {alive_bench}")
+                    
+                    # Only consider fleeing if we actually have backup AND they are not locked/trapped!
+                    if alive_bench and not npc_is_charging and not npc_is_rampage and not npc_is_trapped:
+                        p_types = p_active.get('types', [])
+                        n_types = n_active.get('types', [])
+                        
+                        # 2. Assess Threat Level (Defensive Vulnerability)
+                        def_multiplier = 1.0
+                        for p_type in p_types:
+                            for n_type in n_types:
+                                # Note: Ensure TYPE_CHART is accessible here!
+                                def_multiplier *= TYPE_CHART.get(p_type, {}).get(n_type, 1.0)
+                                
+                        print(f"DEBUG AI [FLIGHT]: Player Types: {p_types} | NPC Types: {n_types}")
+                        print(f"DEBUG AI [FLIGHT]: Calculated Defensive Vulnerability: {def_multiplier}x")
+                                
+                        # FLIGHT TRIGGER: Taking 2x damage, or taking 2x damage while below 50% HP
+                        is_critical_threat = def_multiplier >= 2.0
+                        is_injured_threat = (def_multiplier >= 2.0 and n_active['current_hp'] < n_active['max_hp'] * 0.5)
+                        
+                        if is_critical_threat or is_injured_threat:
+                            print(f"DEBUG AI [FLIGHT]: THREAT DETECTED! Critical: {is_critical_threat}, Injured: {is_injured_threat}")
+                            
+                            # 70% chance to retreat (This keeps the AI slightly unpredictable and prone to "mistakes"!)
+                            retreat_roll = random.randint(1, 100)
+                            print(f"DEBUG AI [FLIGHT]: Rolling for retreat... Rolled {retreat_roll}/100 (Needs <= 70)")
+                            
+                            if retreat_roll <= 70:
+                                best_score = -1.0
+                                swap_target_idx = None
+                                
+                                print("DEBUG AI [FLIGHT]: Executing Tactical Analysis on benched specimens...")
+                                
+                                # 3. Find the Optimal Replacement (The Heuristic)
+                                for i in alive_bench:
+                                    benched_specimen = state['npc_team'][i]
+                                    score = 1.0
+                                    b_types = benched_specimen.get('types', [])
+                                    
+                                    # Offensive Check: Can the bench hit the player hard?
+                                    max_off = 0.0
+                                    for b_t in b_types:
+                                        for p_t in p_types:
+                                            max_off = max(max_off, TYPE_CHART.get(b_t, {}).get(p_t, 1.0))
+                                    score *= (max_off if max_off > 0 else 1.0)
+                                    
+                                    # Defensive Check: Can the bench resist the player's types?
+                                    max_def = 0.0
+                                    for p_t in p_types:
+                                        for b_t in b_types:
+                                            max_def = max(max_def, TYPE_CHART.get(p_t, {}).get(b_t, 1.0))
+                                            
+                                    if max_def == 0: score *= 4.0      # Immune!
+                                    elif max_def < 1.0: score *= 2.0   # Resists!
+                                    elif max_def > 1.0: score *= 0.25  # Weakness!
+                                    
+                                    print(f"DEBUG AI [FLIGHT]: Specimen {benched_specimen['name']} (Types: {b_types}) | Offense: {max_off}x | Defense: {max_def}x | Final Score: {score}")
+                                    
+                                    if score > best_score:
+                                        best_score = score
+                                        swap_target_idx = i
+                                        
+                                # 4. Execute the Swap BEFORE the turn queue!
+                                if swap_target_idx is not None and best_score > 1.0:
+                                    print(f"DEBUG AI [FLIGHT]: SUCCESS! Swapping to Index {swap_target_idx} (Score: {best_score}).")
+                                    
+                                    # ==========================================
+                                    # 🚨 THE PVE PURSUIT INTERCEPTOR
+                                    # ==========================================
+                                    pursuit_faint = False # 🚨 NEW: Local tracking flag
+                                    
+                                    if move_name == 'pursuit':
+                                        n_active['volatile_statuses']['is_switching'] = True
+                                        combat_log += f"⚔️ {n_active['name'].capitalize()} is trying to retreat, but was Pursued by your {p_active['name'].capitalize()}!\n"
+                                        
+                                        # Force the physics engine to calculate the hit immediately!
+                                        dmg, msg, inf_status, stat_chgs, heal_amt = calculate_damage(
+                                            p_active, n_active, p_move_stats, 
+                                            weather=state.get('weather', {'type': 'none'})['type'],
+                                            target_hazards=state['npc_hazards'],
+                                            user_hazards=state['player_hazards'],
+                                            wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                                            gravity=state.get('field', {}).get('gravity', 0) > 0
+                                        )
+                                        
+                                        n_active['current_hp'] = max(0, n_active['current_hp'] - dmg)
+                                        if msg: combat_log += f"*{msg}*\n"
+                                        if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
+                                        
+                                        # We clear the player's move so it doesn't fire a second time in the main queue!
+                                        p_move_stats = None 
+                                        
+                                        if n_active['current_hp'] <= 0:
+                                            combat_log += f"💀 {n_active['name'].capitalize()} fainted before it could escape!\n"
+                                            pursuit_faint = True # 🚨 Trigger the flag!
+                                    # ==========================================
+                                    
+                                    # 🚨 NEW: Only mutate the state if they survived the Pursuit!
+                                    if not pursuit_faint:
+                                        combat_log += f"🔄 **Tactical Retreat!** The rival recalled **{n_active['name'].capitalize()}**!\n"
+                                        
+                                        # Update the state memory
+                                        state['active_npc_index'] = swap_target_idx
+                                        n_active = state['npc_team'][swap_target_idx]
+                                        combat_log += f"The rival deployed **{n_active['name'].capitalize()}**!\n\n"
+                                        
+                                        # Trigger Entry Hazards / Abilities for the new arrival!
+                                        combat_log = await trigger_single_entry_ability(n_active, p_active, "The rival's", state, combat_log)
+                                        
+                                        # --- TRIGGER ENVIRONMENTAL HAZARDS ---
+                                        hazard_log = apply_entry_hazards(n_active, state['npc_hazards'], TYPE_CHART, "The rival's")
+                                        if hazard_log:
+                                            combat_log += hazard_log
+                                        # ------------------------------------------
+
+                                        is_swapping = True
+                                else:
+                                    print(f"DEBUG AI [FLIGHT]: ABORT SWAP. Best benched score was {best_score}. Staying in.")
+                            else:
+                                print("DEBUG AI [FLIGHT]: AI decided to hold its ground despite the threat.")
+                    # ------------------------------------------
+                    
+                    # --- IF NOT SWAPPING, PROCEED TO PICK AN ATTACK ---
+                    if not is_swapping:
+                        
+                        if npc_is_charging:
+                            # Force the AI to finish its attack!
+                            npc_move_name = npc_is_charging
+                            print(f"DEBUG AI [ATTACK]: NPC is locked into charging move '{npc_move_name}'!")
+                        elif npc_is_rampage:
+                            # 🚨 NEW: Force the AI to continue its rampage!
+                            # Rampage is stored as a dict: {'move': 'outrage', 'turns': 2}
+                            npc_move_name = npc_is_rampage['move'] 
+                            print(f"DEBUG AI [ATTACK]: NPC is locked into rampage move '{npc_move_name}'!")
+                        else:
+                            print("DEBUG AI [ATTACK]: Engaging offensive move selection...")
+
+                            # --- STRUGGLE OVERRIDE ---
+                            if not available_moves:
+                                npc_move_name = 'struggle'
+                                n_move_stats = {
+                                    'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
+                                    'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
+                                    'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
+                                    'healing': 0, 'drain': 0, 'name': 'struggle',
+                                    'priority': 0 
+                                }
+                                combat_log += f"⚠️ The rival's **{n_active['name'].capitalize()}** has no energy left!\n"
+                            else:
+                                # --- TACTICAL PRIORITY FILTER (PHASE 3 UTILITY AI) ---
+                                best_moves = []
+                                highest_score = -10000.0
+                                
+                                p_types = p_active.get('types', [])
+                                n_types = n_active.get('types', [])
+                                
+                                # Calculate health percentages for tactical decisions
+                                p_hp_pct = p_active['current_hp'] / max(1, p_active.get('max_hp', 1))
+                                n_hp_pct = n_active['current_hp'] / max(1, n_active.get('max_hp', 1))
+                                
+                                for m in available_moves:
+                                    async with db.execute("SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?", (m['name'],)) as cursor:
+                                        m_data = await cursor.fetchone()
+                                    
+                                    if m_data:
+                                        m_type, m_power, m_class, m_heal, m_target = m_data
+                                        m_power = m_power or 0 
+                                        m_heal = m_heal or 0
+                                        
+                                        score = 10.0 # Base minimum score
+                                        
+                                        # 1. DAMAGE CALCULATION & THE EXECUTIONER
+                                        if m_class != 'status' and m_power > 0:
+                                            multiplier = 1.0
+                                            for p_type in p_types:
+                                                multiplier *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
+                                                
+                                            # STAB (Same Type Attack Bonus) calculation
+                                            if m_type in n_types:
+                                                multiplier *= 1.5
+                                                
+                                            estimated_damage = (m_power * multiplier)
+                                            score += estimated_damage
+                                            
+                                            # The Executioner: Massive bonus if this move is highly likely to KO
+                                            # (We use a rough estimate here to avoid running the full physics engine on every bench move)
+                                            if estimated_damage >= (p_active['current_hp'] * 0.8):
+                                                score += 10000.0 
+                                                
+                                        # 2. STATUS & UTILITY SCORING
+                                        if m_class == 'status':
+                                            
+                                            # Self-Preservation (Smart Healing)
+                                            if m_heal > 0 or m['name'] in ['roost', 'recover', 'soft-boiled', 'slack-off']:
+                                                if n_hp_pct < 0.4: score += 5000.0    # Bleeding out! Panicked healing!
+                                                elif n_hp_pct > 0.8: score -= 10000.0 # Don't waste a turn overhealing
+                                                else: score += 500.0
+                                                
+                                            # Pathogen Targeting (Smart Status Conditions)
+                                            if m['name'] in ['will-o-wisp', 'toxic', 'thunder-wave', 'spore', 'sleep-powder']:
+                                                if p_active.get('status_condition'):
+                                                    score -= 10000.0 # Do not try to burn a poisoned target!
+                                                else:
+                                                    score += 800.0
+                                                    
+                                            # Tactical Setup (Swords Dance, Calm Mind)
+                                            # 'target' 7 is usually "user" in the PokeAPI schema
+                                            if m_target == 7 and m['name'] not in ['protect', 'detect']:
+                                                if n_hp_pct > 0.7: score += 400.0     # Healthy? Set up!
+                                                elif n_hp_pct < 0.3: score -= 5000.0  # Dying? Do NOT set up!
+                                                
+                                            # Stalling (Smart Protect)
+                                            if m['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield']:
+                                                if state.get('npc_used_protect_last_turn'):
+                                                    score -= 10000.0 # Never spam Protect twice
+                                                elif p_active.get('status_condition') or 'leech-seed' in p_active.get('volatile_statuses', {}):
+                                                    score += 2000.0 # Player is bleeding out. Stall them!
+                                                    
+                                        # Lock in the highest score
+                                        if score > highest_score:
+                                            highest_score = score
+                                            best_moves = [m] 
+                                        elif score == highest_score:
+                                            best_moves.append(m) 
+                                            
+                                chosen_move = random.choice(best_moves) if best_moves else random.choice(available_moves)
+                                
+                                # Remember if the NPC used Protect so it doesn't spam it next turn!
+                                state['npc_used_protect_last_turn'] = (chosen_move['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield'])
+                                
+                                npc_move_name = chosen_move['name']
+                                print(f"DEBUG AI [ATTACK]: Selected '{npc_move_name}' (Score: {highest_score})")
+                                chosen_move['pp'] -= 1 
+                                
+                                async with db.execute("""
+                                    SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance, 
+                                        stat_name, stat_change, stat_chance, healing, drain, name, priority
+                                FROM base_moves WHERE name = ?
+                                """, (npc_move_name,)) as cursor:
+                                    n_row = await cursor.fetchone()
+                                
+                                if n_row:
+                                    n_move_stats = {
+                                        'type': n_row[0], 'power': n_row[1] or 0, 'accuracy': n_row[2] or 100, 'class': n_row[3],
+                                        'target': n_row[4], 'ailment': n_row[5], 'ailment_chance': n_row[6] or 0,
+                                        'stat_name': n_row[7], 'stat_change': n_row[8] or 0, 'stat_chance': n_row[9] or 0,
+                                        'healing': n_row[10] or 0, 'drain': n_row[11] or 0,
+                                        'name': n_row[12],
+                                        'priority': n_row[13] or 0
+                                    }
+                                else:
+                                    print(f"⚠️ WARNING: NPC move '{npc_move_name}' not found in DB! Using typeless fallback.")
+                                    n_move_stats = {
+                                        'type': 'typeless', 'power': 0, 'accuracy': 100, 'class': 'status',
+                                        'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
+                                        'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
+                                        'healing': 0, 'drain': 0, 'name': npc_move_name, 'priority': 0
+                                    }
 
                 # ==========================================
                 # 3. KINETIC SPEED CHECK (PvE)
                 # ==========================================
-                def get_true_speed(specimen):
+                def get_true_speed(specimen, has_tailwind=False):
                     raw_spd = specimen['stats']['speed']
                     stage = specimen.get('stat_stages', {}).get('speed', 0)
                     
@@ -2537,8 +3212,14 @@ class BattleDashboard(discord.ui.View):
                     status = specimen.get('status_condition', {})
                     if status and status.get('name') == 'paralysis':
                         final_spd = int(final_spd * 0.5)
-                        
+                    
+                    # Tailwind Multiplier
+                    if has_tailwind: final_spd *= 2.0
                     return final_spd
+
+                # Fetch Tailwind Statuses
+                p_has_tailwind = state.get('player_hazards', {}).get('tailwind', 0) > 0
+                n_has_tailwind = state.get('npc_hazards', {}).get('tailwind', 0) > 0
 
                 p_speed = get_true_speed(p_active)
                 n_speed = get_true_speed(n_active)
@@ -2569,6 +3250,8 @@ class BattleDashboard(discord.ui.View):
                         elif n_prio > p_prio:
                             action_queue = [npc_action, player_action]
                         else:
+                            is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
+
                             # 2. Priority Tie! Fall back to Biological Speed Calculation
                             if p_speed > n_speed: 
                                 action_queue = [player_action, npc_action]
@@ -2597,14 +3280,45 @@ class BattleDashboard(discord.ui.View):
                         continue
                     if defender['current_hp'] <= 0:
                         combat_log += f"But there was no target for **{attacker['name'].capitalize()}** to attack!\n"
+                        # ==========================================
+                        # DESTINY BOND RESOLUTION
+                        # ==========================================
+                        if defender.get('volatile_statuses', {}).get('destiny-bond'):
+                            attacker['current_hp'] = 0
+                            combat_log += f"👻 **Your** {attacker['name'].capitalize()} took its attacker down with it!\n"
+
                         continue
 
-                    can_attack = True
                     status = attacker.get('status_condition', {})
                     owner_prefix = "Your " if is_player else "The rival's "
                     
                     # --- VOLATILE STATUS: CONFUSION CHECK ---
+                    can_attack = True
                     volatiles = attacker.get('volatile_statuses', {})
+
+                    if 'glaive_rush' in volatiles:
+                        del volatiles['glaive_rush']
+
+                    # ==========================================
+                    # 🚨 REACTIVE STATUS ANOMALY: DESTINY BOND
+                    # ==========================================
+                    if raw_move_name == 'destiny-bond':
+                        if 'volatile_statuses' not in attacker:
+                            attacker['volatile_statuses'] = {}
+                        attacker['volatile_statuses']['destiny-bond'] = True
+                        combat_log += f"👻 {owner_prefix.strip()} **{attacker['name'].capitalize()}** is hoping to take its attacker down with it!\n"
+                        continue
+
+                    # ==========================================
+                    # 🚨 THE RECHARGE ENFORCER
+                    # ==========================================
+                    if volatiles.get('recharging'):
+                        combat_log += f"⏳ **{owner_prefix}** {attacker['name'].capitalize()} must recharge!\n"
+                        
+                        # Clear the tag so they can move normally on the NEXT turn
+                        del attacker['volatile_statuses']['recharging']
+                        continue # Abort the entire turn right here!
+
                     if 'confusion' in volatiles:
                         volatiles['confusion'] -= 1
                         if volatiles['confusion'] <= 0:
@@ -2617,7 +3331,10 @@ class BattleDashboard(discord.ui.View):
                                 attacker, defender, move_stats, 
                                 weather=state.get('weather', {'type': 'none'})['type'],
                                 target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
-                                user_hazards=state['player_hazards'] if is_player else state['npc_hazards']
+                                user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                                terrain=state.get('terrain', {'type': 'none'})['type'],
+                                wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                                gravity=state.get('field', {}).get('gravity', 0) > 0
                             )
                                 attacker['current_hp'] = max(0, attacker['current_hp'] - dmg)
                                 combat_log += f"💥 {msg} (Dealt **{dmg}** damage!)\n"
@@ -2644,9 +3361,9 @@ class BattleDashboard(discord.ui.View):
                                 combat_log += f"🧊 {owner_prefix}**{attacker['name'].capitalize()}** is frozen solid!\n"
                                 can_attack = False
 
-                    if 'flinch' in volatiles:
+                    if volatiles.get('flinch'):
                         combat_log += f"🚫 **{attacker['name'].capitalize()}** flinched and couldn't move!\n"
-                        del volatiles['flinch'] 
+                        volatiles.pop('flinch', None) 
                         can_attack = False
 
                     if can_attack:
@@ -2661,6 +3378,7 @@ class BattleDashboard(discord.ui.View):
                             else:
                                 icon = "🟢" if is_player else "🔴"
                                 combat_log += f"{icon} {owner_prefix.strip()} **{attacker['name'].capitalize()}** used `{raw_move_name.replace('-', ' ').title()}`!\n"
+                                
 
                         # ==========================================
                         # ENVIRONMENTAL HAZARD INTERCEPTOR
@@ -2703,134 +3421,471 @@ class BattleDashboard(discord.ui.View):
                             # Bypass the rest of the damage and accuracy calculations for this turn!
                             continue
                         # ==========================================
+                        
+                        # ==========================================
+                        # 🚨 TWO-TURN CHARGING & INVULNERABILITY LOGIC (PvE)
+                        # ==========================================
 
-                        if random.randint(1, 100) > move_stats['accuracy']:
-                            combat_log += "The attack missed!\n"
-                        else:
-                            print(f"DEBUG 3: {attacker['name']} passed status checks. Calling physics engine...")
-                            dmg, msg, inf_status, stat_chgs, heal_amt = calculate_damage(
-                                attacker, defender, move_stats, 
-                                weather=state.get('weather', {'type': 'none'})['type'],
-                                target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
-                                user_hazards=state['player_hazards'] if is_player else state['npc_hazards']
-                            )
-                            print(f"DEBUG 4: Physics engine success! Damage calculated: {dmg}")
-                            
-                            defender['current_hp'] = max(0, defender['current_hp'] - dmg)
-                            if msg: combat_log += f"*{msg}*\n"
-                            if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
-                            
-                            #Check if the damage pushed them below the berry threshold!
-                            berry_log = check_consumables(defender, owner_prefix) 
-                            if berry_log: combat_log += berry_log
+                        is_currently_charging = attacker.get('volatile_statuses', {}).get('charging') == raw_move_name
+                        held_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
 
-                            if heal_amt > 0:
-                                attacker['current_hp'] = min(attacker.get('max_hp', 100), attacker['current_hp'] + heal_amt)
-                                combat_log += f"💚 **{attacker['name'].capitalize()}** recovered health!\n"
+                        if raw_move_name in TWO_TURN_MOVES and not is_currently_charging:
+                            charge_data = TWO_TURN_MOVES[raw_move_name]
+                            current_weather = state.get('weather', {'type': 'none'})['type']
+                            
+                            # 1. Biological Bypasses (Harsh Sunlight & Power Herbs)
+                            if current_weather in charge_data.get('skip_weather', []):
+                                pass # Skip the charge turn and fire immediately!
+                            elif held_item == 'power-herb':
+                                combat_log += f"🌿 **{attacker['name'].capitalize()}** became fully charged due to its Power Herb!\n"
+                                attacker['held_item'] = 'none' 
+                            else:
+                                # 2. Lock in the Charge state!
+                                attacker['volatile_statuses']['charging'] = raw_move_name
+                                combat_log += f"⏳ {owner_prefix.strip()} **{attacker['name'].capitalize()}** {charge_data['msg']}\n"
                                 
-                            # --- STRUGGLE RECOIL INTERCEPTOR ---
-                            if raw_move_name == 'struggle':
-                                # Recoil is exactly 25% of the user's maximum HP!
-                                recoil_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 4))
-                                attacker['current_hp'] = max(0, attacker['current_hp'] - recoil_dmg)
-                                combat_log += f"💥 **{attacker['name'].capitalize()}** took recoil damage from thrashing about! (-{recoil_dmg} HP)\n"
+                                # 3. Apply Turn-1 Stat Boosts (Meteor Beam / Skull Bash)
+                                if 'boost' in charge_data:
+                                    stat_name, amt = charge_data['boost']
+                                    if 'stat_stages' not in attacker: attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                    attacker['stat_stages'][stat_name] = min(6, attacker['stat_stages'].get(stat_name, 0) + amt)
+                                    combat_log += f"📈 **{attacker['name'].capitalize()}**'s {stat_name.replace('_', ' ')} rose!\n"
+                                    
+                                # 4. Apply Semi-Invulnerability (Dig / Fly)
+                                if 'invuln' in charge_data:
+                                    attacker['volatile_statuses']['semi_invulnerable'] = charge_data['invuln']
+                                
+                                # 🚨 ABORT THE REST OF THE TURN!
+                                continue 
+                                
+                        # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
+                        if is_currently_charging:
+                            del attacker['volatile_statuses']['charging']
+                            if 'semi_invulnerable' in attacker.get('volatile_statuses', {}):
+                                del attacker['volatile_statuses']['semi_invulnerable']
+                        # ==========================================
+                        
+                        # ==========================================
+                        # 🚨 ACCURACY, EVASION, & OHKO BYPASS
+                        # ==========================================
+                        is_ohko = raw_move_name in OHKO_MOVES
+
+                        GUARANTEED_HIT_MOVES = [
+                            'aerial-ace', 'aura-sphere', 'disarming-voice', 'false-surrender', 
+                            'magical-leaf', 'magnet-bomb', 'shadow-punch', 'shock-wave', 
+                            'smart-strike', 'swift', 'vital-throw'
+                        ]
+                        is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
+
+                        # Safely fetch abilities
+                        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+                        def_ability = (defender.get('ability') or '').lower().replace(' ', '-')
+                        has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
+                        target_is_vulnerable = defender.get('volatile_statuses', {}).get('glaive_rush')
+                        
+                        move_acc = move_stats['accuracy']
+                        if not isinstance(move_acc, int): move_acc = 100 
+
+                        if not is_ohko and not has_no_guard and not target_is_vulnerable and not is_guaranteed:
                             
-                            # ==========================================
-                            # PHASE 1 & 2: THE FLINCH INTERCEPTOR
-                            # ==========================================
-                            is_flinch_proc = False
-                            if inf_status == 'flinch':
-                                is_flinch_proc = True
-                                inf_status = None 
-                            elif move_stats.get('ailment') == 'flinch' and random.randint(1, 100) <= move_stats.get('ailment_chance', 0):
-                                is_flinch_proc = True
-
-                            if is_flinch_proc:
-                                if 'volatile_statuses' not in defender:
-                                    defender['volatile_statuses'] = {}
-                                defender['volatile_statuses']['flinch'] = True
-
-                            # Process standard pathogens (Burn, Poison, etc.)
-                            if inf_status and inf_status != 'none':
-                                dur = random.randint(1, 3) if inf_status == 'sleep' else -1
-                                defender['status_condition'] = {'name': inf_status, 'duration': dur}
-                                hazard_icons = {'burn': '🔥', 'poison': '☣️', 'paralysis': '⚡', 'sleep': '💤', 'freeze': '🧊'}
-                                combat_log += f"{hazard_icons.get(inf_status, '⚠️')} **{defender['name'].capitalize()}** was afflicted with {inf_status}!\n"
-
-                            # ==========================================
-                            # THE OMNIBOOST DICTIONARY (Complex Mutations)
-                            # ==========================================
-                            # DEFINED EARLY to prevent variable scope errors!
-                            effective_move_name = z_disp if (is_player and is_max_action) else raw_move_name
+                            # 1. Fetch Biological Stages (Default to 0 if missing)
+                            acc_stage = attacker.get('stat_stages', {}).get('accuracy', 0)
+                            eva_stage = defender.get('stat_stages', {}).get('evasion', 0)
                             
-                            SPECIAL_STAT_MOVES = {
-                                'ancient-power': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
-                                'silver-wind': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
-                                'ominous-wind': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
-                                'clangorous-soulblaze': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)]
-                            }
+                            # 2. Calculate the Net Multiplier (Capped between -6 and +6)
+                            net_stage = max(-6, min(6, acc_stage - eva_stage))
+                            
+                            if net_stage >= 0:
+                                acc_multiplier = (3.0 + net_stage) / 3.0
+                            else:
+                                acc_multiplier = 3.0 / (3.0 + abs(net_stage))
+                                
+                            final_acc = move_acc * acc_multiplier
+                            
+                            # 3. Roll the dice!
+                            if random.uniform(0, 100) > final_acc:
+                                combat_log += "💨 The attack missed!\n"
+                                
+                                # 🚨 CRASH DAMAGE (Miss)
+                                if raw_move_name in ['jump-kick', 'high-jump-kick']:
+                                    crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
+                                    attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
+                                    combat_log += f"💥 {attacker['name'].capitalize()} kept going and crashed! (-{crash_dmg} HP)\n"
 
-                            if effective_move_name in SPECIAL_STAT_MOVES:
-                                effect_chance = move_stats.get('stat_chance') or 10
-                                if random.randint(1, 100) <= effect_chance:
-                                    stat_chgs = SPECIAL_STAT_MOVES[effective_move_name]
+                                # If a Rampage move misses, the rampage is disrupted!
+                                if 'rampage' in attacker.get('volatile_statuses', {}):
+                                    del attacker['volatile_statuses']['rampage']
+                                continue
+
+                        print(f"DEBUG 3: {attacker['name']} passed status checks. Calling physics engine...")
+                        dmg, msg, inf_status, stat_chgs, heal_amt = calculate_damage(
+                            attacker, defender, move_stats, 
+                            weather=state.get('weather', {'type': 'none'})['type'],
+                            target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
+                            user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                            terrain=state.get('terrain', {'type': 'none'})['type'],
+                            wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                            gravity=state.get('field', {}).get('gravity', 0) > 0
+                        )
+                        print(f"DEBUG 4: Physics engine success! Damage calculated: {dmg}")
+                        
+                        # Apply HP modifications
+
+                        defender['current_hp'] = max(0, defender['current_hp'] - dmg)
+
+                        # ==========================================
+                        # 🚨 RAMPAGE MOVES (Outrage, Petal Dance, Thrash)
+                        # ==========================================
+                        if raw_move_name in RAMPAGE_MOVES:
+                            if dmg > 0: # The attack successfully landed!
+                                if 'rampage' not in attacker['volatile_statuses']:
+                                    # Start the rampage (Locks in for 2 to 3 turns)
+                                    attacker['volatile_statuses']['rampage'] = {'move': raw_move_name, 'turns': random.randint(1, 2)}
                                 else:
-                                    stat_chgs = [] 
+                                    # Decrement the rampage timer
+                                    attacker['volatile_statuses']['rampage']['turns'] -= 1
+                                    if attacker['volatile_statuses']['rampage']['turns'] <= 0:
+                                        del attacker['volatile_statuses']['rampage']
+                                        
+                                        # Rampage ends, apply confusion! (Own Tempo grants immunity)
+                                        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+                                        if atk_ability != 'own-tempo':
+                                            attacker['volatile_statuses']['confusion'] = random.randint(2, 5)
+                                            combat_log += f"💫 {owner_prefix.strip()} **{attacker['name'].capitalize()}** became confused due to fatigue!\n"
+                            else:
+                                # If the rampage dealt 0 damage (Protect, Immunity, Faint), it is disrupted!
+                                if 'rampage' in attacker.get('volatile_statuses', {}):
+                                    del attacker['volatile_statuses']['rampage']
 
-                            # Execute the Stat Changes
-                            for tgt, s_name, chg in stat_chgs:
-                                target_specimen = attacker if tgt == 'attacker' else defender
+                        # ==========================================
+                        # DAMAGE MEMORY (For Retaliation Moves)
+                        # ==========================================
+                        if dmg > 0:
+                            defender['last_damage_taken'] = dmg
+                            defender['last_damage_class'] = move_stats.get('class', 'physical')
+
+                        if msg: combat_log += f"*{msg}*\n"
+                        if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
+                        
+                        #Check if the damage pushed them below the berry threshold!
+                        berry_log = check_consumables(defender, owner_prefix) 
+                        if berry_log: combat_log += berry_log
+
+                        if heal_amt > 0:
+                            attacker['current_hp'] = min(attacker.get('max_hp', 100), attacker['current_hp'] + heal_amt)
+                            combat_log += f"💚 **{attacker['name'].capitalize()}** recovered health!\n"
+                            
+                        # --- STRUGGLE RECOIL INTERCEPTOR ---
+                        if raw_move_name == 'struggle':
+                            # Recoil is exactly 25% of the user's maximum HP!
+                            recoil_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 4))
+                            attacker['current_hp'] = max(0, attacker['current_hp'] - recoil_dmg)
+                            combat_log += f"💥 **{attacker['name'].capitalize()}** took recoil damage from thrashing about! (-{recoil_dmg} HP)\n"
+                        
+                        # ==========================================
+                        # PHASE 1 & 2: THE FLINCH INTERCEPTOR
+                        # ==========================================
+                        is_flinch_proc = False
+                        if inf_status == 'flinch':
+                            is_flinch_proc = True
+                            inf_status = None 
+                        elif move_stats.get('ailment') == 'flinch' and random.randint(1, 100) <= move_stats.get('ailment_chance', 0):
+                            is_flinch_proc = True
+
+                        if is_flinch_proc:
+                            if 'volatile_statuses' not in defender:
+                                defender['volatile_statuses'] = {}
+                            defender['volatile_statuses']['flinch'] = True
+
+                        # Process standard pathogens (Burn, Poison, etc.)
+                        if inf_status and inf_status != 'none':
+                            dur = random.randint(1, 3) if inf_status == 'sleep' else -1
+                            defender['status_condition'] = {'name': inf_status, 'duration': dur}
+                            hazard_icons = {'burn': '🔥', 'poison': '☣️', 'paralysis': '⚡', 'sleep': '💤', 'freeze': '🧊'}
+                            combat_log += f"{hazard_icons.get(inf_status, '⚠️')} **{defender['name'].capitalize()}** was afflicted with {inf_status}!\n"
+
+                        # ==========================================
+                        # THE OMNIBOOST DICTIONARY (Complex Mutations)
+                        # ==========================================
+                        # DEFINED EARLY to prevent variable scope errors!
+                        effective_move_name = z_disp if (is_player and is_max_action) else raw_move_name
+                        
+                        SPECIAL_STAT_MOVES = {
+                            'ancient-power': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
+                            'silver-wind': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
+                            'ominous-wind': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
+                            'clangorous-soulblaze': [('attacker', 'attack', 1), ('attacker', 'defense', 1), ('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)]
+                        }
+
+                        if effective_move_name in SPECIAL_STAT_MOVES:
+                            effect_chance = move_stats.get('stat_chance') or 10
+                            if random.randint(1, 100) <= effect_chance:
+                                stat_chgs = SPECIAL_STAT_MOVES[effective_move_name]
+                            else:
+                                stat_chgs = [] 
+
+                        # Execute the Stat Changes
+                        for tgt, s_name, chg in stat_chgs:
+                            target_specimen = attacker if tgt == 'attacker' else defender
+                            
+                            if 'volatile_statuses' not in target_specimen:
+                                target_specimen['volatile_statuses'] = {}
                                 
-                                if 'volatile_statuses' not in target_specimen:
-                                    target_specimen['volatile_statuses'] = {}
-                                    
-                                if s_name == 'flinch':
-                                    target_specimen['volatile_statuses']['flinch'] = True
-                                    continue 
-                                    
-                                # Intercept Custom Pathogens
-                                if s_name == 'volatile_leech_seed':
-                                    if 'leech-seed' not in target_specimen['volatile_statuses']:
-                                        target_specimen['volatile_statuses']['leech-seed'] = True
-                                    continue
-                                    
-                                if s_name == 'volatile_perish_song':
-                                    if 'perish-song' not in target_specimen['volatile_statuses']:
-                                        target_specimen['volatile_statuses']['perish-song'] = 3
-                                    continue
+                            if s_name == 'flinch':
+                                target_specimen['volatile_statuses']['flinch'] = True
+                                continue 
+                                
+                            # Intercept Custom Pathogens
+                            if s_name == 'volatile_leech_seed':
+                                if 'leech-seed' not in target_specimen['volatile_statuses']:
+                                    target_specimen['volatile_statuses']['leech-seed'] = True
+                                continue
+                                
+                            if s_name == 'volatile_perish_song':
+                                if 'perish-song' not in target_specimen['volatile_statuses']:
+                                    target_specimen['volatile_statuses']['perish-song'] = 3
+                                continue
 
-                                stat_map = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed'}
-                                db_stat = stat_map.get(s_name)
-                                if db_stat:
-                                    if 'stat_stages' not in target_specimen:
-                                        target_specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
-                                    curr_stg = target_specimen['stat_stages'][db_stat]
-                                    target_specimen['stat_stages'][db_stat] = max(-6, min(6, curr_stg + chg))
+                            stat_map = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed', 'accuracy':'accuracy', 'evasion': 'evasion'}
+                            db_stat = stat_map.get(s_name)
+                            if db_stat:
+                                if 'stat_stages' not in target_specimen:
+                                    target_specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                curr_stg = target_specimen['stat_stages'][db_stat]
+                                target_specimen['stat_stages'][db_stat] = max(-6, min(6, curr_stg + chg))
+                                
+                                direction = "fell" if chg < 0 else "rose"
+                                icon = "📉" if chg < 0 else "📈"
+                                combat_log += f"{icon} **{target_specimen['name'].capitalize()}**'s {s_name.replace('-', ' ')} {direction}!\n"
+                                # ==========================================
+                                # LASH OUT TRACKER
+                                # ==========================================
+                                if chg < 0:
+                                    target_specimen['volatile_statuses']['stats_lowered_this_turn'] = True
+
+                        # Only apply the exhaustion tag if the attack actually dealt damage!
+                        if raw_move_name in RECHARGE_MOVES and dmg > 0:
+                            if 'volatile_statuses' not in attacker:
+                                attacker['volatile_statuses'] = {}
+                            attacker['volatile_statuses']['recharging'] = True
+
+                        # ==========================================
+                        # SYNCHRONOUS PIVOT OVERRIDE (PvE)
+                        # ==========================================
+                        if effective_move_name in pivot_moves and attacker['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
+                            
+                            # Verify they actually have a living bench specimen to swap into!
+                            if is_player:
+                                active_idx = state['active_player_index']
+                                has_bench = any(i != active_idx and p['current_hp'] > 0 for i, p in enumerate(state['player_team']))
+                            else:
+                                active_idx = state['active_npc_index']
+                                has_bench = any(i != active_idx and p['current_hp'] > 0 for i, p in enumerate(state['npc_team']))
+                            
+                            if has_bench:
+                                # Biologically flush the outgoing specimen's stat mutations
+                                if effective_move_name != 'baton-pass':
+                                    attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                    attacker['volatile_statuses'] = {}
                                     
-                                    direction = "fell" if chg < 0 else "rose"
-                                    icon = "📉" if chg < 0 else "📈"
-                                    combat_log += f"{icon} **{target_specimen['name'].capitalize()}**'s {s_name.replace('-', ' ')} {direction}!\n"
+                                combat_log += f"💨 {owner_prefix.strip()} **{attacker['name'].capitalize()}** retreated to the bench!\n"
+                                
+                                # ==========================================
+                                # 🚨 PAUSE THE ENGINE: WAIT FOR USER INPUT
+                                # ==========================================
+                                if is_player:
+                                    # Send the special menu to the user using the existing interaction!
+                                    embed = discord.Embed(title="⚠️ Mid-Turn Substitution!", description=f"{combat_log}\nChoose your replacement quickly!", color=discord.Color.orange())
+                                    swap_view = MidTurnSwapMenu(self.cog, state, self.user_id)
                                     
-                            # Check Weather Modifications
-                            new_weather = WEATHER_MOVES.get(str(effective_move_name))
-                            if new_weather:
-                                # Do not change weather if a Primordial climate is active!
-                                if state.get('weather', {}).get('primordial', False):
-                                    combat_log += f"↳ The extreme weather prevented `{effective_move_name}` from taking effect!\n"
+                                    # Use edit_original_response instead of searching the state dict!
+                                    await interaction.edit_original_response(embed=embed, attachments=[], view=swap_view)
+                                    
+                                    # 🛑 FREEZE THE THREAD UNTIL THEY CLICK A BUTTON
+                                    await swap_view.swap_event.wait()
+                                    
+                                    # 🟢 RESUME! Grab the index they selected
+                                    new_idx = swap_view.selected_index
+                                    state['active_player_index'] = new_idx
+                                    new_active = state['player_team'][new_idx]
+                                    
                                 else:
-                                    attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
-                                    weather_rocks = {'sun': 'heat-rock', 'rain': 'damp-rock', 'sand': 'smooth-rock', 'hail': 'icy-rock'}
+                                    npc_bench = [i for i, p in enumerate(state['npc_team']) if p['current_hp'] > 0 and i != state['active_npc_index']]
+                                    new_idx = random.choice(npc_bench)
+                                    state['active_npc_index'] = new_idx
+                                    new_active = state['npc_team'][new_idx]
                                     
-                                    duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
-                                    
-                                    state['weather'] = {'type': new_weather, 'duration': duration, 'primordial': False}
-                                    combat_log += f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
+                                # ==========================================
+                                # RESUME COMBAT: INJECT THE NEW POKEMON INTO THE TIMELINE
+                                # ==========================================
+                                combat_log += f"\n{owner_prefix.strip()} sent out **{new_active['name'].capitalize()}**!\n"
                                 
-                                # If the held item matches the rock needed for this weather, 8 turns. Else, 5.
+                                # Trigger Entry Hazards / Abilities for the new arrival!
+                                combat_log = await trigger_single_entry_ability(new_active, defender, owner_prefix, state, combat_log)
+                                hazard_log = apply_entry_hazards(new_active, state['player_hazards'] if is_player else state['npc_hazards'], TYPE_CHART, owner_prefix)
+                                if hazard_log: combat_log += hazard_log
+                                
+                                # UPDATE THE POINTERS SO THE OPPONENT HITS THE NEW POKEMON!
+                                if is_player:
+                                    p_active = new_active # Update the global pointer
+                                    attacker = new_active # Update the local loop pointer
+                                else:
+                                    n_active = new_active
+                                    attacker = new_active
+                                    
+                                # Rebuild the opponent's action tuple because Python tuples are immutable!
+                                for idx in range(len(action_queue)):
+                                    other_act = action_queue[idx]
+                                    
+                                    # Index 4 holds the 'is_player' boolean. If it's different, it's the opponent!
+                                    if other_act[4] != is_player:
+                                        # Construct a new tuple, seamlessly injecting the new_active specimen into Index 1 (the defender slot)
+                                        action_queue[idx] = (
+                                            other_act[0],  # attacker
+                                            new_active,    # 🚨 NEW DEFENDER
+                                            other_act[2],  # move_stats
+                                            other_act[3],  # raw_move_name
+                                            other_act[4],  # is_player
+                                            other_act[5],  # z_disp
+                                            other_act[6],  # is_z_action
+                                            other_act[7]   # is_max_action
+                                        )
+                        # ==========================================
+
+                        # CLIMATOLOGICAL OVERRIDES (PvE)
+                        new_weather = WEATHER_MOVES.get(str(effective_move_name))
+                        if new_weather:
+                            # Do not change weather if a Primordial climate is active!
+                            if state.get('weather', {}).get('primordial', False):
+                                combat_log += f"↳ The extreme weather prevented `{effective_move_name}` from taking effect!\n"
+                            else:
+                                attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                                weather_rocks = {'sun': 'heat-rock', 'rain': 'damp-rock', 'sand': 'smooth-rock', 'hail': 'icy-rock'}
+                                
                                 duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
                                 
-                                state['weather'] = {'type': new_weather, 'duration': duration}
-                                combat_log += f"{WEATHER_MESSAGES[new_weather]}\n"
+                                state['weather'] = {'type': new_weather, 'duration': duration, 'primordial': False}
+                                combat_log += f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
+                        # ==========================================
+                        # TERRAIN DEPLOYMENT
+                        # ==========================================
+                        new_terrain = TERRAIN_MOVES.get(str(effective_move_name))
+                        
+                        # 2. Check for Max Moves!
+                        if not new_terrain and (is_player and is_max_action):
+                            max_move_data = MAX_MOVES.get(move_stats['type']) 
+                            if max_move_data and 'terrain' in max_move_data:
+                                new_terrain = max_move_data['terrain']
+
+                        if new_terrain:
+                            attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                            duration = 8 if attacker_item == 'terrain-extender' else 5
+                            
+                            if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
+                            
+                            if state['terrain']['type'] != new_terrain:
+                                state['terrain'] = {'type': new_terrain, 'duration': duration}
+                                combat_log += f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+                        
+                        # ==========================================
+                        # 🚨 FIELD STATE DEPLOYMENT
+                        # ==========================================
+                        if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0}
+                        
+                        # 1. Tailwind (Side-Specific)
+                        if raw_move_name == 'tailwind':
+                            user_hazards = state['player_hazards'] if is_player else state['npc_hazards']
+                            if user_hazards.get('tailwind', 0) > 0:
+                                combat_log += "↳ But it failed! A tailwind is already blowing!\n"
+                            else:
+                                user_hazards['tailwind'] = 4
+                                combat_log += f"↳ The Tailwind blew from behind {attacker['name'].capitalize()}'s team!\n"
+                                
+                        # 2. Trick Room & Wonder Room (Global Toggles)
+                        elif raw_move_name == 'trick-room':
+                            if state['field']['trick_room'] > 0:
+                                state['field']['trick_room'] = 0
+                                combat_log += "↳ The twisted dimensions returned to normal!\n"
+                            else:
+                                state['field']['trick_room'] = 5
+                                combat_log += f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
+                                
+                        elif raw_move_name == 'wonder-room':
+                            if state['field']['wonder_room'] > 0:
+                                state['field']['wonder_room'] = 0
+                                combat_log += "↳ Wonder Room ended, and stats returned to normal!\n"
+                            else:
+                                state['field']['wonder_room'] = 5
+                                combat_log += "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
+                                
+                        # 3. Gravity (Global Absolute)
+                        elif raw_move_name == 'gravity':
+                            if state['field']['gravity'] > 0:
+                                combat_log += "↳ But it failed! Gravity is already intense!\n"
+                            else:
+                                state['field']['gravity'] = 5
+                                combat_log += "↳ Gravity intensified!\n"
+                                
+                                # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
+                                for p in [attacker, defender]:
+                                    if 'semi_invulnerable' in p.get('volatile_statuses', {}) and p['volatile_statuses']['semi_invulnerable'] == 'air':
+                                        del p['volatile_statuses']['semi_invulnerable']
+                                        if 'charging' in p['volatile_statuses']: del p['volatile_statuses']['charging']
+                                        combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
+                                        
+                        # ==========================================
+                        # PHAZING ANOMALIES (PvE Forced Swaps)
+                        # ==========================================
+                        if raw_move_name in phaze_moves and defender['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
+                            
+                            # 1. Find valid benched targets for the DEFENDER
+                            if is_player: # The Player is attacking the NPC
+                                opp_bench = [i for i, p in enumerate(state['npc_team']) if p['current_hp'] > 0 and i != state['active_npc_index']]
+                            else:         # The NPC is attacking the Player
+                                opp_bench = [i for i, p in enumerate(state['player_team']) if p['current_hp'] > 0 and i != state['active_player_index']]
+                            
+                            if opp_bench:
+                                forced_idx = random.choice(opp_bench)
+                                
+                                # 2. Mutate the state and grab the new victim
+                                if is_player:
+                                    state['active_npc_index'] = forced_idx
+                                    forced_in_poke = state['npc_team'][forced_idx]
+                                else:
+                                    state['active_player_index'] = forced_idx
+                                    forced_in_poke = state['player_team'][forced_idx]
+                                    
+                                # Biologically flush the outgoing specimen's stat mutations
+                                defender['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                defender['volatile_statuses'] = {}
+                                
+                                target_prefix = "The rival's" if is_player else "Your"
+                                combat_log += f"🌪️ {target_prefix} **{defender['name'].capitalize()}** was forced out of the battlefield!\n"
+                                combat_log += f"↳ **{forced_in_poke['name'].capitalize()}** was dragged into the fight!\n"
+                                
+                                # 3. Trigger Entry Hazards / Abilities for the dragged-in Pokémon!
+                                try:
+                                    combat_log = await trigger_single_entry_ability(forced_in_poke, attacker, f"{target_prefix} ", state, combat_log)
+                                    hazard_log = apply_entry_hazards(forced_in_poke, state['npc_hazards'] if is_player else state['player_hazards'], TYPE_CHART, f"{target_prefix} ")
+                                    if hazard_log: combat_log += hazard_log
+                                except Exception as e:
+                                    print(f"DEBUG: PvE Phaze Entry Hook Failed: {e}")
+                                    
+                                # 4. 🚨 CRITICAL: UPDATE THE POINTERS
+                                if is_player:
+                                    n_active = forced_in_poke
+                                    defender = forced_in_poke
+                                else:
+                                    p_active = forced_in_poke
+                                    defender = forced_in_poke
+                                    
+                                # 5. Cancel any pending actions for the dragged-in Pokémon!
+                                for idx in range(len(action_queue)):
+                                    if action_queue[idx][4] != is_player: 
+                                        # We replace their action with a dummy 'pass' so they don't attack this turn
+                                        action_queue[idx] = (forced_in_poke, attacker, {'class': 'status', 'power': 0}, 'pass', not is_player, "", False, False)
+                            else:
+                                combat_log += "↳ But it failed! The target has no benched Pokémon to drag out!\n"
 
                 # ==========================================
                 # 5. PASS TO END OF TURN
@@ -2863,9 +3918,6 @@ class BattleDashboard(discord.ui.View):
         if n_active['current_hp'] <= 0:
             # If the NPC is somehow fainted (e.g., from a previous turn's poison), skip to the end
             return await self.process_turn_end(interaction, combat_log)
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
 
         try:
             # --- 1. NPC THREAT ASSESSMENT ---
@@ -2908,7 +3960,7 @@ class BattleDashboard(discord.ui.View):
                             n_active = state['npc_team'][swap_target_idx]
                             combat_log += f"The rival deployed **{n_active['name'].capitalize()}**!\n\n"
                             
-                            combat_log = trigger_single_entry_ability(n_active, p_active, "The rival's", state, combat_log)
+                            combat_log = await trigger_single_entry_ability(n_active, p_active, "The rival's", state, combat_log)
                             
                             # ==========================================
                             # PATCH 1: HAZARD TRIGGER ON RETREAT
@@ -2927,55 +3979,57 @@ class BattleDashboard(discord.ui.View):
                     npc_move_name = 'struggle'
                     n_move_stats = {'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical', 'target': 'defender', 'ailment': 'none', 'ailment_chance': 0, 'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0, 'healing': 0, 'drain': 0, 'name': 'struggle'}
                 else:
-                    best_moves = []
-                    highest_score = -10000.0
-                    for m in available_moves:
-                        cursor.execute("SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?", (m['name'],))
-                        m_data = cursor.fetchone()
-                        if m_data:
-                            m_type, m_power, m_class, m_heal, m_target = m_data
-                            m_power = m_power or 0 
-                            score = 10.0
-                            
-                            if m_class != 'status' and m_power > 0:
-                                mult = 1.0
-                                for p_type in p_active.get('types', []):
-                                    mult *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
-                                if m_type in n_active.get('types', []): mult *= 1.5
-                                score += (m_power * mult)
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        best_moves = []
+                        highest_score = -10000.0
+                        
+                        for m in available_moves:
+                            async with db.execute("SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?", (m['name'],)) as cursor:
+                                m_data = await cursor.fetchone()
                                 
-                            if score > highest_score:
-                                highest_score = score
-                                best_moves = [m]
-                            elif score == highest_score:
-                                best_moves.append(m)
+                            if m_data:
+                                m_type, m_power, m_class, m_heal, m_target = m_data
+                                m_power = m_power or 0 
+                                score = 10.0
                                 
-                    chosen_move = random.choice(best_moves) if best_moves else random.choice(available_moves)
-                    npc_move_name = chosen_move['name']
-                    chosen_move['pp'] -= 1
-                    
-                    # Fetch the complete 17-variable payload exactly as defined in the DB!
-                    cursor.execute("""
-                        SELECT name, type, power, accuracy, damage_class, pp, priority,
-                            target, ailment, ailment_chance, stat_name, stat_change, stat_chance, 
-                            status_type, status_chance, healing, drain
-                        FROM base_moves WHERE name = ?
-                    """, (npc_move_name,))
-                    n_row = cursor.fetchone()
-                    
-                    if n_row:
-                        # Map the payload perfectly!
-                        n_move_stats = {
-                            'name': n_row[0], 'type': n_row[1], 'power': n_row[2] or 0, 'accuracy': n_row[3] or 100, 
-                            'class': n_row[4], 'pp': n_row[5], 'priority': n_row[6] or 0, 'target': n_row[7], 
-                            'ailment': n_row[8], 'ailment_chance': n_row[9] or 0, 'stat_name': n_row[10], 
-                            'stat_change': n_row[11] or 0, 'stat_chance': n_row[12] or 0,
-                            'status_type': n_row[13], 'status_chance': n_row[14] or 0, 
-                            'healing': n_row[15] or 0, 'drain': n_row[16] or 0
-                        }
-                    else:
-                        n_move_stats = {'type': 'typeless', 'power': 0, 'accuracy': 100, 'class': 'status', 'target': 'defender', 'ailment': 'none', 'ailment_chance': 0, 'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0, 'status_type': 'none', 'status_chance': 0, 'healing': 0, 'drain': 0, 'name': npc_move_name, 'priority': 0}
-           
+                                if m_class != 'status' and m_power > 0:
+                                    mult = 1.0
+                                    for p_type in p_active.get('types', []):
+                                        mult *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
+                                    if m_type in n_active.get('types', []): mult *= 1.5
+                                    score += (m_power * mult)
+                                    
+                                if score > highest_score:
+                                    highest_score = score
+                                    best_moves = [m]
+                                elif score == highest_score:
+                                    best_moves.append(m)
+                                    
+                        chosen_move = random.choice(best_moves) if best_moves else random.choice(available_moves)
+                        npc_move_name = chosen_move['name']
+                        chosen_move['pp'] -= 1
+                        
+                        # Fetch the complete 17-variable payload
+                        async with db.execute("""
+                            SELECT name, type, power, accuracy, damage_class, pp, priority,
+                                target, ailment, ailment_chance, stat_name, stat_change, stat_chance, 
+                                status_type, status_chance, healing, drain
+                            FROM base_moves WHERE name = ?
+                        """, (npc_move_name,)) as cursor:
+                            n_row = await cursor.fetchone()
+                        
+                        if n_row:
+                            n_move_stats = {
+                                'name': n_row[0], 'type': n_row[1], 'power': n_row[2] or 0, 'accuracy': n_row[3] or 100, 
+                                'class': n_row[4], 'pp': n_row[5], 'priority': n_row[6] or 0, 'target': n_row[7], 
+                                'ailment': n_row[8], 'ailment_chance': n_row[9] or 0, 'stat_name': n_row[10], 
+                                'stat_change': n_row[11] or 0, 'stat_chance': n_row[12] or 0,
+                                'status_type': n_row[13], 'status_chance': n_row[14] or 0, 
+                                'healing': n_row[15] or 0, 'drain': n_row[16] or 0
+                            }
+                        else:
+                            n_move_stats = {'type': 'typeless', 'power': 0, 'accuracy': 100, 'class': 'status', 'target': 'defender', 'ailment': 'none', 'ailment_chance': 0, 'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0, 'status_type': 'none', 'status_chance': 0, 'healing': 0, 'drain': 0, 'name': npc_move_name, 'priority': 0}
+            
             # --- 3. PHYSICS EXECUTION ---
             can_attack = True
             status = n_active.get('status_condition', {})
@@ -2994,7 +4048,10 @@ class BattleDashboard(discord.ui.View):
                                     n_active, p_active, n_move_stats, 
                                     weather=state.get('weather', {'type': 'none'})['type'], 
                                     target_hazards=state['player_hazards'], # NPC attacks the player's side
-                                    user_hazards=state['npc_hazards']       # NPC's own side
+                                    user_hazards=state['npc_hazards'],
+                                    terrain=state.get('terrain', {'type': 'none'})['type'],
+                                    wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                                    gravity=state.get('field', {}).get('gravity', 0) > 0
                                 )
                         n_active['current_hp'] = max(0, n_active['current_hp'] - dmg)
                         combat_log += f"💥 {msg} (Dealt **{dmg}** damage!)\n"
@@ -3054,7 +4111,10 @@ class BattleDashboard(discord.ui.View):
                             n_active, p_active, n_move_stats, 
                             weather=state.get('weather', {'type': 'none'})['type'],
                             target_hazards=state['player_hazards'], # NPC attacks the player's side
-                            user_hazards=state['npc_hazards']       # NPC's own side
+                            user_hazards=state['npc_hazards'],       # NPC's own side
+                            terrain=state.get('terrain', {'type': 'none'})['type'],
+                            wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                            gravity=state.get('field', {}).get('gravity', 0) > 0
                         )
                         
                         p_active['current_hp'] = max(0, p_active['current_hp'] - dmg)
@@ -3077,8 +4137,6 @@ class BattleDashboard(discord.ui.View):
             print(f"Retaliation Engine Error:")
             traceback.print_exc()
             await self.process_turn_end(interaction, combat_log)
-        finally:
-            conn.close()
 
     async def process_turn_end(self, interaction, combat_log):
         """The Central Engine: Handles NPC retaliation, hazards, faints, and UI rendering."""
@@ -3091,7 +4149,7 @@ class BattleDashboard(discord.ui.View):
             
             print("DEBUG 6: Entering Phase 3 (Weather & Pathogens)")
 
-            # --- PHASE 3: POST-TURN ENVIRONMENTAL DAMAGE ---
+            # --- PHASE 3: POST-TURN ENVIRONMENTAL DAMAGE (PvE) ---
             combat_log += "\n"
             
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
@@ -3146,10 +4204,34 @@ class BattleDashboard(discord.ui.View):
                                     combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                     combat_log += f"🌧️ {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP in the rain due to its Dry Skin! (+{heal} HP)\n"
 
+            # 1.5 Global Biome Effects (Terrains)
+            if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
+            
+            if state['terrain']['type'] != 'none':
+                state['terrain']['duration'] -= 1
+                if state['terrain']['duration'] <= 0:
+                    terrain_clear_msgs = {
+                        'electric': "The electricity disappeared from the battlefield.",
+                        'grassy': "The grass disappeared from the battlefield.",
+                        'misty': "The mist disappeared from the battlefield.",
+                        'psychic': "The weirdness disappeared from the battlefield."
+                    }
+                    combat_log += f"✨ {terrain_clear_msgs.get(state['terrain']['type'])}\n"
+                    state['terrain']['type'] = 'none'
+                else:
+                    # Grassy Terrain Healing!
+                    if state['terrain']['type'] == 'grassy':
+                        # (Note: Use `for combatant, _, owner_str in combatants:` in PvP)
+                        for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]: 
+                            if combatant['current_hp'] > 0 and combatant['current_hp'] < combatant.get('max_hp', 100) and is_grounded(combatant):
+                                heal = max(1, math.floor(combatant.get('max_hp', 100) / 16))
+                                combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
+                                combat_log += f"🌿 {owner_str.strip()} **{combatant['name'].capitalize()}** had its HP restored by the Grassy Terrain! (+{heal} HP)\n"
+
             # ==========================================
             # 1.5 PERSISTENT HELD ITEMS (Status Orbs)
             # ==========================================
-            for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]: # Use just 'combatant, owner_str' in PvE!
+            for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
                 if combatant['current_hp'] > 0 and not combatant.get('status_condition'):
                     orb_item = (combatant.get('held_item') or "").lower().replace(' ', '-')
                     
@@ -3184,19 +4266,25 @@ class BattleDashboard(discord.ui.View):
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
                 if combatant['current_hp'] > 0:
                     item = (combatant.get('held_item') or "").lower().replace(' ', '-')
+                    max_hp = combatant.get('max_hp', 100)
                     
                     if item == 'leftovers':
-                        heal_qty = max(1, math.floor(combatant['max_hp'] / 16))
-                        combatant['current_hp'] = min(combatant['max_hp'], combatant['current_hp'] + heal_qty)
-                        combat_log += f"🍎 **{owner_str} {combatant['name'].capitalize()}** restored a little HP using its Leftovers! (+{heal_qty})\n"
-                        
+                        # 🚨 FIX: Only trigger if they are missing HP!
+                        if combatant['current_hp'] < max_hp:
+                            heal_qty = max(1, math.floor(max_hp / 16))
+                            combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
+                            combat_log += f"🍎 **{owner_str} {combatant['name'].capitalize()}** restored a little HP using its Leftovers! (+{heal_qty})\n"
+
                     elif item == 'black-sludge':
                         if 'poison' in combatant.get('types', []):
-                            heal_qty = max(1, math.floor(combatant['max_hp'] / 16))
-                            combatant['current_hp'] = min(combatant['max_hp'], combatant['current_hp'] + heal_qty)
-                            combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** restored HP via its Black Sludge! (+{heal_qty})\n"
+                            # 🚨 FIX: Only heal Poison types if they are missing HP!
+                            if combatant['current_hp'] < max_hp:
+                                heal_qty = max(1, math.floor(max_hp / 16))
+                                combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
+                                combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** restored HP via its Black Sludge! (+{heal_qty})\n"
                         else:
-                            sludge_dmg = max(1, math.floor(combatant['max_hp'] / 8))
+                            # Damages non-poison types regardless of current HP
+                            sludge_dmg = max(1, math.floor(max_hp / 8))
                             combatant['current_hp'] = max(0, combatant['current_hp'] - sludge_dmg)
                             combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** is buffeted by its Black Sludge! (-{sludge_dmg})\n"
             # ==========================================
@@ -3256,7 +4344,7 @@ class BattleDashboard(discord.ui.View):
                                 combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                 combat_log += f"🍄 {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP using its {ability_name}!\n"
 
-            # 3. Parasitic Drain (Leech Seed)
+            # 3. Parasitic Drain (Leech Seed & Perish Song)
             for combatant, opponent, owner_str in [(p_active, n_active, "Your"), (n_active, p_active, "The rival's")]:
                 if combatant['current_hp'] > 0 and 'leech-seed' in combatant.get('volatile_statuses', {}):
                     # Calculate 1/8th of max HP, but don't drain more HP than they actually have left!
@@ -3281,6 +4369,41 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"🎵 **{combatant['name'].capitalize()}**'s Perish count fell to 0 and it fainted!\n"
                     else:
                         combat_log += f"🎵 **{combatant['name'].capitalize()}**'s Perish count fell to {count}.\n"
+
+                # MULTI-HIT TRAP DAMAGE
+                if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
+                    # Traps deal exactly 1/8th of Maximum HP per turn
+                    trap_dmg = max(1, math.floor(combatant.get('max_hp', 100) / 8))
+                    combatant['current_hp'] = max(0, combatant['current_hp'] - trap_dmg)
+                    combat_log += f"🌪️ {owner_str.strip()} **{combatant['name'].capitalize()}** is hurt by the trap! (-{trap_dmg} HP)\n"
+                    
+                    # Decay the trap timer!
+                    combatant['volatile_statuses']['partially_trapped'] -= 1
+                    if combatant['volatile_statuses']['partially_trapped'] <= 0:
+                        del combatant['volatile_statuses']['partially_trapped']
+                        combat_log += f"💨 {owner_str.strip()} **{combatant['name'].capitalize()}** was freed from the trap!\n"
+
+            # ==========================================
+            # 🚨 INGRAIN & OCTOLOCK (End of Turn)
+            # ==========================================
+            for combatant, opponent, owner_str in [(p_active, n_active, "Your"), (n_active, p_active, "The rival's")]:
+                if combatant['current_hp'] > 0:
+                    volatiles = combatant.get('volatile_statuses', {})
+                    
+                    # Ingrain Healing (1/16th Max HP)
+                    if 'ingrain' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
+                        heal_qty = max(1, math.floor(combatant.get('max_hp', 100) / 16))
+                        combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal_qty)
+                        combat_log += f"🌱 {owner_str.strip()} **{combatant['name'].capitalize()}** absorbed nutrients from its roots! (+{heal_qty} HP)\n"
+                        
+                    # Octolock Decay (-1 Def, -1 SpD)
+                    if 'octolock' in volatiles:
+                        if 'stat_stages' not in combatant:
+                            combatant['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                        
+                        combatant['stat_stages']['defense'] = max(-6, combatant['stat_stages'].get('defense', 0) - 1)
+                        combatant['stat_stages']['sp_def'] = max(-6, combatant['stat_stages'].get('sp_def', 0) - 1)
+                        combat_log += f"🐙 {owner_str.strip()} **{combatant['name'].capitalize()}**'s Def and Sp. Def were lowered by Octolock!\n"
 
             # 4. G-Max Ecological Disasters (Wildfire, Vine Lash, Cannonade, Volcalith)
             for combatant, hazards, owner_str in [
@@ -3318,6 +4441,15 @@ class BattleDashboard(discord.ui.View):
                                     'volcalith': "The floating rocks vanished."
                                 }
                                 combat_log += f"✨ {clear_msgs[disaster]}\n"
+            
+            # 5. Barrier Decay (Screens)
+            for hazards, owner_str in [(state['player_hazards'], "Your"), (state['npc_hazards'], "The rival's")]: 
+                for screen in ['reflect', 'light-screen', 'aurora-veil']:
+                    if hazards.get(screen, 0) > 0:
+                        hazards[screen] -= 1
+                        if hazards[screen] <= 0:
+                            del hazards[screen]
+                            combat_log += f"✨ {owner_str} team's {screen.replace('-', ' ').title()} wore off!\n"
 
             print("DEBUG 7: Entering Phase 3.5 (Adaptation Expiration)")
 
@@ -3344,21 +4476,26 @@ class BattleDashboard(discord.ui.View):
                     state['adaptation']['active'] = False
                     combat_log += f"\n🔴 The Galar particles dispersed! **{p_active['name'].capitalize()}** returned to its normal form.\n"
 
-            # --- PHASE 3.8: KINETIC STUN & SHIELD CLEANUP ---
-            # Wipe temporary flinch and protection flags before the next round begins
-            
-            # 1. Clear Flinch Flags
-            if p_active.get('volatile_statuses', {}).get('flinch'):
-                p_active['volatile_statuses']['flinch'] = False
-            if n_active.get('volatile_statuses', {}).get('flinch'):
-                n_active['volatile_statuses']['flinch'] = False
+            # --- PHASE 3.8: KINETIC STUN, SHIELD & MEMORY CLEANUP ---
+            # Wipe temporary flinch, protection flags, and short-term memory before the next round begins
+            for combatant in [p_active, n_active]:
                 
-            # 2. Clear Protect Flags
-            if p_active.get('volatile_statuses', {}).get('protected'):
-                p_active['volatile_statuses']['protected'] = False
-            if n_active.get('volatile_statuses', {}).get('protected'):
-                n_active['volatile_statuses']['protected'] = False
+                # 1. Clear Short-Term Damage Memory
+                combatant.pop('last_damage_taken', None)
+                combatant.pop('last_damage_class', None)
+                
+                # 2. Clear Volatile Flags and Curses
+                if 'volatile_statuses' in combatant:
+                    combatant['volatile_statuses'].pop('flinch', None)
+                    combatant['volatile_statuses'].pop('protected', None)
+                    combatant['volatile_statuses'].pop('destiny-bond', None)
+                    combatant['volatile_statuses'].pop('is_switching', None)
+                    combatant['volatile_statuses'].pop('stats_lowered_this_turn', None)
 
+                    # Only wipe it if they are NOT currently charging a two-turn move!
+                    if not combatant['volatile_statuses'].get('charging'):
+                        combatant['volatile_statuses'].pop('semi_invulnerable', None)
+                    
             print("DEBUG 8: Entering Phase 4 (Survival & Swap Checks)")
 
             # Final End-of-Turn Berry Sweep
@@ -3366,10 +4503,51 @@ class BattleDashboard(discord.ui.View):
                 berry_log = check_consumables(combatant, owner_str)
                 if berry_log: combat_log += berry_log
 
+            # 🚨 FIELD STATE DECAY
+            if 'field' in state:
+                for field_state in ['trick_room', 'wonder_room', 'gravity']:
+                    if state['field'][field_state] > 0:
+                        state['field'][field_state] -= 1
+                        if state['field'][field_state] == 0:
+                            msgs = {
+                                'trick_room': "The twisted dimensions returned to normal!", 
+                                'wonder_room': "Wonder Room wore off, and stats returned to normal!", 
+                                'gravity': "Gravity returned to normal!"
+                            }
+                            combat_log += f"✨ {msgs[field_state]}\n"
+                            
+            # 🚨 TAILWIND DECAY
+            for hazards, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
+                if hazards.get('tailwind', 0) > 0:
+                    hazards['tailwind'] -= 1
+                    if hazards['tailwind'] <= 0:
+                        del hazards['tailwind']
+                        combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
+
             # --- PHASE 4: SURVIVAL & SWAP CHECK ---
-            if n_active['current_hp'] <= 0:
-                combat_log += f"\n💀 The rival's **{n_active['name'].capitalize()}** is unable to continue!"
+            n_needs_swap = n_active['current_hp'] <= 0 or state.get('npc_must_pivot')
+            p_needs_swap = p_active['current_hp'] <= 0 or state.get('player_must_pivot')
+            
+            # ==========================================
+            # 🚨 NEW: PRIMORDIAL WEATHER FAINT/PIVOT CLEAR
+            # ==========================================
+            weather = state.get('weather', {})
+            if weather.get('primordial'):
+                p_is_setter = p_needs_swap and p_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
+                n_is_setter = n_needs_swap and n_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
                 
+                if p_is_setter or n_is_setter:
+                    state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
+                    combat_log += "\n🌤️ The primordial weather dissipated as its creator left the field!\n"
+            # ==========================================
+
+            if n_needs_swap:
+                if n_active['current_hp'] <= 0:
+                    combat_log += f"\n💀 The rival's **{n_active['name'].capitalize()}** is unable to continue!"
+                else:
+                    combat_log += f"\n💨 The rival's **{n_active['name'].capitalize()}** retreated to the bench!"
+                    state['npc_must_pivot'] = False # Flush the memory flag
+
                 # ==========================================
                 # TACTICAL AI: OPTIMAL REPLACEMENT HEURISTIC
                 # ==========================================
@@ -3442,55 +4620,52 @@ class BattleDashboard(discord.ui.View):
                     # ==========================================
                     # NPC MID-BATTLE ENTRY HOOK
                     # ==========================================
-                    combat_log = trigger_single_entry_ability(n_active, p_active, "The rival's", state, combat_log)
+                    combat_log = await trigger_single_entry_ability(n_active, p_active, "The rival's", state, combat_log)
                 else:
-
                     # ==========================================
                     # THE WARDEN VICTORY INTERCEPTOR
                     # ==========================================
                     if state.get('is_warden'):
-                        conn = sqlite3.connect(DB_FILE)
-                        cursor = conn.cursor()
-                        
-                        biome = state.get('warden_biome')
-                        # Ensure WARDEN_ROSTER is accessible in this file!
-                        w_data = WARDEN_ROSTER[biome]
-                        next_biome = w_data['biome_unlocked']
-                        r_item = w_data['reward_item']
-                        r_qty = w_data['reward_qty']
-                        
-                        # 1. Upgrade the Researcher's Visa
-                        cursor.execute("SELECT unlocked_visas FROM users WHERE user_id = ?", (self.user_id,))
-                        user_data = cursor.fetchone()
-                        current_visas = user_data[0] if user_data and user_data[0] else "canopy"
-                        
-                        # --- THE ANTI-FARMING LOGIC ---
-                        if next_biome not in current_visas.split(','):
-                            # FIRST TIME CLEAR!
-                            new_visas = f"{current_visas},{next_biome}"
-                            cursor.execute("UPDATE users SET unlocked_visas = ? WHERE user_id = ?", (new_visas, self.user_id))
+                        async with aiosqlite.connect(DB_FILE) as db:
+                            await db.execute("BEGIN TRANSACTION")
                             
-                            cursor.execute("""
-                                INSERT INTO user_inventory (user_id, item_name, quantity) 
-                                VALUES (?, ?, ?) 
-                                ON CONFLICT(user_id, item_name) 
-                                DO UPDATE SET quantity = quantity + ?
-                            """, (self.user_id, r_item, r_qty, r_qty))
+                            biome = state.get('warden_biome')
+                            w_data = WARDEN_ROSTER[biome]
+                            next_biome = w_data['biome_unlocked']
+                            r_item = w_data['reward_item']
+                            r_qty = w_data['reward_qty']
                             
-                            rewards_log = f"\n\n🎖️ **WARDEN DEFEATED!** You have proven your ecological mastery against the {w_data['title']}!\n"
-                            rewards_log += f"🛂 **Clearance Granted:** You secured the Visa for the **{next_biome.title()}** sector!\n"
-                            rewards_log += f"🎁 **First-Clear Bonus:** You received **{r_qty}x {r_item.replace('-', ' ').title()}**!"
-                        else:
-                            # REPEAT CLEAR (SPARRING)
-                            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + 500 WHERE user_id = ?", (self.user_id,))
+                            # 1. Upgrade the Researcher's Visa
+                            async with db.execute("SELECT unlocked_visas FROM users WHERE user_id = ?", (self.user_id,)) as cursor:
+                                user_data = await cursor.fetchone()
                             
-                            rewards_log = f"\n\n🎖️ **WARDEN DEFEATED!** You proved your continued mastery against the {w_data['title']}!\n"
-                            rewards_log += "💰 You received **500 Eco Tokens** for the sparring session.\n"
-                            rewards_log += "*(Note: Sector Visas and unique equipment are only granted on the first clear.)*"
-                        # ------------------------------
-                        
-                        conn.commit()
-                        conn.close()
+                            current_visas = user_data[0] if user_data and user_data[0] else "canopy"
+                            
+                            # --- THE ANTI-FARMING LOGIC ---
+                            if next_biome not in current_visas.split(','):
+                                # FIRST TIME CLEAR!
+                                new_visas = f"{current_visas},{next_biome}"
+                                await db.execute("UPDATE users SET unlocked_visas = ? WHERE user_id = ?", (new_visas, self.user_id))
+                                
+                                await db.execute("""
+                                    INSERT INTO user_inventory (user_id, item_name, quantity) 
+                                    VALUES (?, ?, ?) 
+                                    ON CONFLICT(user_id, item_name) 
+                                    DO UPDATE SET quantity = quantity + ?
+                                """, (self.user_id, r_item, r_qty, r_qty))
+                                
+                                rewards_log = f"\n\n🎖️ **WARDEN DEFEATED!** You have proven your ecological mastery against the {w_data['title']}!\n"
+                                rewards_log += f"🛂 **Clearance Granted:** You secured the Visa for the **{next_biome.title()}** sector!\n"
+                                rewards_log += f"🎁 **First-Clear Bonus:** You received **{r_qty}x {r_item.replace('-', ' ').title()}**!"
+                            else:
+                                # REPEAT CLEAR (SPARRING)
+                                await db.execute("UPDATE users SET eco_tokens = eco_tokens + 500 WHERE user_id = ?", (self.user_id,))
+                                
+                                rewards_log = f"\n\n🎖️ **WARDEN DEFEATED!** You proved your continued mastery against the {w_data['title']}!\n"
+                                rewards_log += "💰 You received **500 Eco Tokens** for the sparring session.\n"
+                                rewards_log += "*(Note: Sector Visas and unique equipment are only granted on the first clear.)*"
+                            
+                            await db.commit() # Lock the transaction!
                         
                         # 3. Clean up and print the Victory UI!
                         del self.cog.active_battles[self.user_id]
@@ -3500,189 +4675,194 @@ class BattleDashboard(discord.ui.View):
                     # ==========================================
                     # THE ECOLOGICAL REWARDS ENGINE
                     # ==========================================
+                    # Initialize an empty UI view to hold our buttons
+                    post_battle_view = None 
+
                     # 1. Calculate Research Funding (Eco Tokens)
-                    # Let's say you get 50 tokens per NPC Pokémon defeated, plus a base 100
-                    tokens_earned = 100 + (len(state['npc_team']) * 50)
+                    tokens_earned = 100 + (len(state['npc_team']) * 250)
                     
                     # 2. Calculate Biomass/Experience Accumulation
-                    # A standard formula: (NPC Level * 15) per Pokémon
                     total_exp_yield = sum([p.get('level', 50) * 15 for p in state['npc_team']])
                     
-                    # 3. Distribute EXP (Modern Exp Share: everyone gets a cut!)
+                    # 3. Distribute EXP
                     surviving_team = [p for p in state['player_team'] if p['current_hp'] > 0]
                     exp_per_specimen = math.floor(total_exp_yield / max(1, len(surviving_team)))
                     
                     rewards_log: str = f"\n\n💰 You earned **{tokens_earned} Eco Tokens** for your research!\n"
                     rewards_log += f"📈 Surviving team members gained **{exp_per_specimen} EXP**!\n\n"
                     
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    
-                    # 4. Update the User's Bank Account
-                    # (Assuming your users table has an eco_tokens column)
-                    cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, self.user_id))
-                    
-                    # 5. Process Level Ups for the Team
-                    for p in surviving_team:
-                        p['experience'] = p.get('experience', 0) + exp_per_specimen
+                    # 🚨 ASYNCHRONOUS DATABASE TRANSACTION
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        await db.execute("BEGIN TRANSACTION")
                         
-                        threshold = p.get('level', 5) * 100
+                        # 4. Update the User's Bank Account
+                        await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, self.user_id))
                         
-                        if p['experience'] >= threshold and p.get('level', 5) < 100:
-                            p['level'] += 1
-                            p['experience'] -= threshold 
-                            rewards_log += f"🎉 **{p['name'].capitalize()}** grew to Level {p['level']}!\n"
+                        # 5. Process Level Ups for the Team
+                        for p in surviving_team:
+                            p['experience'] = p.get('experience', 0) + exp_per_specimen
+                            threshold = p.get('level', 5) * 100
                             
-                            # --- THE EVOLUTION TRIGGER ---
+                            if p['experience'] >= threshold and p.get('level', 5) < 100:
+                                p['level'] += 1
+                                p['experience'] -= threshold 
+                                rewards_log += f"🎉 **{p['name'].capitalize()}** grew to Level {p['level']}!\n"
+                                
+                                # --- THE EVOLUTION TRIGGER ---
+                                if 'instance_id' in p:
+                                    held_item = (p.get('held_item') or "").lower().replace(' ', '-')
+                                    
+                                    # Block 1: The Everstone Suppressant
+                                    if held_item == 'everstone':
+                                        rewards_log += f"🪨 **{p['name'].capitalize()}**'s biological mutation was suppressed by its Everstone!\n"
+                                    
+                                    # Block 2: Check for Mutation
+                                    else:
+                                        print(f"\n[DEBUG EVO PvE] 1. Checking evolution for {p['name']} (Level {p['level']})")
+                                        try:
+                                            evo_msg, target_species = await self.check_for_evolution(db, self.user_id, p, combat_log)
+                                            print(f"[DEBUG EVO PvE] 2. check_for_evolution returned -> msg: {bool(evo_msg)}, target: {target_species}")
+                                            
+                                            if evo_msg:
+                                                rewards_log += evo_msg
+                                            
+                                            if target_species and post_battle_view is None:
+                                                print(f"[DEBUG EVO PvE] 3. Instantiating EvolutionConfirmView for {target_species}...")
+                                                post_battle_view = EvolutionConfirmView(self.cog, self.user_id, p, target_species)
+                                                print(f"[DEBUG EVO PvE] 4. View created successfully: {post_battle_view}")
+                                        except Exception as e:
+                                            print(f"[DEBUG EVO PvE] 🚨 CRASH inside evolution check: {e}")
+                                # -----------------------------
+                                
+                        # Save the entire team's updated state
+                        for p in state['player_team']:
                             if 'instance_id' in p:
-                                # We pass the cursor so the helper function can use the existing database connection
-                                evo_msg = await self.check_for_evolution(cursor, conn, self.user_id, p, combat_log)
-                                if evo_msg:
-                                    rewards_log += evo_msg
-                            # -----------------------------
-                    # Save the entire team's updated state (including consumed items!)
-                    for p in state['player_team']:
-                        if 'instance_id' in p:
-                            cursor.execute("""
-                                UPDATE caught_pokemon 
-                                SET level = ?, experience = ?, held_item = ? 
-                                WHERE instance_id = ?
-                            """, (p['level'], p['experience'], p.get('held_item', 'none'), p['instance_id']))
+                                await db.execute("""
+                                    UPDATE caught_pokemon 
+                                    SET level = ?, experience = ?, held_item = ? 
+                                    WHERE instance_id = ?
+                                """, (p['level'], p['experience'], p.get('held_item', 'none'), p['instance_id']))
 
-                    # ==========================================
-                    # DIRECTIVE TRACKER: INVASIVE CULLING
-                    # ==========================================
-                    # Grab the elemental types of the defeated NPC
-                    defeated_types = n_active.get('types', [])
-                    
-                    for p_type in defeated_types:
-                        # 1. Increment the progress for any active directives matching this type
-                        cursor.execute("""
-                            UPDATE field_directives
-                            SET current_progress = current_progress + 1
-                            WHERE user_id = ? AND objective_type = 'cull_type' AND target_variable = ? AND is_completed = 0
-                        """, (self.user_id, p_type))
+                        # ==========================================
+                        # DIRECTIVE TRACKER: INVASIVE CULLING
+                        # ==========================================
+                        defeated_types = n_active.get('types', [])
+                        for p_type in defeated_types:
+                            # 1. Increment progress
+                            await db.execute("""
+                                UPDATE field_directives
+                                SET current_progress = current_progress + 1
+                                WHERE user_id = ? AND objective_type = 'cull_type' AND target_variable = ? AND is_completed = 0
+                            """, (self.user_id, p_type))
 
-                        # 2. Check if that increment just maxed out the progress bar!
-                        cursor.execute("""
-                            SELECT required_amount, current_progress 
-                            FROM field_directives
-                            WHERE user_id = ? AND objective_type = 'cull_type' AND target_variable = ? AND is_completed = 0
-                        """, (self.user_id, p_type))
+                            # 2. Check if maxed out
+                            async with db.execute("""
+                                SELECT required_amount, current_progress 
+                                FROM field_directives
+                                WHERE user_id = ? AND objective_type = 'cull_type' AND target_variable = ? AND is_completed = 0
+                            """, (self.user_id, p_type)) as cursor:
+                                row = await cursor.fetchone()
+                                
+                            if row and row[1] == row[0]: 
+                                rewards_log += f"\n📡 **Directive Complete:** You successfully culled the invasive {p_type.capitalize()}-type population! Use `!claim` to receive your funding."
+
+                        # ==========================================
+                        # GEOLOGICAL ANOMALY: METEOR SHOWER
+                        # ==========================================
+                        if random.random() <= 0.05: 
+                            await db.execute("""
+                                INSERT INTO user_inventory (user_id, item_name, quantity) 
+                                VALUES (?, 'raw-keystone', 1) 
+                                ON CONFLICT(user_id, item_name) 
+                                DO UPDATE SET quantity = quantity + 1
+                            """, (self.user_id,))
+                            rewards_log += "\n🌠 **ANOMALY DETECTED:** A localized meteor shower occurred during the skirmish! You recovered a `Raw Keystone` from the crater."
+
+                        # ==========================================
+                        # BIOLOGICAL ANOMALY: MYCELIAL BLOOM
+                        # ==========================================
+                        if random.random() <= 0.15: 
+                            await db.execute("""
+                                INSERT INTO user_inventory (user_id, item_name, quantity) 
+                                VALUES (?, 'memory-spore', 1) 
+                                ON CONFLICT(user_id, item_name) 
+                                DO UPDATE SET quantity = quantity + 1
+                            """, (self.user_id,))
+                            rewards_log += "\n🍄 **ANOMALY DETECTED:** The combat disturbed a localized mycelial network! You recovered a `Memory Spore`."
+
+                        # ==========================================
+                        # FIELD DATA RECOVERY: ENCRYPTED NOTES
+                        # ==========================================
+                        if random.random() <= 0.10: 
+                            await db.execute("""
+                                INSERT INTO user_inventory (user_id, item_name, quantity) 
+                                VALUES (?, 'encrypted-field-notes', 1) 
+                                ON CONFLICT(user_id, item_name) 
+                                DO UPDATE SET quantity = quantity + 1
+                            """, (self.user_id,))
+                            rewards_log += "\n📝 **DATA RECOVERED:** You found some `Encrypted Field Notes` dropped in the brush! Run `!analyze notes` to decode them."
+
+                        # ==========================================
+                        # RADIANT ANOMALY: SOLAR FLARE
+                        # ==========================================
+                        if random.random() <= 0.07: 
+                            await db.execute("""
+                                INSERT INTO user_inventory (user_id, item_name, quantity) 
+                                VALUES (?, 'sparkling-stone', 1) 
+                                ON CONFLICT(user_id, item_name) 
+                                DO UPDATE SET quantity = quantity + 1
+                            """, (self.user_id,))
+                            rewards_log += "\n☀️ **ANOMALY DETECTED:** A sudden burst of radiant energy crystallized the local soil! You extracted a `Sparkling Stone`."
+
+                        # ==========================================
+                        # ATMOSPHERIC ANOMALY: ENERGY SMOG
+                        # ==========================================
+                        if random.random() <= 0.08: 
+                            await db.execute("""
+                                INSERT INTO user_inventory (user_id, item_name, quantity) 
+                                VALUES (?, 'wishing-fragment', 1) 
+                                ON CONFLICT(user_id, item_name) 
+                                DO UPDATE SET quantity = quantity + 1
+                            """, (self.user_id,))
+                            rewards_log += "\n🌫️ **ANOMALY DETECTED:** A dense cluster of reactive energy passed over the area! You collected a volatile `Wishing Fragment` from the fallout."
+
+                        await db.commit() # 🚨 Lock in all the rewards at once!
                         
-                        row = cursor.fetchone()
-                        if row and row[1] == row[0]: # Progress exactly matches required amount
-                            rewards_log += f"\n📡 **Directive Complete:** You successfully culled the invasive {p_type.capitalize()}-type population! Use `!claim` to receive your funding."
-                    # ==========================================
-
-                        # Update the database regardless of level up
-                        if 'instance_id' in p:
-                            cursor.execute("""
-                                UPDATE caught_pokemon 
-                                SET level = ?, experience = ? 
-                                WHERE instance_id = ?
-                            """, (p['level'], p['experience'], p['instance_id']))
-
-                    # ==========================================
-                    # GEOLOGICAL ANOMALY: METEOR SHOWER
-                    # ==========================================
-                    # 5% chance for a meteorite to strike the ecosystem after a victory
-                    if random.random() <= 0.05: # 100% for testing
-                        cursor.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, 'raw-keystone', 1) 
-                            ON CONFLICT(user_id, item_name) 
-                            DO UPDATE SET quantity = quantity + 1
-                        """, (self.user_id,))
-                        
-                        rewards_log += "\n🌠 **ANOMALY DETECTED:** A localized meteor shower occurred during the skirmish! You recovered a `Raw Keystone` from the crater."
-
-                    # ==========================================
-                    # BIOLOGICAL ANOMALY: MYCELIAL BLOOM
-                    # ==========================================
-                    # 15% chance for a rare fungal spore to drop after combat
-                    if random.random() <= 0.15: 
-                        cursor.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, 'memory-spore', 1) 
-                            ON CONFLICT(user_id, item_name) 
-                            DO UPDATE SET quantity = quantity + 1
-                        """, (self.user_id,))
-                        
-                        rewards_log += "\n🍄 **ANOMALY DETECTED:** The combat disturbed a localized mycelial network! You recovered a `Memory Spore`."
-                    # ==========================================
-
-                    # ==========================================
-                    # FIELD DATA RECOVERY: ENCRYPTED NOTES
-                    # ==========================================
-                    # 10% chance to find abandoned research data after a skirmish
-                    if random.random() <= 0.10: # 100% for testing
-                        cursor.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, 'encrypted-field-notes', 1) 
-                            ON CONFLICT(user_id, item_name) 
-                            DO UPDATE SET quantity = quantity + 1
-                        """, (self.user_id,))
-                        
-                        rewards_log += "\n📝 **DATA RECOVERED:** You found some `Encrypted Field Notes` dropped in the brush! Run `!analyze notes` to decode them."
-                    # ==========================================
-
-                    # ==========================================
-                    # RADIANT ANOMALY: SOLAR FLARE
-                    # ==========================================
-                    # 7% chance for a burst of radiant energy to crystallize local minerals
-                    if random.random() <= 0.07: # Change to 1.0 temporarily if you want to test it!
-                        cursor.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, 'sparkling-stone', 1) 
-                            ON CONFLICT(user_id, item_name) 
-                            DO UPDATE SET quantity = quantity + 1
-                        """, (self.user_id,))
-                        
-                        rewards_log += "\n☀️ **ANOMALY DETECTED:** A sudden burst of radiant energy crystallized the local soil! You extracted a `Sparkling Stone`."
-                    # ==========================================
-
-                    # ==========================================
-                    # ATMOSPHERIC ANOMALY: ENERGY SMOG
-                    # ==========================================
-                    # 8% chance for reactive precipitation to occur
-                    if random.random() <= 0.08: #100% for testing
-                        cursor.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, 'wishing-fragment', 1) 
-                            ON CONFLICT(user_id, item_name) 
-                            DO UPDATE SET quantity = quantity + 1
-                        """, (self.user_id,))
-                        
-                        rewards_log += "\n🌫️ **ANOMALY DETECTED:** A dense cluster of reactive energy passed over the area! You collected a volatile `Wishing Fragment` from the fallout."
-                    # ==========================================
-
-                    conn.commit()
-                    conn.close()
-
                     # 6. Shut down the engine and print the victory screen!
                     del self.cog.active_battles[self.user_id]
                     
                     embed = discord.Embed(title="🏆 Field Duel Victorious!", description=combat_log + rewards_log, color=discord.Color.gold())
-                    return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                    print(f"[DEBUG EVO PvE] 5. Final UI Dispatch. Passing view: {post_battle_view}")
+                    return await interaction.edit_original_response(embed=embed, view=post_battle_view, attachments=[])
 
             # --- PLAYER SURVIVAL CHECK ---
-            if p_active['current_hp'] <= 0:
-                combat_log += f"\n⚠️ Your **{p_active['name'].capitalize()}** requires immediate medical attention!"
+            p_needs_swap = p_active['current_hp'] <= 0 or state.get('player_must_pivot')
+            
+            if p_needs_swap:
+                if p_active['current_hp'] <= 0:
+                    combat_log += f"\n⚠️ Your **{p_active['name'].capitalize()}** requires immediate medical attention!"
+                else:
+                    combat_log += f"\n💨 Your **{p_active['name'].capitalize()}** is preparing to pivot out!"
+                    state['player_must_pivot'] = False # Flush the memory flag
                 
-                has_survivors = any(p['current_hp'] > 0 for p in state['player_team'])
+                # Ensure they actually have a living bench specimen to swap into!
+                has_survivors = any(p['current_hp'] > 0 and i != state['active_player_index'] for i, p in enumerate(state['player_team']))
+                
                 if has_survivors:
                     combat_log += "\n**Who will you send out next?**"
                     
                     # We pass `forced=True` to hide the cancel button!
                     swap_view = SwapMenu(self.cog, self.user_id, self.ctx, self, forced=True)
                     
-                    embed = discord.Embed(title="⚠️ Specimen Down!", description=combat_log, color=discord.Color.orange())
+                    embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=combat_log, color=discord.Color.orange())
                     return await interaction.edit_original_response(embed=embed, view=swap_view, attachments=[])
                 else:
-                    del self.cog.active_battles[self.user_id]
-                    embed = discord.Embed(title="💥 Field Duel Lost", description=combat_log, color=discord.Color.dark_red())
-                    return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                    if p_active['current_hp'] <= 0:
+                        del self.cog.active_battles[self.user_id]
+                        embed = discord.Embed(title="💥 Field Duel Lost", description=combat_log, color=discord.Color.dark_red())
+                        return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                    else:
+                        combat_log += "\n*...But there were no healthy specimens left to deploy!*"
 
             print("DEBUG 9: Entering Phase 5 (UI Render)")
 
@@ -3724,7 +4904,7 @@ class BattleDashboard(discord.ui.View):
                 n_hazards=state.get('npc_hazards')
             )
             # ==========================================
-            self.refresh_buttons()
+            await self.refresh_buttons()
             # Dynamically grab the new randomized filename!
             # If the image generated successfully, overwrite the old attachments with the new one!
             if battle_file:
@@ -3751,7 +4931,7 @@ class Combat(commands.Cog):
         # This dictionary is now isolated to the Combat Cog
         self.active_battles = {}
         
-    def check_and_consume_energy(self, user_id: str, cost: int = 20) -> tuple[bool, str]:
+    async def check_and_consume_energy(self, user_id: str, cost: int = 10) -> tuple[bool, str]:
         """
         Lazy-evaluates stamina regeneration and attempts to consume the required cost.
         Returns (Success_Boolean, Status_Message).
@@ -3760,68 +4940,66 @@ class Combat(commands.Cog):
         REGEN_PER_HOUR = 10
         SECONDS_IN_HOUR = 3600
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
         try:
-            cursor.execute("SELECT current_energy, last_energy_tick FROM users WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute("SELECT current_energy, last_energy_tick FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    row = await cursor.fetchone()
             
-            # If they aren't in the DB, the @has_started check should catch them, but just in case:
-            if not row:
-                return False, "⚠️ Unregistered Personnel: Run `!start` first."
-                
-            current_energy, last_tick = row
-            now = int(time.time())
-            
-            # 1. CALCULATE LAZY REGENERATION
-            if current_energy < MAX_ENERGY:
-                seconds_passed = now - last_tick
-                hours_passed = seconds_passed // SECONDS_IN_HOUR
-                
-                if hours_passed > 0:
-                    energy_gained = int(hours_passed * REGEN_PER_HOUR)
-                    current_energy = min(MAX_ENERGY, current_energy + energy_gained)
+                # If they aren't in the DB, the @has_started check should catch them, but just in case:
+                if not row:
+                    return False, "⚠️ Unregistered Personnel: Run `!start` first."
                     
-                    # We only fast-forward the tick by the exact hours consumed 
-                    # so they don't lose "partial" hours of progress!
-                    last_tick += (hours_passed * SECONDS_IN_HOUR)
+                current_energy, last_tick = row
+                now = int(time.time())
+                
+                # 1. CALCULATE LAZY REGENERATION
+                if current_energy < MAX_ENERGY:
+                    seconds_passed = now - last_tick
+                    hours_passed = seconds_passed // SECONDS_IN_HOUR
                     
-                    # If they capped out, reset the tick to now
-                    if current_energy == MAX_ENERGY:
-                        last_tick = now
+                    if hours_passed > 0:
+                        energy_gained = int(hours_passed * REGEN_PER_HOUR)
+                        current_energy = min(MAX_ENERGY, current_energy + energy_gained)
+                        
+                        # We only fast-forward the tick by the exact hours consumed 
+                        # so they don't lose "partial" hours of progress!
+                        last_tick += (hours_passed * SECONDS_IN_HOUR)
+                        
+                        # If they capped out, reset the tick to now
+                        if current_energy == MAX_ENERGY:
+                            last_tick = now
 
-            # 2. CHECK FOR SUFFICIENT FUNDS
-            if current_energy < cost:
-                # Calculate time until next tick
-                next_tick_in = SECONDS_IN_HOUR - (now - last_tick)
-                mins, secs = divmod(next_tick_in, 60)
-                return False, f"🔋 **Ecosystem Fatigue:** Your team is exhausted. You have **{current_energy}/{MAX_ENERGY} Energy** (Need {cost}).\n*Next energy point regenerates in {mins}m {secs}s.*"
+                # 2. CHECK FOR SUFFICIENT FUNDS
+                if current_energy < cost:
+                    # Calculate time until next tick
+                    next_tick_in = SECONDS_IN_HOUR - (now - last_tick)
+                    mins, secs = divmod(next_tick_in, 60)
+                    return False, f"🔋 **Ecosystem Fatigue:** Your team is exhausted. You have **{current_energy}/{MAX_ENERGY} Energy** (Need {cost}).\n*Next energy point regenerates in {mins}m {secs}s.*"
+                    
+                # 3. CONSUME ENERGY AND UPDATE DB
+                current_energy -= cost
+                # If they were at max energy, the timer for the next regen starts exactly right now!
+                if current_energy + cost == MAX_ENERGY:
+                    last_tick = now
+                    
+                await db.execute("""
+                        UPDATE users 
+                        SET current_energy = ?, last_energy_tick = ? 
+                        WHERE user_id = ?
+                    """, (current_energy, last_tick, user_id))
+                    
+                await db.commit()
                 
-            # 3. CONSUME ENERGY AND UPDATE DB
-            current_energy -= cost
-            # If they were at max energy, the timer for the next regen starts exactly right now!
-            if current_energy + cost == MAX_ENERGY:
-                last_tick = now
-                
-            cursor.execute("""
-                UPDATE users 
-                SET current_energy = ?, last_energy_tick = ? 
-                WHERE user_id = ?
-            """, (current_energy, last_tick, user_id))
-            conn.commit()
-            
-            return True, f"🔋 Spent **{cost} Energy** (Remaining: {current_energy}/{MAX_ENERGY})"
+                return True, f"🔋 Spent **{cost} Energy** (Remaining: {current_energy}/{MAX_ENERGY})"
             
         except Exception as e:
             print(f"Energy System Error: {e}")
             return False, "❌ A critical error occurred while processing your stamina."
-        finally:
-            conn.close()
 
-    def build_npc_combatant(self, cursor, pokedex_id, name, level, moves, types):
+    async def build_npc_combatant(self, db, pokedex_id, name, level, moves, types):
         """Generates a wild ecological variant for the rival team."""
-        base_stats = fetch_base_stats(cursor, pokedex_id)
+        base_stats = await fetch_base_stats(db, pokedex_id)
         
         ivs = {stat: random.randint(0, 31) for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
         evs = {stat: 0 for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
@@ -3840,134 +5018,131 @@ class Combat(commands.Cog):
     @checks.is_authorized()
     @checks.is_not_in_trade()
     @checks.is_not_in_combat()
+    @checks.partner_not_deployed()
     async def tutor_move(self, ctx, instance_id: str, *, move_name: str):
         """Stimulates dormant genetic pathways to teach a specimen a new move."""
         user_id = str(ctx.author.id)
         requested_move = move_name.lower().replace(" ", "-")
 
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
         try:
-            # ==========================================
-            # 1. SPECIMEN RETRIEVAL (Partial Tag Matching)
-            # ==========================================
-            # We append the % wildcard to the user's input
-            search_tag = f"{instance_id}%"
-            
-            cursor.execute("""
-                SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, 
-                       cp.move_1, cp.move_2, cp.move_3, cp.move_4
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.user_id = ? AND cp.instance_id LIKE ?
-            """, (user_id, search_tag))
-            
-            # Fetch ALL matching rows
-            matching_specimens = cursor.fetchall()
-            
-            if len(matching_specimens) == 0:
-                return await ctx.send(f"⚠️ **Asset Not Found:** You do not own a specimen with a tag starting with `{instance_id}`.")
+            async with aiosqlite.connect(DB_FILE) as db:
                 
-            if len(matching_specimens) > 1:
-                # If the prefix is too short and matches multiple IDs, force them to be specific!
-                matched_tags = ", ".join([f"`{row[0][:6]}` ({row[2].capitalize()})" for row in matching_specimens])
-                return await ctx.send(f"🔍 **Ambiguous Tag:** `{instance_id}` matches multiple specimens in your PC:\n{matched_tags}\n\nPlease provide a few more characters of the ID to confirm the target.")
+                # ==========================================
+                # 1. SPECIMEN RETRIEVAL (Partial Tag Matching)
+                # ==========================================
+                # We append the % wildcard to the user's input
+                search_tag = f"{instance_id}%"
                 
-            # If exactly ONE match is found, we safely unpack it
-            specimen_data = matching_specimens[0]
-            
-            # We overwrite the user's short input with the actual full database ID!
-            # This ensures that when we update the database later, we hit the exact row.
-            actual_instance_id = specimen_data[0] 
-            
-            _, p_id, species_name, current_level, m1, m2, m3, m4 = specimen_data
-            
-            # Filter out empty slots to see how many active moves they actually have
-            current_moves = [m for m in (m1, m2, m3, m4) if m and m != 'none']
+                async with db.execute("""
+                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, 
+                           cp.move_1, cp.move_2, cp.move_3, cp.move_4
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ? AND cp.instance_id LIKE ?
+                """, (user_id, search_tag)) as cursor:
+                    # Fetch ALL matching rows
+                    matching_specimens = await cursor.fetchall()
+                
+                if len(matching_specimens) == 0:
+                    return await ctx.send(f"⚠️ **Asset Not Found:** You do not own a specimen with a tag starting with `{instance_id}`.")
+                    
+                if len(matching_specimens) > 1:
+                    # If the prefix is too short and matches multiple IDs, force them to be specific!
+                    matched_tags = ", ".join([f"`{row[0][:6]}` ({row[2].capitalize()})" for row in matching_specimens])
+                    return await ctx.send(f"🔍 **Ambiguous Tag:** `{instance_id}` matches multiple specimens in your PC:\n{matched_tags}\n\nPlease provide a few more characters of the ID to confirm the target.")
+                    
+                # If exactly ONE match is found, we safely unpack it
+                specimen_data = matching_specimens[0]
+                
+                # We overwrite the user's short input with the actual full database ID!
+                actual_instance_id = specimen_data[0] 
+                _, p_id, species_name, current_level, m1, m2, m3, m4 = specimen_data
+                
+                # Filter out empty slots to see how many active moves they actually have
+                current_moves = [m for m in (m1, m2, m3, m4) if m and m != 'none']
 
-            # ==========================================
-            # 2. NEURAL REDUNDANCY CHECK
-            # ==========================================
-            if requested_move in current_moves:
-                return await ctx.send(f"🧠 **Neural Redundancy:** **{species_name.capitalize()}** already knows `{requested_move.replace('-', ' ').title()}`.")
+                # ==========================================
+                # 2. NEURAL REDUNDANCY CHECK
+                # ==========================================
+                if requested_move in current_moves:
+                    return await ctx.send(f"🧠 **Neural Redundancy:** **{species_name.capitalize()}** already knows `{requested_move.replace('-', ' ').title()}`.")
 
-            # ==========================================
-            # 3. BIOLOGICAL COMPATIBILITY CHECK
-            # ==========================================
-            cursor.execute("""
-                SELECT learn_method, level_learned 
-                FROM species_movepool 
-                WHERE pokedex_id = ? AND move_name = ? 
-                AND learn_method IN ('level-up', 'tutor')
-            """, (p_id, requested_move))
-            
-            pool_data = cursor.fetchone()
-            
-            if not pool_data:
-                return await ctx.send(f"🧬 **Genetic Incompatibility:** **{species_name.capitalize()}** is biologically incapable of learning `{requested_move.replace('-', ' ').title()}` via tutoring.")
+                # ==========================================
+                # 3. BIOLOGICAL COMPATIBILITY CHECK
+                # ==========================================
+                async with db.execute("""
+                    SELECT learn_method, level_learned 
+                    FROM species_movepool 
+                    WHERE pokedex_id = ? AND move_name = ? 
+                    AND learn_method IN ('level-up', 'tutor')
+                """, (p_id, requested_move)) as cursor:
+                    pool_data = await cursor.fetchone()
                 
-            learn_method, level_learned = pool_data
-            
-            if learn_method == 'level-up' and current_level < level_learned:
-                return await ctx.send(f"⚠️ **Maturation Error:** **{species_name.capitalize()}** must reach Level {level_learned} before its biology can support `{requested_move.replace('-', ' ').title()}`.")
+                if not pool_data:
+                    return await ctx.send(f"🧬 **Genetic Incompatibility:** **{species_name.capitalize()}** is biologically incapable of learning `{requested_move.replace('-', ' ').title()}` via tutoring.")
+                    
+                learn_method, level_learned = pool_data
+                
+                if learn_method == 'level-up' and current_level < level_learned:
+                    return await ctx.send(f"⚠️ **Maturation Error:** **{species_name.capitalize()}** must reach Level {level_learned} before its biology can support `{requested_move.replace('-', ' ').title()}`.")
 
-            # ==========================================
-            # 4. RESOURCE VERIFICATION
-            # ==========================================
-            cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,))
-            funds = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'memory-spore'", (user_id,))
-            spores = cursor.fetchone()
-            spore_qty = spores[0] if spores else 0
-            
-            if funds < 500 or spore_qty < 1:
-                return await ctx.send("❌ **Insufficient Resources:** The laboratory requires **500 Eco Tokens** and **1x Memory Spore** to perform a neural rewrite.")
+                # ==========================================
+                # 4. RESOURCE VERIFICATION
+                # ==========================================
+                async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    funds_row = await cursor.fetchone()
+                    funds = funds_row[0] if funds_row else 0
+                
+                async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'memory-spore'", (user_id,)) as cursor:
+                    spores_row = await cursor.fetchone()
+                    spore_qty = spores_row[0] if spores_row else 0
+                
+                if funds < 500 or spore_qty < 1:
+                    return await ctx.send("❌ **Insufficient Resources:** The laboratory requires **500 Eco Tokens** and **1x Memory Spore** to perform a neural rewrite.")
 
-            # ==========================================
-            # 5. EXECUTION PIPELINE
-            # ==========================================
-            if len(current_moves) < 4:
-                # Target the exact column that needs to be filled
-                empty_slot = f"move_{len(current_moves) + 1}"
-                
-                cursor.execute("BEGIN TRANSACTION")
-                cursor.execute("UPDATE users SET eco_tokens = eco_tokens - 500 WHERE user_id = ?", (user_id,))
-                cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'memory-spore'", (user_id,))
-                cursor.execute(f"UPDATE caught_pokemon SET {empty_slot} = ? WHERE instance_id = ?", (requested_move, actual_instance_id))
-                conn.commit()
-                
-                embed = discord.Embed(
-                    title="🧠 Neural Rewrite Complete", 
-                    description=f"The `Memory Spore` successfully catalyzed the dormant genetic traits!\n\n**{species_name.capitalize()}** learned **{requested_move.replace('-', ' ').title()}**.",
-                    color=discord.Color.green()
-                )
-                await ctx.send(embed=embed)
-            else:
-                # The specimen's brain is full! Spawn the UI to let the user choose a move to delete.
-                embed = discord.Embed(
-                    title="⚠️ Neural Capacity Reached",
-                    description=f"**{species_name.capitalize()}** cannot support any more active combat techniques. You must selectively overwrite an existing neural pathway to teach it **{requested_move.replace('-', ' ').title()}**.\n\n*Note: Resources will only be consumed if you authorize the overwrite below.*",
-                    color=discord.Color.orange()
-                )
-                
-                # Pass the instance_id to the UI we built earlier!
-                view = MoveReplacementView(self, ctx, user_id, actual_instance_id, species_name, requested_move, current_moves)
-                await ctx.send(embed=embed, view=view)
+                # ==========================================
+                # 5. EXECUTION PIPELINE
+                # ==========================================
+                if len(current_moves) < 4:
+                    # Target the exact column that needs to be filled
+                    empty_slot = f"move_{len(current_moves) + 1}"
+                    
+                    await db.execute("BEGIN TRANSACTION")
+                    await db.execute("UPDATE users SET eco_tokens = eco_tokens - 500 WHERE user_id = ?", (user_id,))
+                    await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'memory-spore'", (user_id,))
+                    # Safe to use an f-string here since empty_slot is strictly derived from our internal len() calculation
+                    await db.execute(f"UPDATE caught_pokemon SET {empty_slot} = ? WHERE instance_id = ?", (requested_move, actual_instance_id))
+                    
+                    await db.commit() # 🚨 Lock in the changes!
+                    
+                    embed = discord.Embed(
+                        title="🧠 Neural Rewrite Complete", 
+                        description=f"The `Memory Spore` successfully catalyzed the dormant genetic traits!\n\n**{species_name.capitalize()}** learned **{requested_move.replace('-', ' ').title()}**.",
+                        color=discord.Color.green()
+                    )
+                    await ctx.send(embed=embed)
+                else:
+                    # The specimen's brain is full! Spawn the UI to let the user choose a move to delete.
+                    embed = discord.Embed(
+                        title="⚠️ Neural Capacity Reached",
+                        description=f"**{species_name.capitalize()}** cannot support any more active combat techniques. You must selectively overwrite an existing neural pathway to teach it **{requested_move.replace('-', ' ').title()}**.\n\n*Note: Resources will only be consumed if you authorize the overwrite below.*",
+                        color=discord.Color.orange()
+                    )
+                    
+                    # Pass the instance_id to the UI we built earlier!
+                    view = MoveReplacementView(self, ctx, user_id, actual_instance_id, species_name, requested_move, current_moves)
+                    await ctx.send(embed=embed, view=view)
 
         except Exception as e:
-            if conn.in_transaction:
-                conn.rollback()
+            # We no longer need `if conn.in_transaction: conn.rollback()` because aiosqlite handles uncommitted block exits automatically!
             print(f"Tutor Command Error: {e}")
             await ctx.send("❌ A critical laboratory error occurred while accessing the neural database.")
-        finally:
-            conn.close()
 
     @commands.command(name="learn")
     @checks.has_started()
     @checks.is_authorized()
     @checks.is_not_in_combat()
+    @checks.partner_not_deployed()
     async def learn_move(self, ctx, target: str, slot: int, *, move_name: str):
         user_id = str(ctx.author.id)
         
@@ -3977,118 +5152,102 @@ class Combat(commands.Cog):
             
         formatted_move = move_name.lower().replace(" ", "-")
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 2. Determine the Target Specimen (Partner, Box Number, or UUID)
-        if target.lower() in ["partner", "lead", "active", "latest"]:
-            cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-            partner_data = cursor.fetchone()
-            if not partner_data or not partner_data[0]:
-                conn.close()
-                return await ctx.send("You don't have an Active Partner equipped! Specify a Box Number or Tag ID instead.")
+        try: 
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 2. Determine the Target Specimen (Partner, Box Number, or UUID)
+                if target.lower() in ["partner", "lead", "active", "latest"]:
+                    async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                        partner_data = await cursor.fetchone()
+                    if not partner_data or not partner_data[0]:
+                        return await ctx.send("You don't have an Active Partner equipped! Specify a Box Number or Tag ID instead.")
+                        
+                    async with db.execute("""
+                        SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
+                            cp.move_1, cp.move_2, cp.move_3, cp.move_4
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.instance_id = ? AND cp.user_id = ?
+                    """, (partner_data[0], user_id)) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                    
+                elif target.isdigit() and len(target) <= 6:
+                    # It's a Box Number! Use the CTE to find it.
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
+                                cp.move_1, cp.move_2, cp.move_3, cp.move_4,
+                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp
+                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        )
+                        SELECT instance_id, pokedex_id, level, name, move_1, move_2, move_3, move_4
+                        FROM Roster WHERE box_number = ?
+                    """, (user_id, int(target))) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                else:
+                    return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!learn 4 1 tackle`) or `partner`.")
                 
-            # If they used partner, we can just use the UUID directly!
-            cursor.execute("""
-                SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                    cp.move_1, cp.move_2, cp.move_3, cp.move_4
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.instance_id = ? AND cp.user_id = ?
-            """, (partner_data[0], user_id))
-            
-        elif target.isdigit() and len(target) <= 6:
-            # It's a Box Number! Use the CTE to find it.
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                        ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                )
-                SELECT instance_id, pokedex_id, level, name, move_1, move_2, move_3, move_4
-                FROM Roster WHERE box_number = ?
-            """, (user_id, int(target)))
-            
-        else:
-            # It's a UUID tag!
-            cursor.execute("""
-                SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                    cp.move_1, cp.move_2, cp.move_3, cp.move_4
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-            """, (f"{target}%", user_id))
+                if not pokemon_data:
+                    return await ctx.send("❌ Could not locate that specimen. Check your Box Number.")
+                    
+                db_tag_id, poke_id, level, poke_name, m1, m2, m3, m4 = pokemon_data
+                current_moves = [m1, m2, m3, m4]
 
-        pokemon_data = cursor.fetchone()
-        
-        if not pokemon_data:
-            conn.close()
-            return await ctx.send("❌ Could not locate that specimen. Check your Box Number or Tag ID.")
-            
-        db_tag_id, poke_id, level, poke_name, m1, m2, m3, m4 = pokemon_data
-        current_moves = [m1, m2, m3, m4]
+                # 4. Check for Duplicates
+                if formatted_move in current_moves:
+                    return await ctx.send(f"⚠️ Your **{poke_name.capitalize()}** already has `{formatted_move.replace('-', ' ').title()}` equipped in its active behaviors!")
 
-        # 4. Check for Duplicates
-        if formatted_move in current_moves:
-            conn.close()
-            return await ctx.send(f"⚠️ Your **{poke_name.capitalize()}** already has `{formatted_move.replace('-', ' ').title()}` equipped in its active behaviors!")
+                # 5. Check the Biological Compatibility (Movepool)
+                async with db.execute("""
+                    SELECT level_learned 
+                    FROM species_movepool 
+                    WHERE pokedex_id = ? AND move_name = ?
+                    ORDER BY level_learned ASC
+                """, (poke_id, formatted_move)) as cursor:
+                    movepool_data = await cursor.fetchone()
+                
+                if not movepool_data:
+                    return await ctx.send(f"❌ Biological mismatch: A **{poke_name.capitalize()}** is not physically capable of learning `{formatted_move.replace('-', ' ').title()}`.")
+                    
+                required_level = movepool_data[0]
+                
+                # 6. Check Maturity (Level)
+                if level < required_level:
+                    return await ctx.send(f"📈 Your **{poke_name.capitalize()}** needs to reach **Level {required_level}** before it can master `{formatted_move.replace('-', ' ').title()}`.")
 
-        # 5. Check the Biological Compatibility (Movepool)
-        cursor.execute("""
-            SELECT level_learned 
-            FROM species_movepool 
-            WHERE pokedex_id = ? AND move_name = ?
-            ORDER BY level_learned ASC
-        """, (poke_id, formatted_move))
-        
-        movepool_data = cursor.fetchone()
-        
-        if not movepool_data:
-            conn.close()
-            return await ctx.send(f"❌ Biological mismatch: A **{poke_name.capitalize()}** is not physically capable of learning `{formatted_move.replace('-', ' ').title()}`.")
-            
-        required_level = movepool_data[0]
-        
-        # 6. Check Maturity (Level)
-        if level < required_level:
-            conn.close()
-            return await ctx.send(f"📈 Your **{poke_name.capitalize()}** needs to reach **Level {required_level}** before it can master `{formatted_move.replace('-', ' ').title()}`.")
+                # 7. Execute the Training (Update the specific slot)
+                column_to_update = f"move_{slot}"
+                
+                await db.execute(f"""
+                    UPDATE caught_pokemon 
+                    SET {column_to_update} = ? 
+                    WHERE instance_id = ?
+                """, (formatted_move, db_tag_id))
+                
+                await db.commit()
+                
+                # 🚨 THE FIX: Build the embed BEFORE sending it!
+                replaced_move = current_moves[slot - 1]
+                replaced_text = f" It forgot `{replaced_move.replace('-', ' ').title()}` to make room." if replaced_move and replaced_move != 'none' else ""
+                
+                embed = discord.Embed(title="🧠 Behavioral Training Successful!", color=discord.Color.blue())
+                embed.description = f"**{ctx.author.name}** spent time training their **{poke_name.capitalize()}**.\n\nIt successfully mastered **{formatted_move.replace('-', ' ').title()}**!{replaced_text}"
+                embed.set_footer(text=f"Tag ID: {str(db_tag_id)[:8]} | Slot {slot} Updated")
 
-        # 7. Execute the Training (Update the specific slot)
-        try:
-            column_to_update = f"move_{slot}"
-            
-            cursor.execute(f"""
-                UPDATE caught_pokemon 
-                SET {column_to_update} = ? 
-                WHERE instance_id = ?
-            """, (formatted_move, db_tag_id))
-            
-            conn.commit()
-            
-            # Determine what move we replaced for the message
-            replaced_move = current_moves[slot - 1]
-            replaced_text = f" It forgot `{replaced_move.replace('-', ' ').title()}` to make room." if replaced_move and replaced_move != 'none' else ""
-            
-            embed = discord.Embed(title="🧠 Behavioral Training Successful!", color=discord.Color.blue())
-            embed.description = f"**{ctx.author.name}** spent time training their **{poke_name.capitalize()}**.\n\nIt successfully mastered **{formatted_move.replace('-', ' ').title()}**!{replaced_text}"
-            embed.set_footer(text=f"Tag ID: {str(db_tag_id)[:8]} | Slot {slot} Updated")
-            
-            await ctx.send(embed=embed)
-            
+                await ctx.send(embed=embed)
+
         except Exception as e:
             print(f"Learn error: {e}")
             await ctx.send("A data corruption error occurred during training.")
-        finally:
-            conn.close()
-    
+
     @commands.command(name="battle", aliases=["duel", "spar"])
     @checks.has_started()
     @checks.is_authorized()
     @checks.is_not_in_combat()
+    @checks.partner_not_deployed()
     async def challenge_player(self, ctx, opponent: discord.Member = None):
         """Issues a formal Ecological Field Duel invitation to another researcher."""
         challenger_id = str(ctx.author.id)
@@ -4109,22 +5268,16 @@ class Combat(commands.Cog):
                 return await ctx.send("🛑 You are already engaged in an active skirmish! Finish it or flee first.")
             if opponent_id in self.active_battles:
                 return await ctx.send(f"🛑 **{opponent.display_name}** is already deployed in an active field duel!")
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
-        # 2. ROSTER CHECK: Do both players have teams?
-        cursor.execute("SELECT COUNT(*) FROM user_party WHERE user_id = ?", (challenger_id,))
-        if cursor.fetchone()[0] == 0:
-            conn.close()
-            return await ctx.send("⚠️ You must assign at least one specimen to your roster using `!party add 1 [Box Number]` before initiating a spar.")
-
-        cursor.execute("SELECT COUNT(*) FROM user_party WHERE user_id = ?", (opponent_id,))
-        if cursor.fetchone()[0] == 0:
-            conn.close()
-            return await ctx.send(f"⚠️ **{opponent.display_name}** does not have a fieldwork roster assembled yet.")
             
-        conn.close()
+        # 2. ROSTER CHECK: Do both players have teams?
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("SELECT COUNT(*) FROM user_party WHERE user_id = ?", (challenger_id,)) as cursor:
+                if (await cursor.fetchone())[0] == 0:
+                    return await ctx.send("⚠️ You must assign at least one specimen to your roster using `!party add 1 [Box Number]` before initiating a spar.")
+
+            async with db.execute("SELECT COUNT(*) FROM user_party WHERE user_id = ?", (opponent_id,)) as cursor:
+                if (await cursor.fetchone())[0] == 0:
+                    return await ctx.send(f"⚠️ **{opponent.display_name}** does not have a fieldwork roster assembled yet.")
 
         # 3. FIRE THE HANDSHAKE
         view = ChallengeView(self, ctx.author, opponent)
@@ -4143,100 +5296,98 @@ class Combat(commands.Cog):
         
         # 🚨 THE SAFETY NET: Catch crashes and unlock players! 🚨
         try:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            
             teams = {}
             key_items = {}
 
-            # 1. Fetch Biology and Loadout for BOTH players
-            for uid in [p1_id, p2_id]:
-                print(f"\n--- DEBUG: Extracting Roster for User {uid} ---")
-                
-                
-                cursor.execute("""
-                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
-                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot
-                    FROM user_party up
-                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE up.user_id = ?
-                    ORDER BY up.slot ASC
-                """, (uid,))
-                
-                rows = cursor.fetchall()
-                print(f"DEBUG: Found {len(rows)} assigned specimens in user_party table.")
-                
-                player_team = []
-                for row in rows:
-                    tag, poke_id, p_name, p_lvl, p_nature = row[0:5]
-                    roster_slot = row[26]
-                    
-                    print(f"DEBUG: Loading [Slot {roster_slot}] -> {p_name.capitalize()} (Level {p_lvl})")
-                    
-                    p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
-                    p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
-                    
-                    # Format Moves
-                    raw_moves = [m for m in row[17:21] if m and m != 'none']
-                    p_moves = []
-                    for m_name in raw_moves:
-                        cursor.execute("""
-                            SELECT type, power, accuracy, damage_class, pp, 
-                                ailment, ailment_chance, stat_name, stat_change, 
-                                stat_chance, drain, healing, priority
-                            FROM base_moves WHERE name = ?
-                        """, (m_name,))
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.cursor() as cursor:
+                    # 1. Fetch Biology and Loadout for BOTH players
+                    for uid in [p1_id, p2_id]:
+                        print(f"\n--- DEBUG: Extracting Roster for User {uid} ---")
                         
-                        m_data = cursor.fetchone()
-                        if m_data:
-                            # Unpack the new 13th variable!
-                            m_type, m_power, m_acc, m_class, m_pp, m_ail, m_ail_c, m_stat, m_stat_c, m_stat_ch, m_drain, m_heal, m_prio = m_data
-                            p_moves.append({
-                                'name': m_name, 'type': m_type, 'power': m_power, 'accuracy': m_acc,
-                                'class': m_class, 'pp': m_pp, 'max_pp': m_pp, 'ailment': m_ail,
-                                'ailment_chance': m_ail_c, 'stat_name': m_stat, 'stat_change': m_stat_c,
-                                'stat_chance': m_stat_ch, 'drain': m_drain, 'healing': m_heal,
-                                'priority': m_prio # 🚨 Save it to the dictionary!
+                        
+                        async with db.execute("""
+                            SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
+                                cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                                cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
+                                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot
+                            FROM user_party up
+                            JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE up.user_id = ?
+                            ORDER BY up.slot ASC
+                        """, (uid,)) as cursors:
+                            rows = await cursor.fetchall()
+                        print(f"DEBUG: Found {len(rows)} assigned specimens in user_party table.")
+                        
+                        player_team = []
+                        for row in rows:
+                            tag, poke_id, p_name, p_lvl, p_nature = row[0:5]
+                            roster_slot = row[26]
+                            
+                            print(f"DEBUG: Loading [Slot {roster_slot}] -> {p_name.capitalize()} (Level {p_lvl})")
+                            
+                            p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
+                            p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
+                            
+                            # Format Moves
+                            raw_moves = [m for m in row[17:21] if m and m != 'none']
+                            p_moves = []
+                            for m_name in raw_moves:
+                                async with db.execute("""
+                                    SELECT type, power, accuracy, damage_class, pp, 
+                                        ailment, ailment_chance, stat_name, stat_change, 
+                                        stat_chance, drain, healing, priority
+                                    FROM base_moves WHERE name = ?
+                                """, (m_name,)) as cursor:
+                                    m_data = await cursor.fetchone()
+                                
+                                
+                                if m_data:
+                                    # Unpack the new 13th variable!
+                                    m_type, m_power, m_acc, m_class, m_pp, m_ail, m_ail_c, m_stat, m_stat_c, m_stat_ch, m_drain, m_heal, m_prio = m_data
+                                    p_moves.append({
+                                        'name': m_name, 'type': m_type, 'power': m_power, 'accuracy': m_acc,
+                                        'class': m_class, 'pp': m_pp, 'max_pp': m_pp, 'ailment': m_ail,
+                                        'ailment_chance': m_ail_c, 'stat_name': m_stat, 'stat_change': m_stat_c,
+                                        'stat_chance': m_stat_ch, 'drain': m_drain, 'healing': m_heal,
+                                        'priority': m_prio # 🚨 Save it to the dictionary!
+                                    })
+                                else:
+                                    p_moves.append({'name': m_name, 'pp': 5, 'max_pp': 5, 'priority': 0})
+
+                            # Fetch Elemental Typing
+                            async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
+                                p_types = [t[0] for t in await cursor.fetchall()]
+                            
+                            # Calculate True Stats
+                            p_base = await fetch_base_stats(db, poke_id)
+                            p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
+                            
+                            player_team.append({
+                                'instance_id': tag, 'pokedex_id': poke_id, 'name': p_name, 'level': p_lvl,
+                                'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
+                                'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 
+                                'is_shiny': row[21], 'held_item': row[22], 'gmax_factor': row[23], 
+                                'ability': row[24], 'types': p_types, 'experience': row[25], 'volatile_statuses': {}
                             })
-                        else:
-                            p_moves.append({'name': m_name, 'pp': 5, 'max_pp': 5, 'priority': 0})
-
-                    # Fetch Elemental Typing
-                    cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,))
-                    p_types = [t[0] for t in cursor.fetchall()]
-                    
-                    # Calculate True Stats
-                    p_base = fetch_base_stats(cursor, poke_id)
-                    p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
-                    
-                    player_team.append({
-                        'instance_id': tag, 'pokedex_id': poke_id, 'name': p_name, 'level': p_lvl,
-                        'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
-                        'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 
-                        'is_shiny': row[21], 'held_item': row[22], 'gmax_factor': row[23], 
-                        'ability': row[24], 'types': p_types, 'experience': row[25], 'volatile_statuses': {}
-                    })
-                    
-                teams[uid] = player_team
-                print(f"--- DEBUG: Team load complete for {uid}. Total size: {len(player_team)} ---")
-                
-                # Key Item Scanner
-                cursor.execute("""
-                    SELECT item_name FROM user_inventory 
-                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
-                """, (uid,))
-                owned_key_items = [r[0] for r in cursor.fetchall()]
-                
-                key_items[uid] = {
-                    'dynamax_band': 'dynamax-band' in owned_key_items,
-                    'z_ring': 'z-ring' in owned_key_items,
-                    'mega_bracelet': 'mega-bracelet' in owned_key_items
-                }
-
-            conn.close()
+                            
+                        teams[uid] = player_team
+                        print(f"--- DEBUG: Team load complete for {uid}. Total size: {len(player_team)} ---")
+                        
+                        # Key Item Scanner
+                        async with db.execute("""
+                            SELECT item_name FROM user_inventory 
+                            WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
+                        """, (uid,)) as cursor:
+                            owned_key_items = [r[0] for r in await cursor.fetchall()]
+                        
+                        
+                        key_items[uid] = {
+                            'dynamax_band': 'dynamax-band' in owned_key_items,
+                            'z_ring': 'z-ring' in owned_key_items,
+                            'mega_bracelet': 'mega-bracelet' in owned_key_items
+                        }
             print("DEBUG: Database extraction complete. Building Shared State...")
 
             # 2. Build the Shared Memory Reference (The PvP Ecosystem)
@@ -4281,8 +5432,8 @@ class Combat(commands.Cog):
             combat_log += f"{p1.display_name} sent out **{p1_lead['name'].capitalize()}**!\n"
             combat_log += f"{p2.display_name} sent out **{p2_lead['name'].capitalize()}**!\n\n"
             
-            combat_log = trigger_single_entry_ability(p1_lead, p2_lead, f"{p1.display_name}'s", shared_state, combat_log)
-            combat_log = trigger_single_entry_ability(p2_lead, p1_lead, f"{p2.display_name}'s", shared_state, combat_log)
+            combat_log = await trigger_single_entry_ability(p1_lead, p2_lead, f"{p1.display_name}'s", shared_state, combat_log)
+            combat_log = await trigger_single_entry_ability(p2_lead, p1_lead, f"{p2.display_name}'s", shared_state, combat_log)
 
             # 5. Generate Initial Battle Canvas
             print("DEBUG: Calling generate_battle_scene...")
@@ -4331,10 +5482,7 @@ class Combat(commands.Cog):
             self.active_battles.pop(p2_id, None)
             
             await channel.send("⚠️ A critical biological error occurred while initializing the PvP arena. The duel has been aborted and both researchers have been released.")
-            
-        finally:
-            if 'conn' in locals():
-                conn.close()
+
 
     async def check_pvp_commits(self, state):
         """Verifies if both players have submitted their payloads to the shared memory block."""
@@ -4385,6 +5533,10 @@ class Combat(commands.Cog):
         p1_id = state['p1_id']
         p2_id = state['p2_id']
         
+        # Initialize Pivot Trackers for the turn!
+        state['p1_must_pivot'] = False
+        state['p2_must_pivot'] = False
+
         try:
             c1 = state['commits'][p1_id]
             c2 = state['commits'][p2_id]
@@ -4400,119 +5552,180 @@ class Combat(commands.Cog):
             print("DEBUG: Checking for Hyper-Adaptations...")
             
             # We open a single DB connection here to process any Megas efficiently
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.cursor() as cursor:
             
-            for pid, commit, active_poke, adp_state in [
-                (p1_id, c1, p1_active, state['p1_adaptation']),
-                (p2_id, c2, p2_active, state['p2_adaptation'])
-            ]:
-                if commit['type'] == 'attack' and commit.get('transform'):
-                    form = commit['transform']
-                    owner_name = state['p1'].display_name if pid == p1_id else state['p2'].display_name
-                    
-                    # 1. Create Biological Backup
-                    adp_state['backup'] = {
-                        'name': active_poke['name'],
-                        'pokedex_id': active_poke['pokedex_id'],
-                        'max_hp': active_poke['max_hp'],
-                        'stats': active_poke['stats'].copy(),
-                        'types': list(active_poke.get('types', []))
-                    }
-                    
-                    # 2. Apply Dynamax & Gigantamax
-                    if form == 'dynamax':
-                        has_gmax = active_poke.get('gmax_factor', False) or active_poke.get('gmax_factor', 0) == 1
-                        base_name = active_poke['name'].lower().replace(' (dynamax)', '').replace(' (gigantamax)', '').split('-')[0].strip()
-                        
-                        hp_boost = math.floor(active_poke['max_hp'] * 0.5)
-                        active_poke['max_hp'] += hp_boost
-                        active_poke['current_hp'] += hp_boost
-                        
-                        if has_gmax:
-                            # Query the database for the G-Max Pokedex ID!
-                            cursor.execute("SELECT pokedex_id FROM base_pokemon_species WHERE name = ?", (f"{base_name}-gmax",))
-                            gmax_data = cursor.fetchone()
+                    for pid, commit, active_poke, adp_state in [
+                        (p1_id, c1, p1_active, state['p1_adaptation']),
+                        (p2_id, c2, p2_active, state['p2_adaptation'])
+                    ]:
+                        if commit['type'] == 'attack' and commit.get('transform'):
+                            form = commit['transform']
+                            owner_name = state['p1'].display_name if pid == p1_id else state['p2'].display_name
                             
-                            if gmax_data:
-                                active_poke['pokedex_id'] = gmax_data[0] # Update the ID for the visual renderer!
-                                
-                            active_poke['name'] = f"{active_poke['name']} (Gigantamax)"
-                            combat_log += f"🔴 **{owner_name}'s** specimen absorbed Galar particles and Gigantamaxed into **{active_poke['name'].capitalize()}**!\n"
-                        else:
-                            active_poke['name'] = f"{active_poke['name']} (Dynamax)"
-                            combat_log += f"🔴 **{owner_name}'s** specimen absorbed Galar particles and Dynamaxed into **{active_poke['name'].capitalize()}**!\n"
-                            
-                        adp_state.update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3})
-
-                    # 3. Apply Mega Evolution
-                    elif form == 'mega':
-                        # Clean the base name and query the database for the Mega form
-                        base_name = active_poke['name'].split('-')[0]
-                        cursor.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name = ? OR name = ?", (f"{base_name}-mega", f"{base_name}-mega-x"))
-                        mega_data = cursor.fetchone()
-                        
-                        if mega_data:
-                            form_id, form_name = mega_data
-                            
-                            # Fetch new stats and types
-                            cursor.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,))
-                            db_stats = {row[0]: row[1] for row in cursor.fetchall()}
-                            
-                            cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,))
-                            new_types = [row[0] for row in cursor.fetchall()]
-                            
-                            level = active_poke['level']
-                            base_hp = db_stats.get('hp', 50)
-                            base_atk = db_stats.get('attack', 50)
-                            base_def = db_stats.get('defense', 50)
-                            base_spa = db_stats.get('special-attack', 50) 
-                            base_spd = db_stats.get('special-defense', 50)
-                            base_spe = db_stats.get('speed', 50)
-                            
-                            # Apply PvP Math
-                            new_max_hp = math.floor((2 * base_hp + 15) * level / 100) + level + 10
-                            hp_diff = new_max_hp - active_poke['max_hp']
-                            active_poke['max_hp'] = new_max_hp
-                            active_poke['current_hp'] = max(1, active_poke['current_hp'] + hp_diff)
-                            
-                            active_poke['stats'] = {
-                                'attack': math.floor((2 * base_atk + 15) * level / 100) + 5,
-                                'defense': math.floor((2 * base_def + 15) * level / 100) + 5,
-                                'sp_atk': math.floor((2 * base_spa + 15) * level / 100) + 5,
-                                'sp_def': math.floor((2 * base_spd + 15) * level / 100) + 5,
-                                'speed': math.floor((2 * base_spe + 15) * level / 100) + 5
+                            # 1. Create Biological Backup
+                            adp_state['backup'] = {
+                                'name': active_poke['name'],
+                                'pokedex_id': active_poke['pokedex_id'],
+                                'max_hp': active_poke['max_hp'],
+                                'stats': active_poke['stats'].copy(),
+                                'types': list(active_poke.get('types', []))
                             }
                             
-                            active_poke['pokedex_id'] = form_id
-                            active_poke['name'] = form_name
-                            active_poke['types'] = new_types
-                            
-                            adp_state.update({'used': True, 'active': True, 'type': 'mega', 'turns': -1})
-                            combat_log += f"✨ **{owner_name}'s** specimen achieved Hyper-Adaptation and Mega Evolved into **{form_name.replace('-', ' ').title()}**!\n"
-                        else:
-                            combat_log += f"⚠️ **{owner_name}'s** {active_poke['name'].capitalize()} tried to Mega Evolve, but its genetic data was missing from the database!\n"
+                            # 2. Apply Dynamax & Gigantamax
+                            if form == 'dynamax':
+                                has_gmax = active_poke.get('gmax_factor', False) or active_poke.get('gmax_factor', 0) == 1
+                                base_name = active_poke['name'].lower().replace(' (dynamax)', '').replace(' (gigantamax)', '').split('-')[0].strip()
+                                
+                                hp_boost = math.floor(active_poke['max_hp'] * 0.5)
+                                active_poke['max_hp'] += hp_boost
+                                active_poke['current_hp'] += hp_boost
+                                
+                                if has_gmax:
+                                    # Query the database for the G-Max Pokedex ID!
+                                    async with db.execute("SELECT pokedex_id FROM base_pokemon_species WHERE name = ?", (f"{base_name}-gmax",)) as cursor:
+                                        gmax_data = await cursor.fetchone()
+                                    
+                                    if gmax_data:
+                                        active_poke['pokedex_id'] = gmax_data[0] # Update the ID for the visual renderer!
+                                        
+                                    active_poke['name'] = f"{active_poke['name']} (Gigantamax)"
+                                    combat_log += f"🔴 **{owner_name}'s** specimen absorbed Galar particles and Gigantamaxed into **{active_poke['name'].capitalize()}**!\n"
+                                else:
+                                    active_poke['name'] = f"{active_poke['name']} (Dynamax)"
+                                    combat_log += f"🔴 **{owner_name}'s** specimen absorbed Galar particles and Dynamaxed into **{active_poke['name'].capitalize()}**!\n"
+                                    
+                                adp_state.update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3})
 
-                    # 4. Apply Z-Move Marker
-                    elif form == 'zmove':
-                        adp_state.update({'used': True, 'active': True, 'type': 'zmove', 'turns': 1})
-                        combat_log += f"💎 **{owner_name}'s** {active_poke['name'].capitalize()} surrounded itself with its Z-Power!\n"
+                            # 3. Apply Mega Evolution
+                            elif form == 'mega':
+                                # 🚨 FIX: Clean the base name AND grab the held item!
+                                base_name = active_poke['name'].split('-')[0]
+                                held_item = active_poke.get('held_item', 'none').lower()
+                                
+                                # Query ALL mega forms for this species using the LIKE operator
+                                async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ?", (f"{base_name}-mega%",)) as cursor:
+                                    mega_forms = await cursor.fetchall()
+                                
+                                if mega_forms:
+                                    # Default fallback to standard mega
+                                    form_id, form_name = mega_forms[0] 
+                                    
+                                    # 🚨 FIX: Route the X, Y, and Z forms based on the held item!
+                                    if held_item.endswith('-x'):
+                                        target = next((f for f in mega_forms if '-mega-x' in f[1]), mega_forms[0])
+                                        form_id, form_name = target
+                                    elif held_item.endswith('-y'):
+                                        target = next((f for f in mega_forms if '-mega-y' in f[1]), mega_forms[0])
+                                        form_id, form_name = target
+                                    elif held_item.endswith('-z'):
+                                        target = next((f for f in mega_forms if '-mega-z' in f[1]), mega_forms[0])
+                                        form_id, form_name = target
+                                    
+                                    # Fetch new stats and types
+                                    async with db.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,)) as cursor:
+                                        db_stats = {row[0]: row[1] for row in await cursor.fetchall()}
 
-            conn.close() # Close the connection safely before proceeding to speed resolution
+                                    async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,)) as cursor:
+                                        new_types = [row[0] for row in await cursor.fetchall()]
+                                    
+                                    # 🧬 PARITY FIX: Fetch the mutated biological ability so it works in PvP!
+                                    async with db.execute("SELECT standard_abilities FROM base_pokemon_species WHERE pokedex_id = ?", (form_id,)) as cursor:
+                                        ab_data = await cursor.fetchone()
+                                    if ab_data and ab_data[0]:
+                                        raw_ability = ab_data[0].split(',')[0].strip()
+                                        active_poke['ability'] = raw_ability.lower().replace(' ', '-')
+
+                                    level = active_poke['level']
+                                    base_hp = db_stats.get('hp', 50)
+                                    base_atk = db_stats.get('attack', 50)
+                                    base_def = db_stats.get('defense', 50)
+                                    base_spa = db_stats.get('special-attack', 50) 
+                                    base_spd = db_stats.get('special-defense', 50)
+                                    base_spe = db_stats.get('speed', 50)
+                                    
+                                    # Apply PvP Math
+                                    new_max_hp = math.floor((2 * base_hp + 15) * level / 100) + level + 10
+                                    hp_diff = new_max_hp - active_poke['max_hp']
+                                    active_poke['max_hp'] = new_max_hp
+                                    active_poke['current_hp'] = max(1, active_poke['current_hp'] + hp_diff)
+                                    
+                                    active_poke['stats'] = {
+                                        'attack': math.floor((2 * base_atk + 15) * level / 100) + 5,
+                                        'defense': math.floor((2 * base_def + 15) * level / 100) + 5,
+                                        'sp_atk': math.floor((2 * base_spa + 15) * level / 100) + 5,
+                                        'sp_def': math.floor((2 * base_spd + 15) * level / 100) + 5,
+                                        'speed': math.floor((2 * base_spe + 15) * level / 100) + 5
+                                    }
+                                    
+                                    active_poke['pokedex_id'] = form_id
+                                    active_poke['name'] = form_name
+                                    active_poke['types'] = new_types
+                                    
+                                    adp_state.update({'used': True, 'active': True, 'type': 'mega', 'turns': -1})
+                                    
+                                    # 🚨 Dynamic Log Message
+                                    transform_type = "Z-Mega Evolved" if held_item.endswith('-z') else "Mega Evolved"
+                                    combat_log += f"✨ **{owner_name}'s** specimen achieved Hyper-Adaptation and {transform_type} into **{form_name.replace('-', ' ').title()}**!\n"
+                                else:
+                                    combat_log += f"⚠️ **{owner_name}'s** {active_poke['name'].capitalize()} tried to Mega Evolve, but its genetic data was missing from the database!\n"
+
+
+                            # 4. Apply Z-Move Marker
+                            elif form == 'zmove':
+                                adp_state.update({'used': True, 'active': True, 'type': 'zmove', 'turns': 1})
+                                combat_log += f"💎 **{owner_name}'s** {active_poke['name'].capitalize()} surrounded itself with its Z-Power!\n"
+
             # ==========================================
             # PHASE 1: TURN ORDER & SPEED RESOLUTION
             # ==========================================
             print("DEBUG: Resolving turn order...")
-            def get_action_priority(commit):
-                # Swaps are nearly instantaneous (Equivalent to +6 priority)
+
+            # ==========================================
+            # 🚨 TEMPORAL OVERRIDE: CHARGING & RAMPAGE
+            # Force the locked move data into the player's commit BEFORE speed calculation!
+            # ==========================================
+            for p_tag, commit, active_poke in [('p1', c1, p1_active), ('p2', c2, p2_active)]:
+                if 'volatile_statuses' not in active_poke: active_poke['volatile_statuses'] = {}
+                
+                is_charging = active_poke['volatile_statuses'].get('charging')
+                is_rampage = active_poke['volatile_statuses'].get('rampage')
+                
+                forced_move_name = None
+                if is_charging: forced_move_name = is_charging
+                elif is_rampage: forced_move_name = is_rampage['move']
+                
+                if forced_move_name:
+                    # Look up the forced move in their biological database payload
+                    forced_move_data = next((m for m in active_poke['moves'] if m.get('base_name', m['name']) == forced_move_name), None)
+                    
+                    if forced_move_data:
+                        # Overwrite their commit with the forced attack!
+                        commit['type'] = 'attack'
+                        commit['data'] = forced_move_data
+            # ==========================================
+            # 🚨 THE PURSUIT INTERCEPTOR & SWAP TRACKER
+            p1_is_swapping = c1['type'] == 'swap'
+            p2_is_swapping = c2['type'] == 'swap'
+
+            # Tag the biology so calculate_damage knows they are fleeing!
+            if p1_is_swapping: p1_active['volatile_statuses']['is_switching'] = True
+            if p2_is_swapping: p2_active['volatile_statuses']['is_switching'] = True
+
+            def get_action_priority(commit, opp_swapping):
                 if commit['type'] == 'swap': 
                     return 6 
-                # Attacks dynamically pull their priority from the DB!
                 if commit['type'] == 'attack':
-                    return commit['data'].get('priority', 0)
+                    base_prio = commit['data'].get('priority', 0)
+                    
+                    # Pursuit intercepts the swap by jumping to Priority 7!
+                    if commit['data']['name'].lower() == 'pursuit' and opp_swapping:
+                        return 7 
+                    return base_prio
                 return 0
-                
-            def get_combat_speed(pokemon):
+            
+            # KINETIC SPEED CHECK (PvP)
+            def get_combat_speed(pokemon, has_tailwind=False):
                 base_spd = pokemon['stats'].get('speed', 50)
                 stage = pokemon.get('stat_stages', {}).get('speed', 0)
                 
@@ -4527,7 +5740,10 @@ class Combat(commands.Cog):
                 item = (pokemon.get('held_item') or "").lower().replace(' ', '-')
                 if item == 'choice-scarf':
                     final_spd *= 1.5
-                    
+
+                # 🚨 TAILWIND MULTIPLIER
+                if has_tailwind: final_spd *= 2.0
+              
                 # 3. Apply Pathogen Penalties
                 status = pokemon.get('status_condition') or {}
                 if status and status.get('name') == 'paralysis':
@@ -4535,18 +5751,29 @@ class Combat(commands.Cog):
                     
                 return int(final_spd) # Ensure we return a clean integer!
 
-            p1_prio = get_action_priority(c1)
-            p2_prio = get_action_priority(c2)
+            p1_prio = get_action_priority(c1, p2_is_swapping)
+            p2_prio = get_action_priority(c2, p1_is_swapping)
+
+            # Fetch Tailwind Statuses
+            p1_has_tailwind = state.get('p1_hazards', {}).get('tailwind', 0) > 0
+            p2_has_tailwind = state.get('p2_hazards', {}).get('tailwind', 0) > 0
             
             p1_goes_first = False
             if p1_prio > p2_prio: p1_goes_first = True
             elif p2_prio > p1_prio: p1_goes_first = False
             else:
-                spd1 = get_combat_speed(p1_active)
-                spd2 = get_combat_speed(p2_active)
-                if spd1 > spd2: p1_goes_first = True
-                elif spd2 > spd1: p1_goes_first = False
-                else: p1_goes_first = random.choice([True, False]) 
+                spd1 = get_combat_speed(p1_active, p1_has_tailwind)
+                spd2 = get_combat_speed(p2_active, p2_has_tailwind)
+
+                # TRICK ROOM INVERTER
+                is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
+
+                if spd1 > spd2: 
+                    p1_goes_first = not is_trick_room # 🟢 Slowest moves first!
+                elif spd2 > spd1: 
+                    p1_goes_first = is_trick_room     # 🟢 Slowest moves first!
+                else: 
+                    p1_goes_first = random.choice([True, False])
 
             execution_queue = []
             if p1_goes_first:
@@ -4565,8 +5792,11 @@ class Combat(commands.Cog):
                 opp_tag = 'p2' if player_tag == 'p1' else 'p1'
                 commit = action['commit']
                 attacker = action['active']
-                defender = action['opp_active'] 
+                #defender = action['opp_active'] 
                 
+                # Always grab the defender directly from the live state memory!
+                defender = state[f"{opp_tag}_team"][state[f"{opp_tag}_active_index"]]
+
                 owner_name = state[player_tag].display_name
                 opp_name = state[opp_tag].display_name
 
@@ -4582,6 +5812,16 @@ class Combat(commands.Cog):
                     if new_active['current_hp'] <= 0:
                         combat_log += f"⚠️ **{owner_name}** tried to send out {new_active['name'].capitalize()}, but it's already fainted!\n"
                         continue 
+
+                    # ==========================================
+                    # 🚨 NEW: PRIMORDIAL WEATHER VOLUNTARY CLEAR
+                    # ==========================================
+                    weather_cleared_msg = ""
+                    if state.get('weather', {}).get('primordial', False):
+                        if attacker.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']:
+                            state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
+                            weather_cleared_msg = f"🌤️ The primordial weather dissipated as {attacker['name'].capitalize()} retreated!\n"
+                    # ==========================================
                     
                     # 2. STATE MUTATION: Only update the index if the specimen is alive!
                     state[f"{player_tag}_active_index"] = bench_idx
@@ -4596,7 +5836,7 @@ class Combat(commands.Cog):
                     
                     if new_active['current_hp'] > 0:
                         try:
-                            combat_log = trigger_single_entry_ability(new_active, defender, f"{owner_name}'s", state, combat_log)
+                            combat_log = await trigger_single_entry_ability(new_active, defender, f"{owner_name}'s", state, combat_log)
                         except Exception as e:
                             print(f"DEBUG WARNING: Ability trigger failed: {e}")
                     
@@ -4612,12 +5852,45 @@ class Combat(commands.Cog):
                     
                     if defender['current_hp'] <= 0:
                         combat_log += f"💥 **{owner_name}'s** {attacker['name'].capitalize()} used **{move['name'].replace('-', ' ').title()}**, but there was no target!\n"
+                        
+                        # ==========================================
+                        # DESTINY BOND RESOLUTION
+                        # ==========================================
+                        if defender.get('volatile_statuses', {}).get('destiny-bond'):
+                            attacker['current_hp'] = 0
+                            combat_log += f"👻 **{owner_name}'s** {attacker['name'].capitalize()} took its attacker down with it!\n"
+                        
                         continue
                     
                     can_attack = True
-                    
-                    # 1. VOLATILE STATUS: CONFUSION CHECK
                     volatiles = attacker.get('volatile_statuses', {})
+
+                    if 'glaive_rush' in volatiles:
+                        del volatiles['glaive_rush']
+
+                    raw_move_name = move.get('base_name', move['name']).lower().replace(' ', '-')
+
+                    # ==========================================
+                    # 🚨 REACTIVE STATUS ANOMALY: DESTINY BOND
+                    # ==========================================
+                    if raw_move_name == 'destiny-bond':
+                        if 'volatile_statuses' not in attacker:
+                            attacker['volatile_statuses'] = {}
+                        attacker['volatile_statuses']['destiny-bond'] = True
+                        combat_log += f"👻 {owner_name.strip()} **{attacker['name'].capitalize()}** is hoping to take its attacker down with it!\n"
+                        continue
+
+                    # ==========================================
+                    # 🚨 THE RECHARGE ENFORCER
+                    # ==========================================
+                    if volatiles.get('recharging'):
+                        combat_log += f"⏳ **{owner_name}'s** {attacker['name'].capitalize()} must recharge!\n"
+                        
+                        # Clear the tag so they can move normally on the NEXT turn
+                        del attacker['volatile_statuses']['recharging']
+                        continue # Abort the entire turn right here!
+
+                    # 1. VOLATILE STATUS: CONFUSION CHECK
                     if 'confusion' in volatiles:
                         volatiles['confusion'] -= 1
                         if volatiles['confusion'] <= 0:
@@ -4626,7 +5899,8 @@ class Combat(commands.Cog):
                         else:
                             combat_log += f"💫 **{owner_name}'s** {attacker['name'].capitalize()} is confused...\n"
                             if random.randint(1, 100) <= 33: 
-                                conf_dmg, conf_msg, _, _, _ = calculate_damage(attacker, attacker, {'name': 'confusion-snap', 'class': 'physical', 'power': 40, 'type': 'typeless'})
+                                conf_dmg, conf_msg, _, _, _ = calculate_damage(
+                                    attacker, attacker, {'name': 'confusion-snap', 'class': 'physical', 'power': 40, 'type': 'typeless'})
                                 attacker['current_hp'] = max(0, attacker['current_hp'] - conf_dmg)
                                 combat_log += f"💥 {conf_msg} (Dealt **{conf_dmg}** damage!)\n"
                                 can_attack = False 
@@ -4670,7 +5944,23 @@ class Combat(commands.Cog):
                             actual_move['pp'] = max(0, actual_move['pp'] - 1)
                             break
 
-                    combat_log += f"💥 **{owner_name}'s** {attacker['name'].capitalize()} used **{move['name'].replace('-', ' ').title()}**!\n"
+                    # ==========================================
+                    # 🚨 THE ATTACK ANNOUNCEMENT & PURSUIT LOGIC
+                    # ==========================================
+                    is_status_gimmick = (adp_state['active'] and adp_state['type'] in ['zmove', 'dynamax']) and move.get('class') == 'status'
+                    
+                    if not is_status_gimmick:
+                        if adp_state['active'] and adp_state['type'] == 'zmove':
+                            combat_log += f"🌟 **{owner_name}'s** {attacker['name'].capitalize()} unleashed its full-force Z-Move!\n"
+                        elif adp_state['active'] and adp_state['type'] == 'dynamax':
+                            combat_log += f"🌪️ **{owner_name}'s** {attacker['name'].capitalize()} warped reality with **{move['name'].replace('-', ' ').title()}**!\n"
+                        else:
+                            combat_log += f"💥 **{owner_name}'s** {attacker['name'].capitalize()} used **{move['name'].replace('-', ' ').title()}**!\n"
+                            
+                            # 🚨 THE PVP PURSUIT MESSAGE
+                            if raw_move_name == 'pursuit' and defender.get('volatile_statuses', {}).get('is_switching'):
+                                combat_log += f"⚔️ {defender['name'].capitalize()} is trying to retreat, but was brutally Pursued by {attacker['name'].capitalize()}!\n"
+                    # ==========================================
                     
                     # --- Z-MOVE KINETIC INJECTION ---
                     adp_state = state['p1_adaptation'] if player_tag == 'p1' else state['p2_adaptation']
@@ -4757,18 +6047,150 @@ class Combat(commands.Cog):
                                                     move['healing'] = g_data['healing']
                                             break
 
+                    # ==========================================
+                    # 🚨 TWO-TURN CHARGING & INVULNERABILITY LOGIC (PvP)
+                    # ==========================================
+
+                    raw_move_name = move.get('base_name', move['name']).lower().replace(' ', '-')
+                    is_currently_charging = attacker.get('volatile_statuses', {}).get('charging') == raw_move_name
+                    held_item_check = (attacker.get('held_item') or "").lower().replace(' ', '-')
+
+                    if raw_move_name in TWO_TURN_MOVES and not is_currently_charging:
+                        charge_data = TWO_TURN_MOVES[raw_move_name]
+                        current_weather = state.get('weather', {'type': 'none'})['type']
+                        
+                        # 1. Biological Bypasses (Harsh Sunlight & Power Herbs)
+                        if current_weather in charge_data.get('skip_weather', []):
+                            pass # Skip the charge turn and fire immediately!
+                        elif held_item_check == 'power-herb':
+                            combat_log += f"🌿 **{owner_name}'s** {attacker['name'].capitalize()} became fully charged due to its Power Herb!\n"
+                            attacker['held_item'] = 'none' 
+                        else:
+                            # 2. Lock in the Charge state!
+                            attacker['volatile_statuses']['charging'] = raw_move_name
+                            combat_log += f"⏳ **{owner_name}'s** {attacker['name'].capitalize()} {charge_data['msg']}\n"
+                            
+                            # 3. Apply Turn-1 Stat Boosts
+                            if 'boost' in charge_data:
+                                stat_name, amt = charge_data['boost']
+                                if 'stat_stages' not in attacker: attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                attacker['stat_stages'][stat_name] = min(6, attacker['stat_stages'].get(stat_name, 0) + amt)
+                                combat_log += f"📈 **{owner_name}'s** {attacker['name'].capitalize()}'s {stat_name.replace('_', ' ')} rose!\n"
+                                
+                            # 4. Apply Semi-Invulnerability
+                            if 'invuln' in charge_data:
+                                attacker['volatile_statuses']['semi_invulnerable'] = charge_data['invuln']
+                            
+                            # 🚨 ABORT THE REST OF THE TURN!
+                            continue 
+                            
+                    # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
+                    if is_currently_charging:
+                        del attacker['volatile_statuses']['charging']
+                        if 'semi_invulnerable' in attacker.get('volatile_statuses', {}):
+                            del attacker['volatile_statuses']['semi_invulnerable']
+                        # ==========================================
+                        
+                        # ==========================================
+                        # 🚨 ACCURACY, EVASION, & OHKO BYPASS
+                        # ==========================================
+                        is_ohko = raw_move_name in OHKO_MOVES
+
+                        GUARANTEED_HIT_MOVES = [
+                            'aerial-ace', 'aura-sphere', 'disarming-voice', 'false-surrender', 
+                            'magical-leaf', 'magnet-bomb', 'shadow-punch', 'shock-wave', 
+                            'smart-strike', 'swift', 'vital-throw'
+                        ]
+                        is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
+
+                        # Safely fetch abilities
+                        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+                        def_ability = (defender.get('ability') or '').lower().replace(' ', '-')
+                        has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
+                        target_is_vulnerable = defender.get('volatile_statuses', {}).get('glaive_rush')
+                        
+                        move_acc = move.get('accuracy', 0)
+                        if not isinstance(move_acc, int): move_acc = 100 
+
+                        if not is_ohko and not has_no_guard and not target_is_vulnerable and not is_guaranteed:
+                            
+                            # 1. Fetch Biological Stages (Default to 0 if missing)
+                            acc_stage = attacker.get('stat_stages', {}).get('accuracy', 0)
+                            eva_stage = defender.get('stat_stages', {}).get('evasion', 0)
+                            
+                            # 2. Calculate the Net Multiplier (Capped between -6 and +6)
+                            net_stage = max(-6, min(6, acc_stage - eva_stage))
+                            
+                            if net_stage >= 0:
+                                acc_multiplier = (3.0 + net_stage) / 3.0
+                            else:
+                                acc_multiplier = 3.0 / (3.0 + abs(net_stage))
+                                
+                            final_acc = move_acc * acc_multiplier
+                            
+                            # 3. Roll the dice!
+                            if random.uniform(0, 100) > final_acc:
+                                combat_log += "💨 The attack missed!\n"
+
+                                # 🚨 CRASH DAMAGE (Miss)
+                                if raw_move_name in ['jump-kick', 'high-jump-kick']:
+                                    crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
+                                    attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
+                                    combat_log += f"💥 {attacker['name'].capitalize()} kept going and crashed! (-{crash_dmg} HP)\n"
+                                
+                                # If a Rampage move misses, the rampage is disrupted!
+                                if 'rampage' in attacker.get('volatile_statuses', {}):
+                                    del attacker['volatile_statuses']['rampage']
+                                continue
+
                     print(f"DEBUG: Firing Physics Engine. Attacker: {attacker['name']} | Defender: {defender['name']} | Move Data: {move}")
                     dmg, msg, status, stat_changes, heal = calculate_damage(
                         attacker, defender, move, 
                         weather=state['weather']['type'], 
                         target_hazards=state[f"{opp_tag}_hazards"],
-                        user_hazards=state[f"{player_tag}_hazards"]
+                        user_hazards=state[f"{player_tag}_hazards"],
+                        terrain=state.get('terrain', {'type': 'none'})['type'],
+                        wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                        gravity=state.get('field', {}).get('gravity', 0) > 0
                     )
 
                     print(f"DEBUG: Result -> Dmg: {dmg}, Heal: {heal}, Stat Chgs: {stat_changes}")
                     
                     # Apply HP modifications
                     defender['current_hp'] = max(0, defender['current_hp'] - dmg)
+
+                    # ==========================================
+                    # 🚨 RAMPAGE MOVES (Outrage, Petal Dance, Thrash)
+                    # ==========================================
+                    if raw_move_name in RAMPAGE_MOVES:
+                        if dmg > 0: # The attack successfully landed!
+                            if 'rampage' not in attacker['volatile_statuses']:
+                                # Start the rampage (Locks in for 2 to 3 turns)
+                                attacker['volatile_statuses']['rampage'] = {'move': raw_move_name, 'turns': random.randint(1, 2)}
+                            else:
+                                # Decrement the rampage timer
+                                attacker['volatile_statuses']['rampage']['turns'] -= 1
+                                if attacker['volatile_statuses']['rampage']['turns'] <= 0:
+                                    del attacker['volatile_statuses']['rampage']
+                                    
+                                    # Rampage ends, apply confusion! (Own Tempo grants immunity)
+                                    atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+                                    if atk_ability != 'own-tempo':
+                                        attacker['volatile_statuses']['confusion'] = random.randint(2, 5)
+                                        combat_log += f"💫 {owner_name.strip()} **{attacker['name'].capitalize()}** became confused due to fatigue!\n"
+                        else:
+                            # If the rampage dealt 0 damage (Protect, Immunity, Faint), it is disrupted!
+                            if 'rampage' in attacker.get('volatile_statuses', {}):
+                                del attacker['volatile_statuses']['rampage']
+
+                    # ==========================================
+                    # DAMAGE MEMORY (For Retaliation Moves)
+                    # ==========================================
+                    if dmg > 0:
+                        defender['last_damage_taken'] = dmg
+                        defender['last_damage_class'] = move.get('class', 'physical')
+                    # ==========================================
+
                     if heal > 0:
                         attacker['current_hp'] = min(attacker.get('max_hp', 100), attacker['current_hp'] + heal)
                        
@@ -4784,7 +6206,7 @@ class Combat(commands.Cog):
                     for tgt_str, s_name, chg in stat_changes:
                         target_specimen = attacker if tgt_str == 'attacker' else defender
                         
-                        stat_map = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed'}
+                        stat_map = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed', 'accuracy':'accuracy', 'evasion': 'evasion'}
                         db_stat = stat_map.get(s_name)
                         if db_stat:
                             if 'stat_stages' not in target_specimen:
@@ -4795,13 +6217,120 @@ class Combat(commands.Cog):
                             direction = "fell" if chg < 0 else "rose"
                             icon = "📉" if chg < 0 else "📈"
                             combat_log += f"↳ {icon} **{target_specimen['name'].capitalize()}**'s {s_name.replace('-', ' ')} {direction}!\n"
-                    
-                    if status:
+
+                            # ==========================================
+                            # LASH OUT TRACKER
+                            # ==========================================
+                            if chg < 0:
+                                target_specimen['volatile_statuses']['stats_lowered_this_turn'] = True
+                                
+                    if status and  status != 'none':
                         defender['status_condition'] = {'name': status, 'duration': -1}
                         combat_log += f"↳ **{opp_name}'s** {defender['name'].capitalize()} was afflicted with {status}!\n"
 
+                    # Only apply the exhaustion tag if the attack actually dealt damage!
+                    if raw_move_name in RECHARGE_MOVES and dmg > 0:
+                        if 'volatile_statuses' not in attacker:
+                            attacker['volatile_statuses'] = {}
+                        attacker['volatile_statuses']['recharging'] = True
+
                     # ==========================================
-                    # CLIMATOLOGICAL OVERRIDES (Weather Moves)
+                    # SYNCHRONOUS PIVOT OVERRIDE (PvP)
+                    # ==========================================
+                    # Ensure the attacker survived recoil/helmets and actually dealt damage (or used a status pivot)
+                    if raw_move_name in pivot_moves and attacker['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
+                        
+                        # Verify they actually have a living bench specimen to swap into!
+                        active_idx = state[f"{player_tag}_active_index"]
+                        has_bench = any(i != active_idx and p['current_hp'] > 0 for i, p in enumerate(state[f"{player_tag}_team"]))
+                        
+                        if has_bench:
+                            # Biologically flush the outgoing specimen's stat mutations (UNLESS it is Baton Pass!)
+                            if raw_move_name != 'baton-pass':
+                                attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                attacker['volatile_statuses'] = {}
+                                
+                            combat_log += f"💨 {owner_name}'s **{attacker['name'].capitalize()}** retreated to the bench!\n"
+
+                            # ==========================================
+                            # 🚨 PAUSE THE ENGINE: WAIT FOR USER INPUT
+                            # ==========================================
+                            # 1. Update the main channel so both players know the engine is waiting
+                            embed = discord.Embed(title="⚠️ Mid-Turn Substitution!", description=f"{combat_log}\nWaiting for {owner_name} to deploy a replacement...", color=discord.Color.orange())
+                            await state['message_obj'].edit(embed=embed, attachments=[], view=None)
+                            
+                            # 2. Spawn the menu and send it to the specific player's DMs!
+                            player_id_to_ping = state[f"{player_tag}_id"]
+                            swap_view = MidTurnSwapMenu(self, state, player_id_to_ping)
+                            
+                            # Ping the user directly (identical to your faint_swap logic)
+                            await state[player_tag].send(f"⚠️ **{attacker['name'].capitalize()}** is pivoting out! Select a replacement quickly:", view=swap_view)
+                            
+                            # 3. 🛑 FREEZE THE THREAD UNTIL THEY CLICK A BUTTON IN THEIR DMS
+                            await swap_view.swap_event.wait()
+                            
+                            # 4. 🟢 RESUME! Grab the index they selected and mutate the state
+                            new_idx = swap_view.selected_index
+                            state[f"{player_tag}_active_index"] = new_idx
+                            new_active = state[f"{player_tag}_team"][new_idx]
+                            
+                            combat_log += f"\n{owner_name} sent out **{new_active['name'].capitalize()}**!\n"
+                            
+                            # 5. Trigger Entry Hazards / Abilities for the new arrival!
+                            try:
+                                combat_log = await trigger_single_entry_ability(new_active, defender, f"{owner_name}'s", state, combat_log)
+                                hazard_log = apply_entry_hazards(new_active, state[f"{player_tag}_hazards"], TYPE_CHART, f"{owner_name}'s")
+                                if hazard_log: combat_log += hazard_log
+                            except Exception as e:
+                                print(f"DEBUG: PvP Mid-Turn Entry Hook Failed: {e}")
+                    
+                    # ==========================================
+                    #  PHAZING ANOMALIES (Forced Swaps)
+                    # ==========================================
+                    # Ensure the move successfully executed (either dealing damage or landing a status)
+                    if raw_move_name in phaze_moves and defender['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
+                        
+                        # 1. Find valid benched targets for the DEFENDER
+                        opp_active_idx = state[f"{opp_tag}_active_index"]
+                        opp_bench = [i for i, p in enumerate(state[f"{opp_tag}_team"]) if p['current_hp'] > 0 and i != opp_active_idx]
+                        
+                        if opp_bench:
+                            # 2. Randomly select a victim and force the state mutation
+                            forced_idx = random.choice(opp_bench)
+                            state[f"{opp_tag}_active_index"] = forced_idx
+                            forced_in_poke = state[f"{opp_tag}_team"][forced_idx]
+                            
+                            # Biologically flush the outgoing specimen's stat mutations
+                            defender['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                            defender['volatile_statuses'] = {}
+                            
+                            combat_log += f"🌪️ **{opp_name}'s** {defender['name'].capitalize()} was forced out of the battlefield!\n"
+                            combat_log += f"↳ **{opp_name}** was dragged into the fight with **{forced_in_poke['name'].capitalize()}**!\n"
+                            
+                            # 3. Trigger Entry Hazards / Abilities for the dragged-in Pokémon!
+                            try:
+                                combat_log = await trigger_single_entry_ability(forced_in_poke, attacker, f"{opp_name}'s", state, combat_log)
+                                hazard_log = apply_entry_hazards(forced_in_poke, state[f"{opp_tag}_hazards"], TYPE_CHART, f"{opp_name}'s")
+                                if hazard_log: combat_log += hazard_log
+                            except Exception as e:
+                                print(f"DEBUG: Phaze Entry Hook Failed: {e}")
+                                
+                            # 4. 🚨 CRITICAL: UPDATE THE POINTERS FOR ANY REMAINING ACTIONS
+                            defender = forced_in_poke
+                            
+                            for other_action in execution_queue:
+                                if other_action['player'] == opp_tag:
+                                    other_action['active'] = forced_in_poke
+                                else:
+                                    other_action['opp_active'] = forced_in_poke
+                                    
+                        else:
+                            combat_log += "↳ But it failed! The target has no benched Pokémon to drag out!\n"
+                    # ==========================================
+                    
+                    # ==========================================
+                    # ==========================================
+                    # CLIMATOLOGICAL OVERRIDES (Weather Moves) PvP
                     # ==========================================
                     effective_move_name = move.get('base_name', move['name'])
                     
@@ -4821,17 +6350,78 @@ class Combat(commands.Cog):
                             state['weather'] = {'type': new_weather, 'duration': duration, 'primordial': False}
                             combat_log += f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
                         
-                        # Apply the 8-turn extension if they are holding the right geological item!
-                        duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
-                        
-                        state['weather'] = {'type': new_weather, 'duration': duration}
-                        combat_log += f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
-
                     if defender['current_hp'] <= 0:
                         combat_log += f"💀 **{opp_name}'s** {defender['name'].capitalize()} fainted!\n\n"
+                    
+                    # ==========================================
+                    # TERRAIN DEPLOYMENT
+                    # ==========================================
+                    new_terrain = TERRAIN_MOVES.get(str(effective_move_name))
+
+                    # 2. Check for Max Moves!
+                    if not new_terrain and (adp_state['active'] and is_max_move):
+                        max_move_data = MAX_MOVES.get(move.get('type'))
+                        if max_move_data and 'terrain' in max_move_data:
+                            new_terrain = max_move_data['terrain']
+
+                    if new_terrain:
+                        attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                        duration = 8 if attacker_item == 'terrain-extender' else 5
+                        
+                        if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
+                        
+                        if state['terrain']['type'] != new_terrain:
+                            state['terrain'] = {'type': new_terrain, 'duration': duration}
+                            combat_log += f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+            
+                    # ==========================================
+                    # 🚨 FIELD STATE DEPLOYMENT
+                    # ==========================================
+                    if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0}
+                    
+                    # 1. Tailwind (Side-Specific)
+                    if raw_move_name == 'tailwind':
+                        user_hazards = state['p1_hazards'] if player_tag == 'p1' else state['p2_hazards'] # Use state['player_hazards'] / npc_hazards in PvE!
+                        if user_hazards.get('tailwind', 0) > 0:
+                            combat_log += "↳ But it failed! A tailwind is already blowing!\n"
+                        else:
+                            user_hazards['tailwind'] = 4
+                            combat_log += f"↳ The Tailwind blew from behind {owner_name}'s team!\n"
+                            
+                    # 2. Trick Room & Wonder Room (Global Toggles)
+                    elif raw_move_name == 'trick-room':
+                        if state['field']['trick_room'] > 0:
+                            state['field']['trick_room'] = 0
+                            combat_log += "↳ The twisted dimensions returned to normal!\n"
+                        else:
+                            state['field']['trick_room'] = 5
+                            combat_log += f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
+                            
+                    elif raw_move_name == 'wonder-room':
+                        if state['field']['wonder_room'] > 0:
+                            state['field']['wonder_room'] = 0
+                            combat_log += "↳ Wonder Room ended, and stats returned to normal!\n"
+                        else:
+                            state['field']['wonder_room'] = 5
+                            combat_log += "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
+                            
+                    # 3. Gravity (Global Absolute)
+                    elif raw_move_name == 'gravity':
+                        if state['field']['gravity'] > 0:
+                            combat_log += "↳ But it failed! Gravity is already intense!\n"
+                        else:
+                            state['field']['gravity'] = 5
+                            combat_log += "↳ Gravity intensified!\n"
+                            
+                            # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
+                            for p in [attacker, defender]:
+                                if 'semi_invulnerable' in p.get('volatile_statuses', {}) and p['volatile_statuses']['semi_invulnerable'] == 'air':
+                                    del p['volatile_statuses']['semi_invulnerable']
+                                    if 'charging' in p['volatile_statuses']: del p['volatile_statuses']['charging']
+                                    combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
 
             # ==========================================
-            # PHASE 3: POST-TURN ENVIRONMENTAL DAMAGE & CLEANUP
+            # PHASE 3: POST-TURN ENVIRONMENTAL DAMAGE & CLEANUP (PvP)
             # ==========================================
             print("DEBUG: End of turn cleanups and environmental damage...")
             combat_log += "\n"
@@ -4893,6 +6483,52 @@ class Combat(commands.Cog):
                                     heal = max(1, math.floor(combatant['max_hp'] / 8))
                                     combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                     combat_log += f"🌧️ {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP in the rain due to its Dry Skin! (+{heal} HP)\n"
+
+            # 1.5 Global Biome Effects (Terrains)
+            if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
+            
+            if state['terrain']['type'] != 'none':
+                state['terrain']['duration'] -= 1
+                if state['terrain']['duration'] <= 0:
+                    terrain_clear_msgs = {
+                        'electric': "The electricity disappeared from the battlefield.",
+                        'grassy': "The grass disappeared from the battlefield.",
+                        'misty': "The mist disappeared from the battlefield.",
+                        'psychic': "The weirdness disappeared from the battlefield."
+                    }
+                    combat_log += f"✨ {terrain_clear_msgs.get(state['terrain']['type'])}\n"
+                    state['terrain']['type'] = 'none'
+                else:
+                    # Grassy Terrain Healing!
+                    if state['terrain']['type'] == 'grassy':
+                        # (Note: Use `for combatant, _, owner_str in combatants:` in PvP)
+                        for combatant, _, owner_str in combatants: 
+                            if combatant['current_hp'] > 0 and combatant['current_hp'] < combatant.get('max_hp', 100) and is_grounded(combatant):
+                                heal = max(1, math.floor(combatant.get('max_hp', 100) / 16))
+                                combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
+                                combat_log += f"🌿 {owner_str.strip()} **{combatant['name'].capitalize()}** had its HP restored by the Grassy Terrain! (+{heal} HP)\n"
+            
+            # 🚨 FIELD STATE DECAY
+            if 'field' in state:
+                for field_state in ['trick_room', 'wonder_room', 'gravity']:
+                    if state['field'][field_state] > 0:
+                        state['field'][field_state] -= 1
+                        if state['field'][field_state] == 0:
+                            msgs = {
+                                'trick_room': "The twisted dimensions returned to normal!", 
+                                'wonder_room': "Wonder Room wore off, and stats returned to normal!", 
+                                'gravity': "Gravity returned to normal!"
+                            }
+                            combat_log += f"✨ {msgs[field_state]}\n"
+                            
+            # 🚨 TAILWIND DECAY
+            for hazards, owner_str in [(state['p1_hazards'], f"{state['p1'].display_name}'s"), (state['p2_hazards'], f"{state['p2'].display_name}'s")]:
+                if hazards.get('tailwind', 0) > 0:
+                    hazards['tailwind'] -= 1
+                    if hazards['tailwind'] <= 0:
+                        del hazards['tailwind']
+                        combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
+
             # ==========================================
             # 1.5 PERSISTENT HELD ITEMS (Status Orbs)
             # ==========================================
@@ -4926,24 +6562,30 @@ class Combat(commands.Cog):
                         combat_log += f"☣️ {owner_str} **{combatant['name'].capitalize()}** was hurt by the poison! (-{psn_dmg} HP)\n"
 
             # 2.5 Biological Sustenance (Held Items: Leftovers, Black Sludge)
-            for combatant, _ ,owner_str in combatants:
+            for combatant, _, owner_str in combatants:
                 if combatant['current_hp'] > 0:
                     item = (combatant.get('held_item') or "").lower().replace(' ', '-')
+                    max_hp = combatant.get('max_hp', 100)
                     
                     if item == 'leftovers':
-                        heal_qty = max(1, math.floor(combatant['max_hp'] / 16))
-                        combatant['current_hp'] = min(combatant['max_hp'], combatant['current_hp'] + heal_qty)
-                        combat_log += f"🍎 **{owner_str} {combatant['name'].capitalize()}** restored a little HP using its Leftovers! (+{heal_qty})\n"
-                        
+                        # 🚨 FIX: Only trigger if they are missing HP!
+                        if combatant['current_hp'] < max_hp:
+                            heal_qty = max(1, math.floor(max_hp / 16))
+                            combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
+                            combat_log += f"🍎 **{owner_str} {combatant['name'].capitalize()}** restored a little HP using its Leftovers! (+{heal_qty})\n"
+                            
                     elif item == 'black-sludge':
                         if 'poison' in combatant.get('types', []):
-                            heal_qty = max(1, math.floor(combatant['max_hp'] / 16))
-                            combatant['current_hp'] = min(combatant['max_hp'], combatant['current_hp'] + heal_qty)
-                            combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** restored HP via its Black Sludge! (+{heal_qty})\n"
+                            # 🚨 FIX: Only heal Poison types if they are missing HP!
+                            if combatant['current_hp'] < max_hp:
+                                heal_qty = max(1, math.floor(max_hp / 16))
+                                combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
+                                combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** restored HP via its Black Sludge! (+{heal_qty})\n"
                         else:
-                            sludge_dmg = max(1, math.floor(combatant['max_hp'] / 8))
+                            sludge_dmg = max(1, math.floor(max_hp / 8))
                             combatant['current_hp'] = max(0, combatant['current_hp'] - sludge_dmg)
                             combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** is buffeted by its Black Sludge! (-{sludge_dmg})\n"
+
 
             # ==========================================
             # 2.8 BIOLOGICAL END-OF-TURN HOOKS 
@@ -5017,12 +6659,44 @@ class Combat(commands.Cog):
                     else:
                         combat_log += f"🎵 **{owner_str} {combatant['name'].capitalize()}**'s Perish count fell to {count}.\n"
 
+                # MULTI-HIT TRAP DAMAGE
+                if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
+                    # Traps deal exactly 1/8th of Maximum HP per turn
+                    trap_dmg = max(1, math.floor(combatant.get('max_hp', 100) / 8))
+                    combatant['current_hp'] = max(0, combatant['current_hp'] - trap_dmg)
+                    combat_log += f"🌪️ {owner_str.strip()} **{combatant['name'].capitalize()}** is hurt by the trap! (-{trap_dmg} HP)\n"
+                    
+                    # Decay the trap timer!
+                    combatant['volatile_statuses']['partially_trapped'] -= 1
+                    if combatant['volatile_statuses']['partially_trapped'] <= 0:
+                        del combatant['volatile_statuses']['partially_trapped']
+                        combat_log += f"💨 {owner_str.strip()} **{combatant['name'].capitalize()}** was freed from the trap!\n"
+            
+            # ==========================================
+            # 🚨 INGRAIN & OCTOLOCK (End of Turn)
+            # ==========================================
+            for combatant, _, owner_str in combatants:
+                if combatant['current_hp'] > 0:
+                    volatiles = combatant.get('volatile_statuses', {})
+                    
+                    # Ingrain Healing (1/16th Max HP)
+                    if 'ingrain' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
+                        heal_qty = max(1, math.floor(combatant.get('max_hp', 100) / 16))
+                        combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal_qty)
+                        combat_log += f"🌱 {owner_str.strip()} **{combatant['name'].capitalize()}** absorbed nutrients from its roots! (+{heal_qty} HP)\n"
+                        
+                    # Octolock Decay (-1 Def, -1 SpD)
+                    if 'octolock' in volatiles:
+                        if 'stat_stages' not in combatant:
+                            combatant['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                        
+                        combatant['stat_stages']['defense'] = max(-6, combatant['stat_stages'].get('defense', 0) - 1)
+                        combatant['stat_stages']['sp_def'] = max(-6, combatant['stat_stages'].get('sp_def', 0) - 1)
+                        combat_log += f"🐙 {owner_str.strip()} **{combatant['name'].capitalize()}**'s Def and Sp. Def were lowered by Octolock!\n"
+
             # 4. G-Max Ecological Disasters (Wildfire, Vine Lash, Cannonade, volcalith)
             # Match the active Pokémon with the hazards currently polluting THEIR side of the field
-            for p_active, hazards, owner_str in [
-                (new_p1_active, state['p1_hazards'], f"{state['p1'].display_name}'s"),
-                (new_p2_active, state['p2_hazards'], f"{state['p2'].display_name}'s")
-            ]:
+            for p_active, hazards, owner_str in combatants:
                 if p_active['current_hp'] > 0:
                     p_types = p_active.get('types', [])
                     
@@ -5055,11 +6729,30 @@ class Combat(commands.Cog):
                                 }
                                 combat_log += f"✨ {clear_msgs[disaster]}\n"
 
+
+            # 5. Barrier Decay (Screens)
+            # (Note: Map the hazards and names properly depending on PvE or PvP!)
+            for hazards, owner_str in [(state['p1_hazards'], f"{state['p1'].display_name}'s"),
+                (state['p2_hazards'], f"{state['p2'].display_name}'s")]: 
+                for screen in ['reflect', 'light-screen', 'aurora-veil']:
+                    if hazards.get(screen, 0) > 0:
+                        hazards[screen] -= 1
+                        if hazards[screen] <= 0:
+                            del hazards[screen]
+                            combat_log += f"✨ {owner_str} team's {screen.replace('-', ' ').title()} wore off!\n"
+
             # 4. Kinetic Stun & Shield Cleanup
             for p_active in [new_p1_active, new_p2_active]:
+                # Flush the short-term damage memory and curses!
+                p_active.pop('last_damage_taken', None)
+                p_active.pop('last_damage_class', None)
+
                 if 'volatile_statuses' in p_active:
-                    p_active['volatile_statuses']['flinch'] = False
-                    p_active['volatile_statuses']['protected'] = False
+                    p_active['volatile_statuses'].pop('flinch', None)
+                    p_active['volatile_statuses'].pop('protected', None)
+                    p_active['volatile_statuses'].pop('destiny-bond', None)
+                    p_active['volatile_statuses'].pop('is_switching', None)
+                    p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
             # ==========================================
             # PHASE 4: FAINT CHECKS & UI REDRAW
             # ==========================================
@@ -5087,84 +6780,133 @@ class Combat(commands.Cog):
                 # ==========================================
                 # POST-MATCH REWARDS & DATABASE SYNC
                 # ==========================================
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
+                post_battle_view = None # Initialize empty view for potential evolutions
+                
+                async with aiosqlite.connect(DB_FILE) as db:
+                    async with db.cursor() as cursor:
 
-                # Loop through both players to process their unique rewards and save states
-                for p_tag, opp_tag, is_win in [('p1', 'p2', p1_win), ('p2', 'p1', p2_win)]:
-                    p_team = state[f"{p_tag}_team"]
-                    opp_team = state[f"{opp_tag}_team"]
-                    player_obj = state[p_tag]
-                    user_id = state[f"{p_tag}_id"]
+                        # Loop through both players to process their unique rewards and save states
+                        for p_tag, opp_tag, is_win in [('p1', 'p2', p1_win), ('p2', 'p1', p2_win)]:
+                            p_team = state[f"{p_tag}_team"]
+                            opp_team = state[f"{opp_tag}_team"]
+                            player_obj = state[p_tag]
+                            user_id = state[f"{p_tag}_id"]
 
-                    # 1. Calculate EXP (Yield from fainted opponents + flat win bonus)
-                    defeated_opps = [opp for opp in opp_team if opp['current_hp'] <= 0]
-                    total_exp = sum([opp.get('level', 50) * 15 for opp in defeated_opps])
-                    if is_win:
-                        total_exp += 500 # The winning researcher gets a massive bonus!
+                            # 1. Calculate EXP (Yield from fainted opponents + flat win bonus)
+                            defeated_opps = [opp for opp in opp_team if opp['current_hp'] <= 0]
+                            total_exp = sum([opp.get('level', 50) * 15 for opp in defeated_opps])
+                            
+                            if is_win:
+                                total_exp += 500 # The winning researcher gets a massive bonus!
 
-                    survivors = [p for p in p_team if p['current_hp'] > 0]
+                            survivors = [p for p in p_team if p['current_hp'] > 0]
 
-                    # 2. Distribute EXP and Level Up
-                    if survivors and total_exp > 0:
-                        exp_per = math.floor(total_exp / len(survivors))
-                        rewards_log += f"\n\n📈 **{player_obj.display_name}'s** surviving team gained **{exp_per} EXP**!"
+                            # 2. Distribute EXP and Level Up
+                            if survivors and total_exp > 0:
+                                exp_per = math.floor(total_exp / len(survivors))
+                                rewards_log += f"\n\n📈 **{player_obj.display_name}'s** surviving team gained **{exp_per} EXP**!"
 
-                        for p in survivors:
-                            p['experience'] = p.get('experience', 0) + exp_per
-                            threshold = p.get('level', 5) * 100
+                                for p in survivors:
+                                    p['experience'] = p.get('experience', 0) + exp_per
+                                    threshold = p.get('level', 5) * 100
 
-                            if p['experience'] >= threshold and p.get('level', 5) < 100:
-                                p['level'] += 1
-                                p['experience'] -= threshold
-                                rewards_log += f"\n🎉 **{p['name'].capitalize()}** grew to Level {p['level']}!"
+                                    if p['experience'] >= threshold and p.get('level', 5) < 100:
+                                        p['level'] += 1
+                                        p['experience'] -= threshold
+                                        rewards_log += f"\n🎉 **{p['name'].capitalize()}** grew to Level {p['level']}!"
 
-                                # --- EVOLUTION CHECK ---
+                                        # --- EVOLUTION CHECK ---
+                                        if 'instance_id' in p:
+                                            held_item = (p.get('held_item') or "").lower().replace(' ', '-')
+                                            
+                                            # Block 1: The Everstone Suppressant
+                                            if held_item == 'everstone':
+                                                rewards_log += f"\n🪨 **{p['name'].capitalize()}**'s biological mutation was suppressed by its Everstone!"
+                                                
+                                            # Block 2: Check for Mutation
+                                            else:
+                                                try:
+                                                    # Trigger the helper (passing db directly)
+                                                    evo_msg, target_species = await getattr(self, 'check_for_evolution', self.cog.check_for_evolution)(db, user_id, p, combat_log)
+                                                    
+                                                    if evo_msg: 
+                                                        rewards_log += evo_msg
+                                                        
+                                                    # Attach the confirmation view if a mutation is pending!
+                                                    if target_species and post_battle_view is None:
+                                                        post_battle_view = EvolutionConfirmView(self.cog, user_id, p, target_species)
+                                                except Exception as e:
+                                                    print(f"DEBUG: Evolution check failed in PvP: {e}")
+
+                            # 3. Sync the complete team state to the database! (Levels, EXP, and consumed items)
+                            for p in p_team:
                                 if 'instance_id' in p:
-                                    try:
-                                        # Trigger the same evolution helper used in PvE
-                                        evo_msg = await getattr(self, 'check_for_evolution', self.cog.check_for_evolution)(cursor, conn, user_id, p, combat_log)
-                                        if evo_msg: rewards_log += evo_msg
-                                    except Exception as e:
-                                        print(f"DEBUG: Evolution check failed in PvP: {e}")
+                                    # 🚨 This line permanently deletes any Berries/Sashes consumed during the fight!
+                                    await cursor.execute("""
+                                        UPDATE caught_pokemon
+                                        SET level = ?, experience = ?, held_item = ?
+                                        WHERE instance_id = ?
+                                    """, (p['level'], p['experience'], p.get('held_item', 'none'), p['instance_id']))
 
-                    # 3. Sync the complete team state to the database! (Levels, EXP, and consumed items)
-                    for p in p_team:
-                        if 'instance_id' in p:
-                            # 🚨 This line permanently deletes any Berries/Sashes consumed during the fight!
-                            cursor.execute("""
-                                UPDATE caught_pokemon
-                                SET level = ?, experience = ?, held_item = ?
-                                WHERE instance_id = ?
-                            """, (p['level'], p['experience'], p.get('held_item', 'none'), p['instance_id']))
-
-                conn.commit()
-                conn.close()
+                        await db.commit()
 
                 embed = discord.Embed(title="🏁 Ecological Duel Concluded!", description=f"{combat_log}\n{result_str}{rewards_log}", color=discord.Color.gold())
                 self.active_battles.pop(p1_id, None)
                 self.active_battles.pop(p2_id, None)
-                return await state['message_obj'].edit(embed=embed, attachments=[], view=None)
+                
+                embed = discord.Embed(title="🏁 Ecological Duel Concluded!", description=f"{combat_log}\n{result_str}{rewards_log}", color=discord.Color.gold())
+                self.active_battles.pop(p1_id, None)
+                self.active_battles.pop(p2_id, None)
+                return await state['message_obj'].edit(embed=embed, attachments=[], view=post_battle_view)
 
-            if new_p1_active['current_hp'] <= 0 or new_p2_active['current_hp'] <= 0:
-                print("DEBUG: Faint detected. Entering Faint Phase.")
-                state['phase'] = 'faint_swap' # Tell the engine we are in recovery mode!
+            # ==========================================
+            # PHASE 4: FAINT & PIVOT CHECKS
+            # ==========================================
+            print("DEBUG: Preparing UI Redraw...")
+            state['turn_number'] += 1
+            state['commits'] = {p1_id: None, p2_id: None}
+            
+            # Re-verify the active Pokémon after Phase 3 environmental damage!
+            new_p1_active = state['p1_team'][state['p1_active_index']]
+            new_p2_active = state['p2_team'][state['p2_active_index']]
+            
+            p1_needs_swap = new_p1_active['current_hp'] <= 0 or state.get('p1_must_pivot')
+            p2_needs_swap = new_p2_active['current_hp'] <= 0 or state.get('p2_must_pivot')
+
+            # ==========================================
+            # 🚨 NEW: PRIMORDIAL WEATHER FAINT/PIVOT CLEAR
+            # ==========================================
+            weather = state.get('weather', {})
+            if weather.get('primordial'):
+                p1_is_setter = p1_needs_swap and new_p1_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
+                p2_is_setter = p2_needs_swap and new_p2_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
+                
+                if p1_is_setter or p2_is_setter:
+                    state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
+                    combat_log += "\n🌤️ The primordial weather dissipated as its creator left the field!\n"
+            # ==========================================
+
+            if p1_needs_swap or p2_needs_swap:
+                print("DEBUG: Tactical Swap Required. Entering Recovery Phase.")
+                state['phase'] = 'faint_swap' # Piggyback on your existing recovery engine!
                 state['commits'] = {p1_id: None, p2_id: None}
                 
-                embed = discord.Embed(title="⚠️ Specimen Down!", description=f"{combat_log}\nWaiting for researchers to deploy replacements...", color=discord.Color.orange())
+                embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=f"{combat_log}\nWaiting for researchers to deploy replacements...", color=discord.Color.orange())
                 await state['message_obj'].edit(embed=embed, attachments=[], view=None)
                 
-                # Ping P1 if they fainted, otherwise auto-ready them!
-                if new_p1_active['current_hp'] <= 0:
+                # Ping P1 if they triggered a swap, otherwise auto-ready them!
+                if p1_needs_swap:
                     view1 = PvPForcedSwapMenu(self, state, p1_id)
-                    await state['p1'].send("⚠️ Your active specimen fainted! Select a replacement:", view=view1)
+                    reason = "fainted" if new_p1_active['current_hp'] <= 0 else "is pivoting out"
+                    await state['p1'].send(f"⚠️ Your active specimen {reason}! Select a replacement:", view=view1)
                 else:
                     state['commits'][p1_id] = {'type': 'pass'}
                     
-                # Ping P2 if they fainted, otherwise auto-ready them!
-                if new_p2_active['current_hp'] <= 0:
+                # Ping P2 if they triggered a swap, otherwise auto-ready them!
+                if p2_needs_swap:
                     view2 = PvPForcedSwapMenu(self, state, p2_id)
-                    await state['p2'].send("⚠️ Your active specimen fainted! Select a replacement:", view=view2)
+                    reason = "fainted" if new_p2_active['current_hp'] <= 0 else "is pivoting out"
+                    await state['p2'].send(f"⚠️ Your active specimen {reason}! Select a replacement:", view=view2)
                 else:
                     state['commits'][p2_id] = {'type': 'pass'}
                 return
@@ -5248,7 +6990,7 @@ class Combat(commands.Cog):
                 # Safely execute abilities
                 try:
                     if new_p1['current_hp'] > 0:
-                        combat_log = trigger_single_entry_ability(new_p1, state['p2_team'][state['p2_active_index']], f"{state['p1'].display_name}'s", state, combat_log)
+                        combat_log = await trigger_single_entry_ability(new_p1, state['p2_team'][state['p2_active_index']], f"{state['p1'].display_name}'s", state, combat_log)
                 except Exception as e:
                     print(f"DEBUG: P1 Ability crash ignored: {e}")
 
@@ -5268,7 +7010,7 @@ class Combat(commands.Cog):
 
                 try:
                     if new_p2['current_hp'] > 0:
-                        combat_log = trigger_single_entry_ability(new_p2, state['p1_team'][state['p1_active_index']], f"{state['p2'].display_name}'s", state, combat_log)
+                        combat_log = await trigger_single_entry_ability(new_p2, state['p1_team'][state['p1_active_index']], f"{state['p2'].display_name}'s", state, combat_log)
                 except Exception as e:
                     print(f"DEBUG: P2 Ability crash ignored: {e}")
 
@@ -5338,6 +7080,7 @@ class Combat(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     @checks.is_not_in_combat()
+    @checks.partner_not_deployed()
     async def challenge_entity(self, ctx, entity_type: str = None, target: str = None):
         """Initiates a tactical skirmish against a high-level ecological target."""
         user_id = str(ctx.author.id)
@@ -5359,150 +7102,149 @@ class Combat(commands.Cog):
         if hasattr(self, 'active_battles') and user_id in self.active_battles:
             return await ctx.send("🛑 You are already engaged in a tactical skirmish! Finish it or flee first.")
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # 1. Progression Check: Do they have the Visa?
-            cursor.execute("SELECT unlocked_visas FROM users WHERE user_id = ?", (user_id,))
-            user_data = cursor.fetchone()
-            visas = user_data[0] if user_data and user_data[0] else "canopy"
-            
-            if biome not in visas.split(','):
-                conn.close()
-                return await ctx.send(f"⛔ **ACCESS DENIED:** You lack the clearance to challenge the {warden_data['title']}. Obtain the Visa for this sector first.")
-            
-            # 2. Compile the Warden's Tactical Team (Hydrating the roster)
-            compiled_team = []
-            for pkmn in warden_data['team']:
-                cursor.execute("""
-                    SELECT stat_name, base_value, pokedex_id
-                    FROM base_pokemon_stats 
-                    WHERE pokedex_id = (SELECT pokedex_id FROM base_pokemon_species WHERE name = ?)
-                """, (pkmn['name'],))
-                
-                rows = cursor.fetchall()
-                if not rows:
-                    continue # Skip if database error
-                
-                stats = {row[0]: row[1] for row in rows}
-                p_id = rows[0][2]
-                
-                real_hp = calculate_real_stat('hp', stats.get('hp', 0), pkmn['ivs']['hp'], pkmn['evs']['hp'], pkmn['level'])
-                real_atk = calculate_real_stat('attack', stats.get('attack', 0), pkmn['ivs']['attack'], pkmn['evs']['attack'], pkmn['level'])
-                real_def = calculate_real_stat('defense', stats.get('defense', 0), pkmn['ivs']['defense'], pkmn['evs']['defense'], pkmn['level'])
-                real_spa = calculate_real_stat('special-attack', stats.get('special-attack', 0), pkmn['ivs']['sp_atk'], pkmn['evs']['sp_atk'], pkmn['level'])
-                real_spd = calculate_real_stat('special-defense', stats.get('special-defense', 0), pkmn['ivs']['sp_def'], pkmn['evs']['sp_def'], pkmn['level'])
-                real_spe = calculate_real_stat('speed', stats.get('speed', 0), pkmn['ivs']['speed'], pkmn['evs']['speed'], pkmn['level'])
-                
-                # Make sure the moves have 'max_pp'
-                hydrated_moves = []
-                for m in pkmn['moves']:
-                    hydrated_moves.append({'name': m['name'], 'pp': m['pp'], 'max_pp': m['max_pp']})
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 1. Progression Check: Do they have the Visa?
+                async with db.execute("SELECT unlocked_visas FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    user_data = await cursor.fetchone()
+                    visas = user_data[0] if user_data and user_data[0] else "canopy"
+                    
+                    if biome not in visas.split(','):
+                        return await ctx.send(f"⛔ **ACCESS DENIED:** You lack the clearance to challenge the {warden_data['title']}. Obtain the Visa for this sector first.")
+                    
+                    # 2. Compile the Warden's Tactical Team (Hydrating the roster)
+                    compiled_team = []
+                    for pkmn in warden_data['team']:
+                        async with db.execute("""
+                        SELECT stat_name, base_value, pokedex_id
+                        FROM base_pokemon_stats 
+                        WHERE pokedex_id = (SELECT pokedex_id FROM base_pokemon_species WHERE name = ?)
+                    """, (pkmn['name'],)) as cursor:
+                            rows = await cursor.fetchall()
+                        if not rows:
+                            continue # Skip if database error
+                        
+                        stats = {row[0]: row[1] for row in rows}
+                        p_id = rows[0][2]
+                        
+                        nature = pkmn.get('nature', 'hardy').lower()
+                        inc_stat, dec_stat = NATURE_MULTIPLIERS.get(nature, (None, None))
+                        
+                        def apply_nature(stat_name, val):
+                            if stat_name == inc_stat: return math.floor(val * 1.1)
+                            if stat_name == dec_stat: return math.floor(val * 0.9)
+                            return val
+                        
+                        real_hp = calculate_real_stat('hp', stats.get('hp', 0), pkmn['ivs']['hp'], pkmn['evs']['hp'], pkmn['level'])
+                        real_atk = apply_nature('attack', calculate_real_stat('attack', stats.get('attack', 0), pkmn['ivs']['attack'], pkmn['evs']['attack'], pkmn['level']))
+                        real_def = apply_nature('defense', calculate_real_stat('defense', stats.get('defense', 0), pkmn['ivs']['defense'], pkmn['evs']['defense'], pkmn['level']))
+                        real_spa = apply_nature('special-attack', calculate_real_stat('special-attack', stats.get('special-attack', 0), pkmn['ivs']['sp_atk'], pkmn['evs']['sp_atk'], pkmn['level']))
+                        real_spd = apply_nature('special-defense', calculate_real_stat('special-defense', stats.get('special-defense', 0), pkmn['ivs']['sp_def'], pkmn['evs']['sp_def'], pkmn['level']))
+                        real_spe = apply_nature('speed', calculate_real_stat('speed', stats.get('speed', 0), pkmn['ivs']['speed'], pkmn['evs']['speed'], pkmn['level']))
+                        
+                        # Make sure the moves have 'max_pp'
+                        hydrated_moves = []
+                        for m in pkmn['moves']:
+                            hydrated_moves.append({'name': m['name'], 'pp': m['pp'], 'max_pp': m['max_pp']})
 
-                compiled_member = {
-                    'pokedex_id': p_id,
-                    'name': pkmn['name'],
-                    'level': pkmn['level'],
-                    'types': pkmn['types'],
-                    'held_item': pkmn['held_item'],
-                    'max_hp': real_hp, 'current_hp': real_hp,
-                    'stats': {'hp': real_hp, 'attack': real_atk, 'defense': real_def, 'sp_atk': real_spa, 'sp_def': real_spd, 'speed': real_spe},
-                    'moves': hydrated_moves,
-                    'status_condition': None,
-                    'volatile_statuses': {},
-                    'is_shiny': False,
-                    'ability': 'pressure', # Give Wardens a default tough ability if unassigned!
-                    'gmax_factor': 0
-                }
-                compiled_team.append(compiled_member)
+                        compiled_member = {
+                            'pokedex_id': p_id,
+                            'name': pkmn['name'],
+                            'level': pkmn['level'],
+                            'types': pkmn['types'],
+                            'held_item': pkmn['held_item'],
+                            'nature': nature.capitalize(),
+                            'max_hp': real_hp, 'current_hp': real_hp,
+                            'stats': {'hp': real_hp, 'attack': real_atk, 'defense': real_def, 'sp_atk': real_spa, 'sp_def': real_spd, 'speed': real_spe},
+                            'moves': hydrated_moves,
+                            'status_condition': None,
+                            'volatile_statuses': {},
+                            'is_shiny': pkmn.get('is_shiny', False),
+                            'ability': pkmn.get('ability', 'pressure'), # Default to Pressure if none is assigned!
+                            'gmax_factor': 0
+                        }
+                        compiled_team.append(compiled_member)
 
-            # 3. Load the Player's Team (Identical to npc_encounter)
-            player_team = []
-            cursor.execute("""
-                SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
-                    cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                    cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                    cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience
-                FROM user_party up
-                JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE up.user_id = ?
-                ORDER BY up.slot ASC
-            """, (user_id,))
-            
-            
-            party_rows = cursor.fetchall()
-            if not party_rows:
-                conn.close()
-                return await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a Warden!")
+                    # 3. Load the Player's Team (Identical to npc_encounter)
+                    player_team = []
+                    async with db.execute("""
+                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
+                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience
+                    FROM user_party up
+                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE up.user_id = ?
+                    ORDER BY up.slot ASC
+                """, (user_id,)) as cursor:
+                        party_rows = await cursor.fetchall()
+                    if not party_rows:
+                        return await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a Warden!")
 
-            for row in party_rows:
-                tag, p_id, p_name, p_lvl, p_nature = row[0:5]
-                p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
-                p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
-                raw_moves = [m for m in row[17:21] if m and m != 'none']
-                p_moves = []
-                for m_name in raw_moves:
-                    cursor.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,))
-                    pp_row = cursor.fetchone()
-                    pp_val = pp_row[0] if pp_row else 5 
-                    p_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
+                    for row in party_rows:
+                        tag, p_id, p_name, p_lvl, p_nature = row[0:5]
+                        p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
+                        p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
+                        raw_moves = [m for m in row[17:21] if m and m != 'none']
+                        p_moves = []
+                        for m_name in raw_moves:
+                            async with db.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,)) as cursor:
+                                pp_row = await cursor.fetchone()
+                            pp_val = pp_row[0] if pp_row else 5 
+                            p_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
 
-                cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (p_id,))
-                p_types = [t[0] for t in cursor.fetchall()]
+                        async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (p_id,)) as cursor:
+                            p_types = [t[0] for t in await cursor.fetchall()]
 
-                is_shiny = row[21]
-                held_item = row[22]
-                gmax_factor = row[23]
-                ability = row[24]
-                experience = row[25]
-                
-                p_base = fetch_base_stats(cursor, p_id)
-                p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
-                
-                player_team.append({
-                    'instance_id': tag, 'pokedex_id': p_id, 'name': p_name, 'level': p_lvl,
-                    'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
-                    'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
-                    'held_item': held_item, 'gmax_factor': gmax_factor, 'ability': ability, 'types': p_types,
-                    'experience': experience, 'volatile_statuses': {} 
-                })
+                        is_shiny = row[21]
+                        held_item = row[22]
+                        gmax_factor = row[23]
+                        ability = row[24]
+                        experience = row[25]
+                        
+                        p_base = await fetch_base_stats(db, p_id)
+                        p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
+                        
+                        player_team.append({
+                            'instance_id': tag, 'pokedex_id': p_id, 'name': p_name, 'level': p_lvl,
+                            'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
+                            'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
+                            'held_item': held_item, 'gmax_factor': gmax_factor, 'ability': ability, 'types': p_types,
+                            'experience': experience, 'volatile_statuses': {} 
+                        })
 
-            # ==========================================
-            # REGULATION CHECK: SECTOR LEVEL CAPS
-            # ==========================================
-            SECTOR_CAPS = {
-                'canopy': 40, #100 for testing purposes
-                'trench': 45,
-                'core': 60,
-                'sprawl': 75
-            }
-            
-            max_allowed_level = SECTOR_CAPS.get(biome, 100) # Fallback to 100
-            
-            # Scan the player's active party for violations
-            overleveled_specimens = [p for p in player_team if p['level'] > max_allowed_level]
-            
-            if overleveled_specimens:
-                conn.close()
-                names = ", ".join([p['name'].capitalize() for p in overleveled_specimens])
-                return await ctx.send(f"⛔ **ECOLOGICAL REGULATION:** Your roster contains specimens that exceed the Sector Level Cap (Lv. {max_allowed_level}).\n\nViolating Specimens: **{names}**.\n\nPlease deposit them in your PC or swap them out before engaging the {warden_data['title']}.")
-            # ==========================================
+                    # ==========================================
+                    # REGULATION CHECK: SECTOR LEVEL CAPS
+                    # ==========================================
+                    SECTOR_CAPS = {
+                        'canopy': 30, #100 for testing purposes
+                        'trench': 45,
+                        'core': 60,
+                        'sprawl': 75
+                    }
+                    
+                    max_allowed_level = SECTOR_CAPS.get(biome, 100) # Fallback to 100
+                    
+                    # Scan the player's active party for violations
+                    overleveled_specimens = [p for p in player_team if p['level'] > max_allowed_level]
+                    
+                    if overleveled_specimens:
+                        names = ", ".join([p['name'].capitalize() for p in overleveled_specimens])
+                        return await ctx.send(f"⛔ **ECOLOGICAL REGULATION:** Your roster contains specimens that exceed the Sector Level Cap (Lv. {max_allowed_level}).\n\nViolating Specimens: **{names}**.\n\nPlease deposit them in your PC or swap them out before engaging the {warden_data['title']}.")
+                    # ==========================================
 
-            # 4. Key Item Scanner
-            cursor.execute("""
-                SELECT item_name FROM user_inventory 
-                WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
-            """, (user_id,))
-            owned_key_items = [row[0] for row in cursor.fetchall()]
-            access_ledger = {
-                'dynamax_band': 'dynamax-band' in owned_key_items,
-                'z_ring': 'z-ring' in owned_key_items,
-                'mega_bracelet': 'mega-bracelet' in owned_key_items
-            }
-            
-            conn.close()
+                    # 4. Key Item Scanner
+                    async with db.execute("""
+                    SELECT item_name FROM user_inventory 
+                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
+                """, (user_id,)) as cursor:
+                        owned_key_items = [row[0] for row in await cursor.fetchall()]
+                access_ledger = {
+                    'dynamax_band': 'dynamax-band' in owned_key_items,
+                    'z_ring': 'z-ring' in owned_key_items,
+                    'mega_bracelet': 'mega-bracelet' in owned_key_items
+                    }
 
             
             # 5. Initialize the Battle State Memory
@@ -5515,6 +7257,8 @@ class Combat(commands.Cog):
                 'weather': {'type': 'none', 'duration': 0},
                 'adaptation': {'used': False, 'active': False, 'type': 'none', 'turns': 0, 'backup': {}},
                 'key_items': access_ledger,
+                'is_warden': True,
+                'warden_biome': biome,
                 
                 # ==========================================
                 # ENVIRONMENTAL HAZARD TRACKERS
@@ -5548,8 +7292,8 @@ class Combat(commands.Cog):
             combat_log += f"Go, **{p_lead['name'].capitalize()}**!\n\n"
 
             state = self.active_battles[user_id]
-            combat_log = trigger_single_entry_ability(p_lead, n_lead, "Your", state, combat_log)
-            combat_log = trigger_single_entry_ability(n_lead, p_lead, "The Warden's", state, combat_log)
+            combat_log = await trigger_single_entry_ability(p_lead, n_lead, "Your", state, combat_log)
+            combat_log = await trigger_single_entry_ability(n_lead, p_lead, "The Warden's", state, combat_log)
 
             embed = discord.Embed(title=f"🛡️ Warden Skirmish: {biome.title()} Sector", color=discord.Color.dark_purple())
             embed.description = combat_log
@@ -5586,7 +7330,7 @@ class Combat(commands.Cog):
             if battle_file:
                 embed.set_image(url=f"attachment://{battle_file.filename}")
             
-            dashboard_view = BattleDashboard(self, user_id, ctx)
+            dashboard_view = await BattleDashboard.create(self, user_id, ctx)
             await ctx.send(embed=embed, files=[battle_file], view=dashboard_view)
 
         except Exception as e:
@@ -5594,7 +7338,6 @@ class Combat(commands.Cog):
             import traceback
             traceback.print_exc()
             await ctx.send("⚠️ A critical failure occurred while engaging the Warden. Check the console.")
-            if conn: conn.close()
 
     @commands.command(name="tech", aliases=["techmoves"])
     @checks.has_started()
@@ -5603,16 +7346,13 @@ class Combat(commands.Cog):
         """Displays all Technical Machines (TMs) currently in your field notebook."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
             # Fetch TMs from the database
-            cursor.execute("SELECT tm_name FROM user_tms WHERE user_id = ?", (user_id,))
-            tms = cursor.fetchall()
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute("SELECT tm_name FROM user_tms WHERE user_id = ?", (user_id,)) as cursor:
+                    tms = await cursor.fetchall()
             
             if not tms:
-                conn.close()
                 return await ctx.send("🎒 You haven't acquired any Technical Machines yet. Complete more research or visit the market!")
                 
             embed = discord.Embed(
@@ -5632,98 +7372,85 @@ class Combat(commands.Cog):
         except Exception as e:
             print(f"TM Viewer Error: {e}")
             await ctx.send("❌ Error accessing your technical data.")
-        finally:
-            conn.close()
 
     @commands.command(name="tm")
     @checks.has_started()
     @checks.is_authorized()
-    async def teach_move(self, ctx, instance_id: str, *, tm_name: str):
-        """Teaches a new move to a specific specimen using a TM (Debug Version)."""
-        print(f"\n--- DEBUG: !tm COMMAND INITIATED ---")
-        
+    @checks.partner_not_deployed()
+    async def teach_move(self, ctx, box_number: str, *, tm_name: str):
+        """Teaches a new move to a specific specimen using a TM."""
         try:
             user_id = str(ctx.author.id)
             clean_tm_name = tm_name.lower().replace(" ", "-")
-            print(f"DEBUG: Parsed Input -> User: {user_id}, ID: {instance_id}, TM: {clean_tm_name}")
 
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
+            if not box_number.isdigit():
+                return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!tm 4 earthquake`).")
 
-            # 1. VERIFY OWNERSHIP
-            print("DEBUG 1: Querying caught_pokemon...")
-            # We use a relational JOIN to grab the species name from the master registry!
-            cursor.execute("""
-                SELECT cp.pokedex_id, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.instance_id
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-            """, (f"{instance_id}%", user_id))
-            
-            specimen = cursor.fetchone()
-            print(f"DEBUG 1 RESULT: {specimen}")
-
-            if not specimen:
-                conn.close()
-                print("DEBUG 1 FAILED: Specimen not found or ID mismatch.")
-                return await ctx.send("⚠️ You do not own a specimen with that ID!")
-
-            p_id, p_name, m1, m2, m3, m4, exact_instance_id = specimen
-            current_moves = [m for m in [m1, m2, m3, m4] if m and m != 'none']
-            print(f"DEBUG 1 SUCCESS: Found {p_name} (Exact ID: {exact_instance_id}). Current Moves: {current_moves}")
-
-            # 2. VERIFY TM INVENTORY
-            print("DEBUG 2: Querying user_tms inventory...")
-            cursor.execute("SELECT quantity FROM user_tms WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name))
-            tm_data = cursor.fetchone()
-            print(f"DEBUG 2 RESULT: {tm_data}")
-
-            if not tm_data or tm_data[0] <= 0:
-                conn.close()
-                print("DEBUG 2 FAILED: User does not own this TM.")
-                return await ctx.send(f"⚠️ You do not have the TM for `{clean_tm_name.replace('-', ' ').title()}` in your inventory!")
-
-            # 3. VERIFY DUPLICATION
-            print("DEBUG 3: Checking for duplicate moves...")
-            if clean_tm_name in current_moves:
-                conn.close()
-                print("DEBUG 3 FAILED: Specimen already knows this move.")
-                return await ctx.send(f"⚠️ **{p_name.capitalize()}** already knows `{clean_tm_name.replace('-', ' ').title()}`!")
-            print("DEBUG 3 SUCCESS: Move is not a duplicate.")
-
-            # 4. VERIFY BIOLOGICAL COMPATIBILITY
-            print("DEBUG 4: Checking species_movepool compatibility...")
-            cursor.execute("SELECT 1 FROM species_movepool WHERE pokedex_id = ? AND move_name = ?", (p_id, clean_tm_name))
-            is_compatible = cursor.fetchone()
-            print(f"DEBUG 4 RESULT: {is_compatible}")
-
-            if not is_compatible:
-                conn.close()
-                print("DEBUG 4 FAILED: Incompatible biology.")
-                return await ctx.send(f"🧬 **{p_name.capitalize()}**'s biology is incompatible with `{clean_tm_name.replace('-', ' ').title()}`.")
-            print("DEBUG 4 SUCCESS: Specimen is compatible with this TM.")
-
-            # ==========================================
-            # 5. EXECUTE THE GENETIC OVERWRITE
-            # ==========================================
-            print("DEBUG 5: Executing genetic overwrite...")
-            if len(current_moves) < 4:
-                empty_col = "move_1" if not m1 or m1 == 'none' else \
-                            "move_2" if not m2 or m2 == 'none' else \
-                            "move_3" if not m3 or m3 == 'none' else "move_4"
-
-                print(f"DEBUG 5: Found empty slot at {empty_col}. Injecting TM...")
-                cursor.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name))
-                cursor.execute(f"UPDATE caught_pokemon SET {empty_col} = ? WHERE instance_id = ?", (clean_tm_name, exact_instance_id))
-                conn.commit()
-                conn.close()
+            async with aiosqlite.connect(DB_FILE) as db:
                 
-                print("--- DEBUG: !tm COMMAND SUCCESSFUL ---")
-                return await ctx.send(f"💿 You booted up the TM!\n✨ **{p_name.capitalize()}** learned `{clean_tm_name.replace('-', ' ').title()}`!")
+                # ==========================================
+                # 1. VERIFY OWNERSHIP & APPLY SOFT HIDE
+                # ==========================================
+                async with db.execute("""
+                    WITH Roster AS (
+                        SELECT cp.pokedex_id, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.instance_id,
+                               ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ?
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    )
+                    SELECT pokedex_id, name, move_1, move_2, move_3, move_4, instance_id
+                    FROM Roster WHERE box_number = ?
+                """, (user_id, int(box_number))) as cursor:
+                    specimen = await cursor.fetchone()
 
-            print("DEBUG 5: Specimen has 4 moves. Spawning Overwrite UI...")
-            conn.close()
-            
+                if not specimen:
+                    return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`. Are they currently deployed?")
+
+                p_id, p_name, m1, m2, m3, m4, exact_instance_id = specimen
+                current_moves = [m for m in [m1, m2, m3, m4] if m and m != 'none']
+
+                # ==========================================
+                # 2. VERIFY TM INVENTORY
+                # ==========================================
+                async with db.execute("SELECT quantity FROM user_tms WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name)) as cursor:
+                    tm_data = await cursor.fetchone()
+
+                if not tm_data or tm_data[0] <= 0:
+                    return await ctx.send(f"⚠️ You do not have the TM for `{clean_tm_name.replace('-', ' ').title()}` in your inventory!")
+
+                # ==========================================
+                # 3. VERIFY DUPLICATION
+                # ==========================================
+                if clean_tm_name in current_moves:
+                    return await ctx.send(f"⚠️ **{p_name.capitalize()}** already knows `{clean_tm_name.replace('-', ' ').title()}`!")
+
+                # ==========================================
+                # 4. VERIFY BIOLOGICAL COMPATIBILITY
+                # ==========================================
+                async with db.execute("SELECT 1 FROM species_movepool WHERE pokedex_id = ? AND move_name = ?", (p_id, clean_tm_name)) as cursor:
+                    is_compatible = await cursor.fetchone()
+
+                if not is_compatible:
+                    return await ctx.send(f"🧬 **{p_name.capitalize()}**'s biology is incompatible with `{clean_tm_name.replace('-', ' ').title()}`.")
+
+                # ==========================================
+                # 5. EXECUTE THE GENETIC OVERWRITE
+                # ==========================================
+                if len(current_moves) < 4:
+                    empty_col = "move_1" if not m1 or m1 == 'none' else \
+                                "move_2" if not m2 or m2 == 'none' else \
+                                "move_3" if not m3 or m3 == 'none' else "move_4"
+
+                    await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name))
+                    await db.execute(f"UPDATE caught_pokemon SET {empty_col} = ? WHERE instance_id = ?", (clean_tm_name, exact_instance_id))
+                    await db.commit()
+                    
+                    return await ctx.send(f"💿 You booted up the TM!\n✨ **{p_name.capitalize()}** learned `{clean_tm_name.replace('-', ' ').title()}`!")
+
+            # If they already have 4 moves, spawn the Overwrite UI!
             embed = discord.Embed(
                 title="⚠️ Genetic Capacity Reached",
                 description=f"**{p_name.capitalize()}** wants to learn `{clean_tm_name.replace('-', ' ').title()}`, but it already knows 4 moves.\n\nWhich move should it forget?",
@@ -5732,14 +7459,12 @@ class Combat(commands.Cog):
             
             view = TeachMenu(self, user_id, exact_instance_id, p_name, clean_tm_name, current_moves)
             await ctx.send(embed=embed, view=view)
-            print("--- DEBUG: !tm COMMAND SPAWNED UI ---")
 
         except Exception as e:
             import traceback
             print("\n🚨 CRITICAL CRASH IN !tm COMMAND 🚨")
             traceback.print_exc()
             await ctx.send("❌ A critical database or syntax error occurred while trying to process the TM. Check the terminal.")
-
 
     @commands.command(name="moves", aliases=["attacks"])
     @checks.has_started()
@@ -5748,75 +7473,86 @@ class Combat(commands.Cog):
         """Quickly view a specimen's equipped behaviors."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 1. Resolve Target (Partner or Tag)
-        if not tag_id:
-            cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-            partner_data = cursor.fetchone()
-            if partner_data and partner_data[0]:
-                tag_id = partner_data[0]
-            else:
-                conn.close()
-                return await ctx.send("⚠️ You don't have an Active Partner equipped! Specify a Box Number or Tag ID.")
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                pokemon_data = None
+                
+                # 1. Resolve Target (Empty or Partner)
+                if not tag_id or tag_id.lower() in ["partner", "lead", "active"]:
+                    async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                        partner_data = await cursor.fetchone()
 
-        # 2. Fast Database Query using CTE for Dynamic Indexing
-        if tag_id.lower() in ["new", "latest", "last"]:
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                ) 
-                SELECT * FROM Roster ORDER BY box_number DESC LIMIT 1
-            """, (user_id,))
-            
-        elif tag_id.isdigit() and len(tag_id) <= 6:
-            # It's a Box Number!
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                ) 
-                SELECT * FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
-            
-        else:
-            # It's a UUID Tag!
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                ) 
-                SELECT * FROM Roster WHERE instance_id LIKE ?
-            """, (user_id, f"{tag_id}%"))
-            
-        pokemon_data = cursor.fetchone()
-        conn.close()
-        
-        if not pokemon_data:
-            return await ctx.send("❌ Could not locate that specimen. Check your Box Number or Tag ID.")
-            
-        # Unpack the 8 variables we selected in the CTE
-        actual_tag, level, name, m1, m2, m3, m4, box_number = pokemon_data
-        
-        # 3. Build the Lightweight UI
-        embed = discord.Embed(title=f"⚔️ Active Behaviors: {name.capitalize()}", color=discord.Color.green())
-        embed.description = f"**Level {level}** | Box `#{box_number}` | Tag ID: `{actual_tag[:8]}`"
-        
-        equipped_moves = [m1, m2, m3, m4]
-        for i, move_name in enumerate(equipped_moves, start=1):
-            display = f"**{move_name.replace('-', ' ').title()}**" if move_name and move_name != 'none' else "*Empty Slot*"
-            embed.add_field(name=f"Slot {i}", value=display, inline=False)
-            
-        embed.set_footer(text="Use !moveset [Box Number] for detailed stats and learnable moves.")
-        await ctx.send(embed=embed)
+                    if partner_data and partner_data[0]:
+                        # Fetch the partner directly using their UUID
+                        async with db.execute("""
+                            WITH Roster AS (
+                                SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
+                                    ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                                FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                                WHERE cp.user_id = ?
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                            ) 
+                            SELECT * FROM Roster WHERE instance_id = ?
+                        """, (user_id, partner_data[0])) as cursor:
+                            pokemon_data = await cursor.fetchone()
+                    else:
+                        return await ctx.send("⚠️ You don't have an Active Partner equipped! Specify a Box Number.")
+
+                # 2. Fast Database Query for "Latest"
+                elif tag_id.lower() in ["new", "latest", "last"]:
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
+                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        ) 
+                        SELECT * FROM Roster ORDER BY box_number DESC LIMIT 1
+                    """, (user_id,)) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                    
+                # 3. Box Number Lookup
+                elif tag_id.isdigit() and len(tag_id) <= 6:
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
+                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        ) 
+                        SELECT * FROM Roster WHERE box_number = ?
+                    """, (user_id, int(tag_id))) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                
+                else:
+                    return await ctx.send("⚠️ Please use a valid Box Number (e.g., `!moves 4`) or leave it blank for your partner.")
+                    
+                if not pokemon_data:
+                    return await ctx.send("❌ Could not locate that specimen. Are they currently deployed?")
+                
+                # Unpack the 8 variables we selected in the CTE
+                actual_tag, level, name, m1, m2, m3, m4, box_number = pokemon_data
+                
+                # 4. Build the Lightweight UI
+                embed = discord.Embed(title=f"⚔️ Active Behaviors: {name.capitalize()}", color=discord.Color.green())
+                embed.description = f"**Level {level}** | Box `#{box_number}` | Tag ID: `{actual_tag[:8]}`"
+                
+                equipped_moves = [m1, m2, m3, m4]
+                for i, move_name in enumerate(equipped_moves, start=1):
+                    display = f"**{move_name.replace('-', ' ').title()}**" if move_name and move_name != 'none' else "*Empty Slot*"
+                    embed.add_field(name=f"Slot {i}", value=display, inline=False)
+                    
+                embed.set_footer(text="Use !moveset [Box Number] for detailed stats and learnable moves.")
+                await ctx.send(embed=embed)
+
+        except Exception as e:
+            print(f"Moves Command Error: {e}")
+            await ctx.send("❌ A database error occurred while fetching behavioral data.")
 
     @commands.command(name="moveset", aliases=["movedata"])
     @checks.has_started()
@@ -5825,122 +7561,127 @@ class Combat(commands.Cog):
         """Analyzes biological movepool potential with full statistics."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 1. Resolve Target
-        if not tag_id:
-            cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-            partner_data = cursor.fetchone()
-            if partner_data and partner_data[0]:
-                # We can use the partner's UUID directly!
-                cursor.execute("""
-                    SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.instance_id = ? AND cp.user_id = ?
-                """, (partner_data[0], user_id))
-            else:
-                conn.close()
-                return await ctx.send("⚠️ You don't have an Active Partner equipped! Specify a Box Number or Tag ID.")
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                pokemon_data = None
+                
+                # 1. Resolve Target (Empty or Partner)
+                if not tag_id or tag_id.lower() in ["partner", "lead", "active"]:
+                    async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                        partner_data = await cursor.fetchone()
 
-        elif tag_id.lower() in ["new", "latest", "last"]:
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                )
-                SELECT instance_id, pokedex_id, level, name, box_number
-                FROM Roster ORDER BY box_number DESC LIMIT 1
-            """, (user_id,))
-            
-        elif tag_id.isdigit() and len(tag_id) <= 6:
-            # It's a Box Number!
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                )
-                SELECT instance_id, pokedex_id, level, name, box_number
-                FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
-            
-        else:
-            # It's a UUID Tag!
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                )
-                SELECT instance_id, pokedex_id, level, name, box_number
-                FROM Roster WHERE instance_id LIKE ?
-            """, (user_id, f"{tag_id}%"))
-            
-        pokemon_data = cursor.fetchone()
-        
-        if not pokemon_data:
-            conn.close()
-            return await ctx.send("❌ Could not locate that specimen. Check your Box Number or Tag ID.")
-            
-        actual_tag, poke_id, level, name, box_number = pokemon_data
-        
-        # 2. Advanced Analytics Query: Includes Learn Method and Sorting!
-        cursor.execute("""
-            SELECT sm.move_name, sm.learn_method, MIN(sm.level_learned) as first_learned,
-                bm.type, bm.power, bm.accuracy, bm.damage_class, bm.pp
-            FROM species_movepool sm
-            LEFT JOIN base_moves bm ON sm.move_name = bm.name
-            WHERE sm.pokedex_id = ? 
-            GROUP BY sm.move_name, sm.learn_method
-            ORDER BY 
-                CASE sm.learn_method 
-                    WHEN 'level-up' THEN 1 
-                    WHEN 'machine' THEN 2 
-                    WHEN 'egg' THEN 3 
-                    ELSE 4 
-                END,
-                first_learned ASC, sm.move_name ASC 
-        """, (poke_id,))
-        
-        raw_movepool = cursor.fetchall()
-        conn.close()
+                    if partner_data and partner_data[0]:
+                        # 🚨 FIX: Number the entire PC first, then filter by UUID!
+                        async with db.execute("""
+                            WITH Roster AS (
+                                SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
+                                    ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                                FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                                WHERE cp.user_id = ?
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                            ) 
+                            SELECT instance_id, pokedex_id, level, name, box_number FROM Roster WHERE instance_id = ?
+                        """, (user_id, partner_data[0])) as cursor:
+                            pokemon_data = await cursor.fetchone()
+                    else:
+                        return await ctx.send("⚠️ You don't have an Active Partner equipped! Specify a Box Number.")
 
-        # 3. Data Packaging (Tricking the Paginator!)
-        poke_info = {"name": name, "level": level, "tag": actual_tag, "box_number": box_number}
-        move_data_list = []
-        
-        for row in raw_movepool:
-            method = row[1]
-            
-            # Convert the method into a clean string for your UI
-            if method == 'level-up':
-                display_lvl = f"Lv. {row[2]}"
-            elif method == 'machine':
-                display_lvl = "TM"
-            elif method == 'egg':
-                display_lvl = "Egg"
-            else:
-                display_lvl = "Tutor"
+                # 2. Fast Database Query for "Latest"
+                elif tag_id.lower() in ["new", "latest", "last"]:
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
+                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        ) 
+                        SELECT instance_id, pokedex_id, level, name, box_number FROM Roster ORDER BY box_number DESC LIMIT 1
+                    """, (user_id,)) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                    
+                # 3. Box Number Lookup
+                elif tag_id.isdigit() and len(tag_id) <= 6:
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
+                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        ) 
+                        SELECT instance_id, pokedex_id, level, name, box_number FROM Roster WHERE box_number = ?
+                    """, (user_id, int(tag_id))) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                
+                else:
+                    return await ctx.send("⚠️ Please use a valid Box Number (e.g., `!moveset 4`) or leave it blank for your partner.")
+                    
+                if not pokemon_data:
+                    return await ctx.send("❌ Could not locate that specimen. Check your Box Number or ensure they aren't deployed.")
+                
+                # Unpack the variables safely!
+                actual_tag, poke_id, level, name, box_number = pokemon_data
+                
+                # 2. Advanced Analytics Query: Includes Learn Method and Sorting!
+                async with db.execute("""
+                    SELECT sm.move_name, sm.learn_method, MIN(sm.level_learned) as first_learned,
+                        bm.type, bm.power, bm.accuracy, bm.damage_class, bm.pp
+                    FROM species_movepool sm
+                    LEFT JOIN base_moves bm ON sm.move_name = bm.name
+                    WHERE sm.pokedex_id = ? 
+                    GROUP BY sm.move_name, sm.learn_method
+                    ORDER BY 
+                        CASE sm.learn_method 
+                            WHEN 'level-up' THEN 1 
+                            WHEN 'machine' THEN 2 
+                            WHEN 'egg' THEN 3 
+                            ELSE 4 
+                        END,
+                        first_learned ASC, sm.move_name ASC 
+                """, (poke_id,)) as cursor:
+                    raw_movepool = await cursor.fetchall()
 
-            move_data_list.append({
-                'name': row[0],
-                'lvl': display_lvl,
-                'type': row[3] or 'unknown',
-                'power': row[4],
-                'accuracy': row[5],
-                'class': row[6] or 'status',
-                'pp': row[7] or '?'
-            })
+                # 3. Data Packaging (Tricking the Paginator!)
+                poke_info = {"name": name, "level": level, "tag": actual_tag, "box_number": box_number}
+                move_data_list = []
+                
+                for row in raw_movepool:
+                    method = row[1]
+                    
+                    # Convert the method into a clean string for your UI
+                    if method == 'level-up':
+                        display_lvl = f"Lv. {row[2]}"
+                    elif method == 'machine':
+                        display_lvl = "TM"
+                    elif method == 'egg':
+                        display_lvl = "Egg"
+                    else:
+                        display_lvl = "Tutor"
 
-        # 4. Trigger the Paginator
-        view = DetailedMovepoolPaginator(ctx, poke_info, move_data_list)
-        await ctx.send(embed=view.create_embed(), view=view)
+                    move_data_list.append({
+                        'name': row[0],
+                        'lvl': display_lvl,
+                        'type': row[3] or 'unknown',
+                        'power': row[4],
+                        'accuracy': row[5],
+                        'class': row[6] or 'status',
+                        'pp': row[7] or '?'
+                    })
+
+                if not move_data_list:
+                    return await ctx.send(f"⚠️ Biological anomaly: No learnable behaviors found in the database for **{name.capitalize()}**.")
+
+                # 4. Trigger the Paginator
+                view = DetailedMovepoolPaginator(ctx, poke_info, move_data_list)
+                await ctx.send(embed=view.create_embed(), view=view)
+                
+        except Exception as e:
+            print(f"Moveset Error: {e}")
+            await ctx.send("❌ A critical database error occurred while fetching behavioral data.")
 
     @commands.command(name="party", aliases=["team", "roster"])
     @checks.has_started()
@@ -5948,155 +7689,129 @@ class Combat(commands.Cog):
     async def manage_party(self, ctx, action: str = "view", slot: int = None, tag_id: str = None):
         # 🧪 SAFETY NET: Wraps the entire command to catch silent crashes!
         try:
-            print(f"\n=== DEBUG: !party command initiated by {ctx.author.name} ===")
-            print(f"DEBUG: Parsed Arguments -> action: '{action}', slot: {slot}, tag_id: '{tag_id}'")
-            
             user_id = str(ctx.author.id)
             action = action.lower()
-            
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
 
-            # --- ACTION: ADD TO PARTY ---
-            if action in ["add", "set", "equip"]:
-                print("DEBUG: Routing to ADD logic.")
-                
-                if slot is None or tag_id is None:
-                    print("DEBUG: Aborted. Missing slot or tag_id.")
-                    conn.close()
-                    return await ctx.send("⚠️ Usage: `!party add [slot 1-6] [Box Number or Tag ID]`")
+            async with aiosqlite.connect(DB_FILE) as db:
+
+                # --- ACTION: ADD TO PARTY ---
+                if action in ["add", "set", "equip"]:
                     
-                if int(slot) < 1 or int(slot) > 6:
-                    print("DEBUG: Aborted. Slot out of bounds.")
-                    conn.close()
-                    return await ctx.send("⚠️ A fieldwork roster can only hold up to 6 specimens.")
+                    if slot is None or tag_id is None:
+                        return await ctx.send("⚠️ Usage: `!party add [slot 1-6] [Box Number]`")
+                        
+                    if int(slot) < 1 or int(slot) > 6:
+                        return await ctx.send("⚠️ A fieldwork roster can only hold up to 6 specimens.")
+                        
+                    # Verify they own the specimen using CTE for Box Number support
+                    if tag_id.isdigit() and len(tag_id) <= 6:
+                        async with db.execute("""
+                            WITH Roster AS (
+                                SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                                FROM caught_pokemon cp
+                                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                                WHERE cp.user_id = ?
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                            ) SELECT instance_id, name FROM Roster WHERE box_number = ?
+                        """, (user_id, int(tag_id))) as cursor:
+                            pokemon = await cursor.fetchone()
                     
-                print(f"DEBUG: Validating tag_id '{tag_id}'...")
-                
-                # Verify they own the specimen using CTE for Box Number support
-                if tag_id.isdigit() and len(tag_id) <= 6:
-                    print("DEBUG: Executing Box Number CTE Query.")
-                    cursor.execute("""
+                    if not pokemon:
+                        return await ctx.send("❌ Could not find that specimen in your survey notebook. Check the Box Number.")
+                        
+                    actual_id, poke_name = pokemon
+
+                    # ==========================================
+                    # DEPLOYMENT LOCKOUT CHECK
+                    # ==========================================
+                    async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (actual_id,)) as cursor:
+                        if await cursor.fetchone():
+                            return await ctx.send(f"⚠️ You cannot assign **{poke_name.capitalize()}** to your roster right now, they are currently on a field mission!")
+                        
+                    # Check if the specimen is already in another slot
+                    async with db.execute("SELECT slot FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, actual_id)) as cursor:
+                        existing_slot = await cursor.fetchone()
+                    
+                    if existing_slot:
+                        return await ctx.send(f"⚠️ That **{poke_name.capitalize()}** is already assigned to Slot {existing_slot[0]}!")
+
+                    # Upsert the new party member
+                    await db.execute("""
+                        INSERT INTO user_party (user_id, slot, instance_id) 
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, slot) DO UPDATE SET instance_id = excluded.instance_id;
+                    """, (user_id, slot, actual_id))
+                    
+                    await db.commit()
+                    await ctx.send(f"✅ **{poke_name.capitalize()}** has been assigned to Roster Slot {slot}!")
+
+                # --- ACTION: REMOVE FROM PARTY ---
+                elif action in ["remove", "clear"]:
+                    if not slot:
+                        return await ctx.send("⚠️ Usage: `!party remove [slot 1-6]`")
+                        
+                    await db.execute("DELETE FROM user_party WHERE user_id = ? AND slot = ?", (user_id, slot))
+                    await db.commit()
+                    await ctx.send(f"🧹 Roster Slot {slot} has been cleared.")
+
+                # --- ACTION: VIEW PARTY ---
+                elif action == "view":
+                    # We inject the Roster CTE here too so players can see their Box Numbers in the party view!
+                    async with db.execute("""
                         WITH Roster AS (
-                            SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp
-                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                        ) SELECT instance_id, name FROM Roster WHERE box_number = ?
-                    """, (user_id, int(tag_id)))
-                else:
-                    print("DEBUG: Executing standard UUID Like Query.")
-                    cursor.execute("""
-                        SELECT cp.instance_id, s.name 
-                        FROM caught_pokemon cp 
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id 
-                        WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                    """, (f"{tag_id}%", user_id))
-                    
-                pokemon = cursor.fetchone()
-                print(f"DEBUG: SQL Fetch Result -> {pokemon}")
-                
-                if not pokemon:
-                    print("DEBUG: Aborted. Specimen not found.")
-                    conn.close()
-                    return await ctx.send("❌ Could not find that specimen in your survey notebook. Check the Box Number or Tag.")
-                    
-                actual_id, poke_name = pokemon
-                print(f"DEBUG: Target identified -> ID: {actual_id}, Name: {poke_name}")
-                    
-                # Check if the specimen is already in another slot
-                cursor.execute("SELECT slot FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, actual_id))
-                existing_slot = cursor.fetchone()
-                print(f"DEBUG: Existing slot check -> {existing_slot}")
-                
-                if existing_slot:
-                    conn.close()
-                    return await ctx.send(f"⚠️ That **{poke_name.capitalize()}** is already assigned to Slot {existing_slot[0]}!")
-
-                print("DEBUG: Executing Database UPSERT...")
-                # Upsert the new party member
-                cursor.execute("""
-                    INSERT INTO user_party (user_id, slot, instance_id) 
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(user_id, slot) DO UPDATE SET instance_id = excluded.instance_id;
-                """, (user_id, slot, actual_id))
-                
-                conn.commit()
-                print("DEBUG: Upsert committed successfully!")
-                await ctx.send(f"✅ **{poke_name.capitalize()}** has been assigned to Roster Slot {slot}!")
-
-             # --- ACTION: REMOVE FROM PARTY ---
-            elif action in ["remove", "clear"]:
-                if not slot:
-                    conn.close()
-                    return await ctx.send("⚠️ Usage: `!party remove [slot 1-6]`")
-                    
-                cursor.execute("DELETE FROM user_party WHERE user_id = ? AND slot = ?", (user_id, slot))
-                conn.commit()
-                await ctx.send(f"🧹 Roster Slot {slot} has been cleared.")
-
-            # --- ACTION: VIEW PARTY ---
-            elif action == "view":
-                # We inject the Roster CTE here too so players can see their Box Numbers in the party view!
-                cursor.execute("""
-                    WITH Roster AS (
-                        SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
-                        FROM caught_pokemon
-                        WHERE user_id = ?
-                    )
-                    SELECT up.slot, cp.instance_id, s.name, cp.level, cp.happiness,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, r.box_number
-                    FROM user_party up
-                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    JOIN Roster r ON cp.instance_id = r.instance_id
-                    WHERE up.user_id = ?
-                    ORDER BY up.slot ASC
-                """, (user_id, user_id))
-                
-                party_data = cursor.fetchall()
-                
-                if not party_data:
-                    conn.close()
-                    return await ctx.send("Your fieldwork roster is currently empty! Use `!party add 1 [Box Number]` to start assembling your team.")
-                    
-                embed = discord.Embed(title=f"📋 {ctx.author.name}'s Fieldwork Roster", color=discord.Color.blue())
-                
-                # Track active slots to show empty ones
-                filled_slots = {row[0]: row for row in party_data}
-                
-                for i in range(1, 7):
-                    if i in filled_slots:
-                        slot, tag, name, level, happiness, m1, m2, m3, m4, box_number = filled_slots[i]
-                        moves = [m.replace('-', ' ').title() for m in [m1, m2, m3, m4] if m and m != 'none']
-                        move_str = ", ".join(moves) if moves else "*No learned behaviors*"
-                        
-                        # Visual bond indicator
-                        bond = "❤️❤️❤️" if happiness >= 220 else "❤️❤️🤍" if happiness >= 150 else "❤️🤍🤍" if happiness >= 50 else "🤍🤍🤍"
-                        
-                        embed.add_field(
-                            name=f"Slot {i}: {name.capitalize()} (Lv. {level})", 
-                            value=f"**Box `#{box_number}`** | **Tag:** `{tag[:8]}` | **Bond:** {bond}\n**Moves:** {move_str}", 
-                            inline=False
+                            SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
+                            FROM caught_pokemon
+                            WHERE user_id = ?
+                            AND instance_id NOT IN (SELECT instance_id FROM active_deployments)
                         )
-                    else:
-                        embed.add_field(name=f"Slot {i}", value="*Empty*", inline=False)
+                        SELECT up.slot, cp.instance_id, s.name, cp.level, cp.happiness,
+                            cp.move_1, cp.move_2, cp.move_3, cp.move_4, r.box_number
+                        FROM user_party up
+                        JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        JOIN Roster r ON cp.instance_id = r.instance_id
+                        WHERE up.user_id = ?
+                        ORDER BY up.slot ASC
+                    """, (user_id, user_id)) as cursor:
+                        party_data = await cursor.fetchall()
+                    
+                    if not party_data:
+                        return await ctx.send("Your fieldwork roster is currently empty! Use `!party add 1 [Box Number]` to start assembling your team.")
                         
-                await ctx.send(embed=embed)
-                
-            else:
-                await ctx.send("⚠️ Invalid action. Use `!party view`, `!party add [slot] [box_number]`, or `!party remove [slot]`.")
+                    embed = discord.Embed(title=f"📋 {ctx.author.name}'s Fieldwork Roster", color=discord.Color.blue())
+                    
+                    # Track active slots to show empty ones
+                    filled_slots = {row[0]: row for row in party_data}
+                    
+                    for i in range(1, 7):
+                        if i in filled_slots:
+                            slot, tag, name, level, happiness, m1, m2, m3, m4, box_number = filled_slots[i]
+                            moves = [m.replace('-', ' ').title() for m in [m1, m2, m3, m4] if m and m != 'none']
+                            move_str = ", ".join(moves) if moves else "*No learned behaviors*"
+                            
+                            # Visual bond indicator
+                            bond = "❤️❤️❤️" if happiness >= 220 else "❤️❤️🤍" if happiness >= 150 else "❤️🤍🤍" if happiness >= 50 else "🤍🤍🤍"
+                            
+                            embed.add_field(
+                                name=f"Slot {i}: {name.capitalize()} (Lv. {level})", 
+                                value=f"**Box `#{box_number}`** | **Tag:** `{tag[:8]}` | **Bond:** {bond}\n**Moves:** {move_str}", 
+                                inline=False
+                            )
+                        else:
+                            embed.add_field(name=f"Slot {i}", value="*Empty*", inline=False)
+                            
+                    await ctx.send(embed=embed)
+                    
+                else:
+                    await ctx.send("⚠️ Invalid action. Use `!party view`, `!party add [slot] [box_number]`, or `!party remove [slot]`.")
 
         except Exception as e:
             # 🚨 THIS CATCHES THE SILENT CRASH! 🚨
             print("\n🚨 CRITICAL EXCEPTION IN !PARTY 🚨")
+            import traceback
             traceback.print_exc()
             await ctx.send(f"🚨 **Engine Crash Detected!**\n```py\n{e}\n```\nCheck your terminal for the full traceback.")
-        finally:
-            # Ensure the database always closes, even on a crash
-            if 'conn' in locals():
-                conn.close()
-
 
     @commands.command(name="movedex", aliases=["move", "attackinfo", "technique"])
     @checks.has_started()
@@ -6105,18 +7820,15 @@ class Combat(commands.Cog):
         # Format the user's input to match the database standard (e.g., "Solar Beam" -> "solar-beam")
         formatted_name = move_name.lower().replace(" ", "-")
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # Query the universal move dictionary
-        cursor.execute("""
-            SELECT name, type, power, accuracy, damage_class, pp 
-            FROM base_moves 
-            WHERE name = ?
-        """, (formatted_name,))
-        
-        move_data = cursor.fetchone()
-        conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
+
+            # Query the universal move dictionary
+            async with db.execute("""
+                SELECT name, type, power, accuracy, damage_class, pp 
+                FROM base_moves 
+                WHERE name = ?
+            """, (formatted_name,)) as cursor:
+                move_data = await cursor.fetchone()
         
         if not move_data:
             return await ctx.send(f"⚠️ The behavior **{move_name.title()}** is not recognized in the standard ecological compendium.")
@@ -6161,6 +7873,7 @@ class Combat(commands.Cog):
     @commands.command(name="npcduel", aliases=["battle_npc", "rival"])
     @checks.has_started()
     @checks.is_authorized()
+    @checks.partner_not_deployed()
     async def npc_encounter(self, ctx):
         user_id = str(ctx.author.id)
         
@@ -6172,7 +7885,7 @@ class Combat(commands.Cog):
         # ==========================================
         # ECOLOGICAL STAMINA CHECK
         # ==========================================
-        success, msg = self.check_and_consume_energy(user_id, cost=20)
+        success, msg = await self.check_and_consume_energy(user_id, cost=10)
 
         if not success:
             # Player is out of energy! Send the error and cancel the battle.
@@ -6183,147 +7896,142 @@ class Combat(commands.Cog):
         combat_log = f"*{msg}*\n\n"
         # ==========================================
 
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
-        # 1. Read the Player's Roster and calculate the Ecosystem Scale (Average Level)
-        cursor.execute("""
-            SELECT cp.level
-            FROM user_party up
-            JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-            WHERE up.user_id = ?
-        """, (user_id,))
-        
-        party_data = cursor.fetchall()
-        
-        if not party_data:
-            await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a rival team!")
-            conn.close()
-            return
-
-        team_size = len(party_data)
-        # Calculate the average level, ensuring it never drops below 1
-        avg_level = max(1, sum(row[0] for row in party_data) // team_size)
-
-        # 2. Generate the Rival Team Roster
-        # We exclude Legendaries, Mythicals, and Ultra Beasts (793-806) to ensure standard biological encounters
-        cursor.execute("""
-            SELECT pokedex_id, name 
-            FROM base_pokemon_species 
-            WHERE is_legendary = 0 AND is_mythical = 0 AND pokedex_id NOT BETWEEN 793 AND 806 AND form_type IN ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
-            ORDER BY RANDOM() LIMIT ?
-        """, (team_size,))
-        
-        npc_species = cursor.fetchall()
-        
-        npc_team = []
-        
-        # 3. Equip and Calculate the Rival Team
-        for poke_id, name in npc_species:
-            # Fetch Moves (Your existing code)
-            cursor.execute("""
-                SELECT move_name 
-                FROM species_movepool 
-                WHERE pokedex_id = ? AND learn_method = 'level-up' AND level_learned <= ? AND level_learned > 0
-                GROUP BY move_name ORDER BY MIN(level_learned) DESC LIMIT 4
-            """, (poke_id, avg_level))
-            
-            raw_moves = [row[0] for row in cursor.fetchall()]
-            while len(raw_moves) < 4:
-                if "tackle" not in raw_moves: raw_moves.append("tackle")
-                else: break 
-            
-
-            # --- Convert NPC moves to PP Dictionaries ---
-            npc_moves = []
-            for m_name in raw_moves:
-                cursor.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,))
-                pp_row = cursor.fetchone()
-                pp_val = pp_row[0] if pp_row and pp_row[0] else 5
-                npc_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
-
-            cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,))
-            npc_types = [row[0] for row in cursor.fetchall()]
-                    
-            # Pass the new dictionary array (npc_moves) into your builder!
-            combatant = self.build_npc_combatant(cursor, poke_id, name, avg_level, npc_moves, npc_types)
-            npc_team.append(combatant)
-
-        # 4. Load the Player's Team and Calculate their Exact Stats
-        player_team = []
-        cursor.execute("""
-            SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
-                cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience
-            FROM user_party up
-            JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-            WHERE up.user_id = ?
-            ORDER BY up.slot ASC
-        """, (user_id,))
-        
-        for row in cursor.fetchall():
-            tag, p_id, p_name, p_lvl, p_nature = row[0:5]
-            p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
-            p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
-            raw_moves = [m for m in row[17:21] if m and m != 'none']
-            p_moves = []
-            for m_name in raw_moves:
-                cursor.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,))
-                pp_val = cursor.fetchone()[0] or 5 # Fallback to 5 if API data is missing
-                p_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
-
-            # Fetch the player's elemental typing for STAB and Defense!
-            cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (p_id,))
-            p_types = [t[0] for t in cursor.fetchall()]
-
-            is_shiny = row[21]
-            held_item = row[22]
-            gmax_factor = row[23]
-            ability = row[24]
-            experience = row[25]
-            
-            p_base = fetch_base_stats(cursor, p_id)
-            p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
-            
-            player_team.append({
-                'instance_id': tag, 'pokedex_id': p_id, 'name': p_name, 'level': p_lvl,
-                'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
-                'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
-                # --- Attach Symbiotic Gear and Genetics ---
-                'held_item': held_item,
-                'gmax_factor': gmax_factor,
-                'ability': ability,
-                'types': p_types,
-                'experience': experience, # <--- INJECTED INTO MEMORY!
-                'volatile_statuses': {}   # <--- GUARANTEES PARASITES HAVE A HOST!
-            })
-        
-                    # ==========================================
-        # KEY ITEM SCANNER
-        # ==========================================
         try:
-            cursor.execute("""
-                SELECT item_name FROM user_inventory 
-                WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
-            """, (user_id,))
-            
-            # Flatten the SQL result into a simple Python list
-            owned_key_items = [row[0] for row in cursor.fetchall()]
-            
-            # Create an access ledger in the battle state
-            access_ledger = {
-                'dynamax_band': 'dynamax-band' in owned_key_items,
-                'z_ring': 'z-ring' in owned_key_items,
-                'mega_bracelet': 'mega-bracelet' in owned_key_items
-            }
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.cursor() as cursor:
+                    # 1. Read the Player's Roster and calculate the Ecosystem Scale (Average Level)
+                    async with db.execute("""
+                    SELECT cp.level
+                    FROM user_party up
+                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+                    WHERE up.user_id = ?
+                """, (user_id,)) as cursor:
+                        party_data = await cursor.fetchall()
+                    
+                    if not party_data:
+                        await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a rival team!")
+                        return
+
+                    team_size = len(party_data)
+                    # Calculate the average level, ensuring it never drops below 1
+                    avg_level = max(1, sum(row[0] for row in party_data) // team_size)
+
+                    # 2. Generate the Rival Team Roster
+                    # We exclude Legendaries, Mythicals, and Ultra Beasts (793-806) to ensure standard biological encounters
+                    async with db.execute("""
+                    SELECT pokedex_id, name 
+                    FROM base_pokemon_species 
+                    WHERE is_legendary = 0 AND is_mythical = 0 AND pokedex_id NOT BETWEEN 793 AND 806 AND form_type IN ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
+                    ORDER BY RANDOM() LIMIT ?
+                """, (team_size,)) as cursor:
+                        npc_species = await cursor.fetchall()
+                    
+                    npc_team = []
+                    
+                    # 3. Equip and Calculate the Rival Team
+                    for poke_id, name in npc_species:
+                        # Fetch Moves (Your existing code)
+                        async with db.execute("""
+                        SELECT move_name 
+                        FROM species_movepool 
+                        WHERE pokedex_id = ? AND learn_method = 'level-up' AND level_learned <= ? AND level_learned > 0
+                        GROUP BY move_name ORDER BY MIN(level_learned) DESC LIMIT 4
+                    """, (poke_id, avg_level)) as cursor:
+                            raw_moves = [row[0] for row in await cursor.fetchall()]
+                        while len(raw_moves) < 4:
+                            if "tackle" not in raw_moves: raw_moves.append("tackle")
+                            else: break 
+                        
+
+                        # --- Convert NPC moves to PP Dictionaries ---
+                        npc_moves = []
+                        for m_name in raw_moves:
+                            async with db.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,)) as cursor:
+                                pp_row = await cursor.fetchone()
+                            pp_val = pp_row[0] if pp_row and pp_row[0] else 5
+                            npc_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
+
+                        async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
+                            npc_types = [row[0] for row in await cursor.fetchall()]
+                                
+                        # Pass the new dictionary array (npc_moves) into your builder!
+                        combatant = await self.build_npc_combatant(db, poke_id, name, avg_level, npc_moves, npc_types)
+                        npc_team.append(combatant)
+
+                    # 4. Load the Player's Team and Calculate their Exact Stats
+                    player_team = []
+                    async with db.execute("""
+                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
+                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience
+                    FROM user_party up
+                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE up.user_id = ?
+                    ORDER BY up.slot ASC
+                """, (user_id,)) as cursor:
+                        for row in await cursor.fetchall():
+                            tag, p_id, p_name, p_lvl, p_nature = row[0:5]
+                            p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
+                            p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
+                            raw_moves = [m for m in row[17:21] if m and m != 'none']
+                            p_moves = []
+                            for m_name in raw_moves:
+                                async with db.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,)) as cursor:
+                                    pp_row = await cursor.fetchone()
+                                pp_val = pp_row[0] if pp_row and pp_row[0] else 5
+                                p_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
+
+                            # Fetch the player's elemental typing for STAB and Defense!
+                            async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (p_id,)) as cursor:
+                                p_types = [t[0] for t in await cursor.fetchall()]
+
+                            is_shiny = row[21]
+                            held_item = row[22]
+                            gmax_factor = row[23]
+                            ability = row[24]
+                            experience = row[25]
+                            
+                            p_base = await fetch_base_stats(db, p_id)
+                            p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
+                            
+                            player_team.append({
+                                'instance_id': tag, 'pokedex_id': p_id, 'name': p_name, 'level': p_lvl,
+                                'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
+                                'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
+                                # --- Attach Symbiotic Gear and Genetics ---
+                                'held_item': held_item,
+                                'gmax_factor': gmax_factor,
+                                'ability': ability,
+                                'types': p_types,
+                                'experience': experience, # <--- INJECTED INTO MEMORY!
+                                'volatile_statuses': {},   # <--- GUARANTEES PARASITES HAVE A HOST!
+                                'ivs': p_ivs,
+                                'evs': p_evs
+                            })
+                    
+                    # ==========================================
+                    # KEY ITEM SCANNER
+                    # ==========================================
+                        async with db.execute("""
+                    SELECT item_name FROM user_inventory 
+                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
+                """, (user_id,)) as cursor:
+                            owned_key_items = [row[0] for row in await cursor.fetchall()]
+                        
+                        # Create an access ledger in the battle state
+                        access_ledger = {
+                            'dynamax_band': 'dynamax-band' in owned_key_items,
+                            'z_ring': 'z-ring' in owned_key_items,
+                            'mega_bracelet': 'mega-bracelet' in owned_key_items
+                        }
             # ==========================================
         except Exception as e:
             print("\n🚨 CRITICAL CRASH IN NPCDUEL INITIALIZATION 🚨")
             traceback.print_exc()
             await ctx.send("⚠️ A critical failure occurred while initializing the key items. Check the console.")   
-        conn.close()
+            return
 
         # 5. Initialize the Temporary Battle State Memory
         print("DEBUG: Database closed. Entering Step 5: State Initialization...")
@@ -6378,10 +8086,10 @@ class Combat(commands.Cog):
             state = self.active_battles[user_id]
             print("DEBUG: Calling trigger_single_entry_ability hook...")
             # 1. Fire the Player's ability hook
-            combat_log = trigger_single_entry_ability(p_lead, n_lead, "Your", state, combat_log)
+            combat_log = await trigger_single_entry_ability(p_lead, n_lead, "Your", state, combat_log)
 
             # 2. Fire the NPC's ability hook
-            combat_log = trigger_single_entry_ability(n_lead, p_lead, "The rival's", state, combat_log)
+            combat_log = await trigger_single_entry_ability(n_lead, p_lead, "The rival's", state, combat_log)
             # ==========================================
             print("DEBUG: Building Discord Embed...")
             embed = discord.Embed(title="⚔️ Ecological Field Duel Commencing!", color=discord.Color.red())
@@ -6428,7 +8136,7 @@ class Combat(commands.Cog):
             print("file generated and attached")
             
             print("DEBUG: Sending final payload to Discord...")
-            dashboard_view = BattleDashboard(self, user_id, ctx)
+            dashboard_view = await BattleDashboard.create(self, user_id, ctx)
             print("=== DEBUG: npcduel execution COMPLETE ===")
             # Send the embed WITH the file and the view
             print("View attached")

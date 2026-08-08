@@ -205,7 +205,21 @@ def check_consumables(pokemon, owner_str):
 
     return log
 
-def calculate_damage(attacker, defender, move, weather='none', target_hazards=None, user_hazards=None):
+def is_grounded(pokemon, gravity_active=False):
+    """Evaluates if a specimen is physically touching the battlefield."""
+    if gravity_active: return True # 🚨 Gravity grounds everything!
+    types = pokemon.get('types', [])
+    ability = (pokemon.get('ability') or '').lower().replace(' ', '-')
+    item = (pokemon.get('held_item') or '').lower().replace(' ', '-')
+    
+    if 'flying' in types: return False
+    if ability == 'levitate': return False
+    if item == 'air-balloon': return False
+    # (Note: Magnet Rise or Telekinesis could be added here by checking volatile_statuses!)
+    
+    return True
+
+def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False):
     """
     Acts as the central physics and biology engine for field combat.
     Processes raw damage, parasitic drains, status afflictions, and hybrid field hazards.
@@ -223,6 +237,17 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
 
     attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
     defender_item = (defender.get('held_item') or "").lower().replace(' ', '-')
+    
+    # 🚨 GRAVITY MOVE BLOCKER
+    if gravity and move_name in ['fly', 'bounce', 'splash', 'jump-kick', 'high-jump-kick']:
+        return 0, f"But {attacker['name'].capitalize()} couldn't use {move_name.title()} because of the intense gravity!", 'none', [], 0
+    
+    # ==========================================
+    # 🚨 PSYCHIC TERRAIN (Priority Interceptor)
+    # ==========================================
+    move_prio = int(move.get('priority') or 0)
+    if terrain == 'psychic' and move_prio > 0 and is_grounded(defender):
+        return 0, f"👁️ The Psychic Terrain protected {defender['name'].capitalize()} from the priority attack!", 'none', [], 0
 
     # 🚨 FAILSAFE: Guarantee both specimens have their volatile dictionaries initialized!
     if 'volatile_statuses' not in attacker:
@@ -252,6 +277,26 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         attacker['volatile_statuses']['protect_counter'] = 0
 
     # ==========================================
+    # 🚨 BARRIER DEPLOYMENT (Screens)
+    # ==========================================
+    if move_name in ['reflect', 'light-screen', 'aurora-veil'] and user_hazards is not None:
+        duration = 8 if attacker_item == 'light-clay' else 5
+        
+        if move_name == 'aurora-veil' and weather not in ['hail', 'snow']:
+            return 0, "But it failed! Aurora Veil requires Hail or Snow!", 'none', [], 0
+            
+        if user_hazards.get(move_name, 0) > 0:
+            return 0, "But it failed! The barrier is already active!", 'none', [], 0
+            
+        user_hazards[move_name] = duration
+        
+        if move_name == 'reflect': msg += f" 🧱 A wondrous wall of light appeared to protect {attacker['name'].capitalize()}'s team!"
+        elif move_name == 'light-screen': msg += f" 🪞 A wondrous wall of light appeared to protect {attacker['name'].capitalize()}'s team!"
+        elif move_name == 'aurora-veil': msg += f" 🌌 An aurora appeared to protect {attacker['name'].capitalize()}'s team!"
+            
+        return 0, msg.strip(), 'none', [], 0
+
+    # ==========================================
     # 2. CONTAINMENT FIELD COLLISION
     # ==========================================
     if defender['volatile_statuses'].get('protected') and 'user' not in move_target:
@@ -263,9 +308,14 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         elif is_max_move and move_class != 'status':
             pass # Max Moves pierce the shield! Damage quartered at the end of this function.
         else:
+            if move_name in ['jump-kick', 'high-jump-kick']:
+                crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
+                attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
+                return 0, f"**{attacker['name'].capitalize()} kept going and crashed!", None, [], 0
+            
             return 0, f"🛡️ **{defender['name'].capitalize()}** protected itself from the attack!", None, [], 0
 
-    # THE FIX 1: Safely catch SQLite NULL values before running string methods!
+    # Safely catch SQLite NULL values before running string methods!
     atk_ability = (attacker.get('ability') or 'none').lower().replace(' ', '-')
     def_ability = (defender.get('ability') or 'none').lower().replace(' ', '-')
 
@@ -282,6 +332,19 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
     # ==========================================
     move_type = move.get('type', 'normal')
 
+    # 🚨 BIOLOGICAL TYPE MUTATION (Ivy Cudgel)
+    if move_name == 'ivy-cudgel' and attacker['name'].lower().startswith('ogerpon'):
+        form_name = attacker['name'].lower()
+        if 'wellspring' in form_name: move_type = 'water'
+        elif 'hearthflame' in form_name: move_type = 'fire'
+        elif 'cornerstone' in form_name: move_type = 'rock'
+        else: move_type = 'grass'
+
+    if move_name in ['jump-kick', 'high-jump-kick']:
+        crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
+        attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
+        return 0, f"{attacker['name'].capitalize()} kept going and crashed!", None, [], 0
+    
     if move.get('class') != 'status':
         immunity_data = BIOLOGICAL_TRAITS['immunities'].get(def_ability)
         
@@ -324,6 +387,24 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         return 0, f"🛡️ {defender['name'].capitalize()}'s Wonder Guard protected it from the attack!", None, [], 0
     
     # ==========================================
+    # 2.5 SPATIAL INVULNERABILITY (Dig / Fly / Dive)
+    # ==========================================
+    defender_invuln = defender.get('volatile_statuses', {}).get('semi_invulnerable')
+    
+    if defender_invuln and move_class != 'status':
+        # Certain anomalous moves can pierce specific spatial planes!
+        if defender_invuln == 'underground' and move_name in ['earthquake', 'magnitude']:
+            pass # Earthquake hits Digging targets! (Damage doubled later in Phase 1)
+        elif defender_invuln == 'air' and move_name in ['gust', 'twister', 'thunder', 'hurricane']:
+            pass # Thunder and Hurricane hit Flying targets!
+        elif defender_invuln == 'underwater' and move_name in ['surf', 'whirlpool']:
+            pass 
+        elif is_max_move:
+            pass
+        else:
+            return 0, f"💨 **{attacker['name'].capitalize()}**'s attack missed because {defender['name'].capitalize()} is {defender_invuln}!", None, [], 0
+
+    # ==========================================
     # 🚨 NEW: PRIMORDIAL WEATHER EVAPORATION / DAMPENING
     # ==========================================
     if weather == 'extremely-harsh-sunlight' and move_type == 'water':
@@ -350,6 +431,76 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
             return 0, f"{defender['name'].capitalize()} was seeded!", None, stat_changes, 0
 
     # ==========================================
+    # 🚨 NEW: RETALIATION OVERRIDES
+    # ==========================================
+    if move_name == 'counter':
+        if attacker.get('last_damage_class') == 'physical' and attacker.get('last_damage_taken', 0) > 0:
+            return attacker['last_damage_taken'] * 2, "It powerfully countered the strike!", 'none', [], 0
+        return 0, "But it failed!", 'none', [], 0
+        
+    if move_name == 'mirror-coat':
+        if attacker.get('last_damage_class') == 'special' and attacker.get('last_damage_taken', 0) > 0:
+            return attacker['last_damage_taken'] * 2, "It reflected the special attack!", 'none', [], 0
+        return 0, "But it failed!", 'none', [], 0
+        
+    if move_name == 'metal-burst':
+        if attacker.get('last_damage_taken', 0) > 0:
+            return math.floor(attacker['last_damage_taken'] * 1.5), "It retaliated with a burst of metal!", 'none', [], 0
+        return 0, "But it failed!", 'none', [], 0
+    
+    # ==========================================
+    # 🚨 FIXED DAMAGE & HP ANOMALIES
+    # ==========================================
+    if move_name == 'endeavor':
+        if defender['current_hp'] > attacker['current_hp']:
+            fixed_damage = defender['current_hp'] - attacker['current_hp']
+            return fixed_damage, "It savagely cut down the target's HP!", 'none', [], 0
+        return 0, "But it failed!", 'none', [], 0
+        
+    if move_name in ['seismic-toss', 'night-shade']:
+        # These moves always deal damage exactly equal to the user's level
+        return attacker.get('level', 50), "", 'none', [], 0
+        
+    if move_name in ['super-fang', 'natures-madness', 'ruination']:
+        # These moves instantly halve the defender's current HP!
+        fixed_damage = max(1, math.floor(defender['current_hp'] / 2))
+        return fixed_damage, "", 'none', [], 0
+    
+    # ==========================================
+    # ==========================================
+    # 🚨 ONE-HIT KO ANOMALIES
+    # ==========================================
+    if move_name in ['fissure', 'horn-drill', 'guillotine', 'sheer-cold']:
+        atk_lvl = attacker.get('level', 50)
+        def_lvl = defender.get('level', 50)
+        
+        # 1. Level Failsafe
+        if atk_lvl < def_lvl:
+            return 0, "But it failed! The target's level is too high!", 'none', [], 0
+            
+        # 2. Total Immunities (Sturdy & Ice-Types)
+        if def_ability == 'sturdy':
+            return 0, f"{defender['name'].capitalize()}'s Sturdy makes it completely immune to One-Hit KO moves!", 'none', [], 0
+            
+        if move_name == 'sheer-cold' and 'ice' in (defender.get('types') or []):
+            return 0, "It doesn't affect Ice-type Pokémon!", 'none', [], 0
+            
+        # 3. Dynamic Accuracy Calculation
+        base_ohko_acc = 30 + (atk_lvl - def_lvl)
+        
+        # In modern generations, non-Ice types suffer a massive accuracy penalty when using Sheer Cold!
+        if move_name == 'sheer-cold' and 'ice' not in (attacker.get('types') or []):
+            base_ohko_acc = 20 + (atk_lvl - def_lvl)
+        
+        has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
+
+        if not has_no_guard and random.randint(1, 100) > base_ohko_acc:
+            return 0, "The attack missed!", 'none', [], 0
+            
+        # 4. The Lethal Payload
+        # We return exactly the defender's current HP to guarantee a faint!
+        return defender['current_hp'], "It's a One-Hit KO!", 'none', [], 0
+    
     # PHASE 1: KINETIC & SPECIAL DAMAGE (The Multi-Strike Engine)
     # ==========================================
     if move.get('class') != 'status' and move.get('power', 0) > 0:
@@ -380,15 +531,85 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         if move_name == 'water-shuriken' and atk_ability == 'battle-bond':
             move_power = 20
 
-        # 🚨 NEW: KNOCK OFF KINETIC AMPLIFIER
+        # ==========================================
+        # 🚨 CONDITIONAL POWER MULTIPLIERS
+        # ==========================================
+        atk_status = (attacker.get('status_condition') or {}).get('name')
+        def_status = (defender.get('status_condition') or {}).get('name')
+
+        # 1. Pathogen Synergies
+        if move_name == 'facade' and atk_status in ['burn', 'poison', 'paralysis']:
+            move_power *= 2
+        elif move_name == 'wake-up-slap' and def_status == 'sleep':
+            move_power *= 2
+        elif move_name == 'smelling-salts' and def_status == 'paralysis':
+            move_power *= 2
+            
+        # 2. Biological HP & Timeline States
+        elif move_name == 'brine' and defender['current_hp'] <= (defender.get('max_hp', 100) / 2):
+            move_power *= 2
+        elif move_name == 'assurance' and defender.get('last_damage_taken', 0) > 0:
+            move_power *= 2
+        elif move_name == 'payback' and attacker.get('last_damage_taken', 0) > 0:
+            # If the attacker took damage before moving, Payback doubles!
+            move_power *= 2
+        elif move_name == 'lash-out' and attacker.get('volatile_statuses', {}).get('stats_lowered_this_turn'):
+            move_power *= 2
+        elif move_name == 'pursuit' and defender.get('volatile_statuses', {}).get('is_switching'):
+            move_power *= 2
+            
+        # 3. Spatial Synergies (Terrains)
+        if is_grounded(attacker):
+            # Modern generation multiplier is 1.3x
+            if terrain == 'electric' and move_type == 'electric': move_power *= 1.3
+            elif terrain == 'grassy' and move_type == 'grass': move_power *= 1.3
+            elif terrain == 'psychic' and move_type == 'psychic': move_power *= 1.3
+            
+        if is_grounded(defender):
+            # Misty Terrain halves Dragon damage
+            if terrain == 'misty' and move_type == 'dragon': move_power *= 0.5
+            # Grassy Terrain halves specific seismic moves
+            elif terrain == 'grassy' and move_name in ['earthquake', 'bulldoze', 'magnitude']: move_power *= 0.5
+            
+        elif move_name == 'rising-voltage' and terrain == 'electric':
+            move_power *= 2
+
+        # KNOCK OFF KINETIC AMPLIFIER
         # Checks if the item exists and isn't a symbiotic un-removable item!
         is_removable = defender_item not in ['none', 'red-orb', 'blue-orb'] and not defender_item.endswith('ite') and not defender_item.endswith('ium-z')
         
         if move_name == 'knock-off' and is_removable:
             move_power = math.floor(move_power * 1.5)
+        
+        # Fetch Defensive Stats
+        def_stat = defender['stats'].get('defense', 50)
+        sp_def_stat = defender['stats'].get('special-defense', 50) # Or 'sp_def' depending on your DB
+        
+        # 🚨 WONDER ROOM STAT SWAP
+        if wonder_room:
+            def_stat, sp_def_stat = sp_def_stat, def_stat
+
+        # Determine which stat to use based on Move Class
+        d = def_stat if move_class == 'physical' else sp_def_stat
 
         # 1. Calculate raw structural damage BEFORE random variance and multipliers
         base_damage_unmodified = (((2 * level / 5) + 2) * move_power * (a / max(1, d))) / 50 + 2
+
+        # 🚨 BURN PENALTY (Physical moves deal half damage, unless it is Facade or Guts!)
+        if move_class == 'physical' and atk_status == 'burn' and move_name != 'facade' and atk_ability != 'guts':
+            base_damage_unmodified = math.floor(base_damage_unmodified * 0.5)
+
+        # ==========================================
+        # 🚨 SPATIAL VULNERABILITY MULTIPLIER
+        # ==========================================
+        defender_invuln = defender.get('volatile_statuses', {}).get('semi_invulnerable')
+        if defender_invuln == 'underground' and move_name in ['earthquake', 'magnitude']:
+            base_damage_unmodified *= 2.0
+            msg += " It struck the target hiding underground! "
+        elif defender_invuln == 'air' and move_name in ['gust', 'twister']:
+            base_damage_unmodified *= 2.0
+            msg += " It struck the target up in the air! "
+            
         stab = 1.5 if move_type in (attacker.get('types') or []) else 1.0
 
         weather_mod = 1.0
@@ -496,10 +717,71 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
             hits_landed += 1
             
             # --- C. RE-ROLL CRITICALS & VARIANCE ---
-            is_crit = (random.randint(1, 24) == 1)
+            HIGH_CRIT_MOVES = [
+                'air-cutter', 'attack-order', 'blaze-kick', 'crabhammer', 'cross-chop', 
+                'cross-poison', 'drill-run', 'esper-wing', 'ivy-cudgel', 'karate-chop', 
+                'leaf-blade', 'night-slash', 'poison-tail', 'psycho-cut', 'razor-leaf', 
+                'razor-wind', 'shadow-claw', 'slash', 'snipe-shot', 'spacial-rend', 
+                'stone-edge', 'triple-arrows'
+            ]
+            
+            crit_stage = 0
+            if move_name in HIGH_CRIT_MOVES:
+                crit_stage += 1
+                
+            # Future-proofing for items/statuses!
+            if attacker.get('volatile_statuses', {}).get('focus_energy'):
+                crit_stage += 2
+            if attacker_item == 'scope-lens' or attacker_item == 'razor-claw':
+                crit_stage += 1
+                
+            # Calculate the final threshold based on modern ecosystem rules
+            if crit_stage == 0: crit_chance = 24  # ~4.17%
+            elif crit_stage == 1: crit_chance = 8 # 12.5%
+            elif crit_stage == 2: crit_chance = 2 # 50%
+            else: crit_chance = 1                 # 100% Guaranteed!
+            
+            # The Merciless Ability: Total immunity to critical hits!
+            if def_ability in ['battle-armor', 'shell-armor']:
+                is_crit = False
+            else:
+                is_crit = (random.randint(1, crit_chance) == 1)
+
             if is_crit: crit_occurred = True
             
             hit_modifier = type_multiplier * stab * weather_mod * ability_mod * random.uniform(0.85, 1.00)
+            
+            # 🚨 GLAIVE RUSH VULNERABILITY
+            if defender.get('volatile_statuses', {}).get('glaive_rush'):
+                hit_modifier *= 2.0
+                
+            if move_name == 'glaive-rush':
+                # Flag the attacker as vulnerable for the next turn!
+                attacker['volatile_statuses']['glaive_rush'] = True
+
+            # ==========================================
+            # 🚨 SCREEN BREAKING & MITIGATION
+            # ==========================================
+            if target_hazards is not None:
+                # 1. Screen Shattering (Brick Break, Psychic Fangs)
+                if move_name in ['brick-break', 'psychic-fangs']:
+                    shattered = False
+                    for screen in ['reflect', 'light-screen', 'aurora-veil']:
+                        if target_hazards.get(screen, 0) > 0:
+                            target_hazards[screen] = 0
+                            shattered = True
+                    if shattered:
+                        msg += " 💥 The protective barriers were shattered! "
+                
+                # 2. Damage Mitigation
+                # Screens are completely bypassed by Critical Hits and the Infiltrator ability!
+                elif not is_crit and atk_ability != 'infiltrator':
+                    if move.get('class') == 'physical' and (target_hazards.get('reflect', 0) > 0 or target_hazards.get('aurora-veil', 0) > 0):
+                        hit_modifier *= 0.5
+                    elif move.get('class') == 'special' and (target_hazards.get('light-screen', 0) > 0 or target_hazards.get('aurora-veil', 0) > 0):
+                        hit_modifier *= 0.5
+            # ==========================================
+            
             hit_damage = math.floor(base_damage_unmodified * hit_modifier)
             if is_crit: hit_damage = math.floor(hit_damage * 1.5)
             
@@ -514,15 +796,6 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
                     
             total_damage += hit_damage
             simulated_hp -= hit_damage
-            
-            # --- E. FOCUS SASH FAILSAFE ---
-            target_item = (defender.get('held_item') or "").lower().replace(' ', '-')
-            if simulated_hp <= 0 and (simulated_hp + hit_damage) == defender.get('max_hp', 100):
-                if target_item == 'focus-sash':
-                    simulated_hp = 1
-                    total_damage -= 1 
-                    defender['held_item'] = 'none'
-                    msg += " It hung on using its Focus Sash! "
                     
             # --- F. PHYSICAL RECOIL (Rocky Helmet & Rough Skin) ---
             if move.get('class') == 'physical':
@@ -555,11 +828,12 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
     # PHASE 2: PATHOGENS, AILMENTS, & SECONDARY EFFECTS
     # ==========================================
     ailment = move.get('ailment', 'none')
+    
     if ailment not in ['none', 'unknown', None]:
         current_status = defender.get('status_condition')
         is_afflicted = current_status is not None and isinstance(current_status, dict) and current_status.get('name') is not None
         
-        if not is_afflicted:
+        if not is_afflicted or ailment == 'trap': # 🚨 Allow traps even if they are poisoned/burned!
             chance = move.get('ailment_chance', 0)
             if chance == 0 and move.get('class') == 'status':
                 chance = 100
@@ -569,6 +843,32 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         else:
             if move.get('class') == 'status':
                 msg += f" But it failed because {defender['name'].capitalize()} is already afflicted!"
+                
+    # ==========================================
+    # 🚨 TERRAIN PATHOGEN BLOCKERS
+    # ==========================================
+    if inflicted_status and inflicted_status != 'none':
+        if is_grounded(defender):
+            if terrain == 'misty' and inflicted_status != 'trap':
+                inflicted_status = None
+                msg += f" 🌫️ The Misty Terrain protected {defender['name'].capitalize()} from the status condition!"
+            elif terrain == 'electric' and inflicted_status == 'sleep':
+                inflicted_status = None
+                msg += f" ⚡ The Electric Terrain prevented {defender['name'].capitalize()} from falling asleep!"
+
+    # ==========================================
+    # THE DATABASE TRAP CONVERTER
+    # ==========================================
+    if inflicted_status == 'trap':
+        if 'partially_trapped' not in defender.get('volatile_statuses', {}):
+            if 'volatile_statuses' not in defender:
+                defender['volatile_statuses'] = {}
+            # Traps lock the victim in for 4 to 5 turns!
+            defender['volatile_statuses']['partially_trapped'] = random.randint(4, 5)
+            msg += f" 🌪️ {defender['name'].capitalize()} became trapped in the vortex!"
+            
+        # Wipe the variable so it doesn't return to the main loop and overwrite their primary Status Condition!
+        inflicted_status = None
 
     # --- SECONDARY VOLATILE EFFECTS (Flinch, Confusion, G-Max Disasters) ---
     status_type = move.get('status_type', 'none')
@@ -586,6 +886,29 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
                 defender['volatile_statuses']['confusion'] = random.randint(2, 5)
                 msg += f" {defender['name'].capitalize()} became confused!"
 
+    # ==========================================
+    # HARD TRAPS & ANCHORS (Anchor Shot, Block, Jaw Lock)
+    # ==========================================
+    # These only apply if the move is a status move, or if the kinetic strike dealt damage!
+    if damage > 0 or move.get('class') == 'status':
+        if move_name in ['anchor-shot', 'spirit-shackle', 'block', 'mean-look', 'spider-web']:
+            defender['volatile_statuses']['hard_trapped'] = True
+            msg += f" 🛑 {defender['name'].capitalize()} can no longer escape!"
+            
+        elif move_name == 'jaw-lock':
+            attacker['volatile_statuses']['hard_trapped'] = True
+            defender['volatile_statuses']['hard_trapped'] = True
+            msg += " 🛑 Neither Pokémon can run away!"
+            
+        elif move_name == 'octolock':
+            defender['volatile_statuses']['octolock'] = True
+            defender['volatile_statuses']['hard_trapped'] = True
+            msg += f" 🐙 {defender['name'].capitalize()} was locked in!"
+            
+        elif move_name == 'ingrain':
+            attacker['volatile_statuses']['ingrain'] = True
+            attacker['volatile_statuses']['hard_trapped'] = True
+            msg += f" 🌱 {attacker['name'].capitalize()} planted its roots!"
 
     # ==========================================
     # HOOK 3: POST-STRIKE RETALIATION (Contact)
@@ -634,7 +957,17 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         'psycho-boost': [('attacker', 'special-attack', -2)],
         'make-it-rain': [('attacker', 'special-attack', -1)],
         'hammer-arm': [('attacker', 'speed', -1)],
-        'ice-hammer': [('attacker', 'speed', -1)]
+        'ice-hammer': [('attacker', 'speed', -1)],
+        'armor-cannon': [('attacker', 'defense', -1), ('attacker', 'special-defense', -1)],
+        'dragon-ascent': [('attacker', 'defense', -1), ('attacker', 'special-defense', -1)],
+
+        # --- Kinetic Self-Boosters---
+        'flame-charge': [('attacker', 'speed', 1)],
+        'trailblaze': [('attacker', 'speed', 1)],
+        'power-up-punch': [('attacker', 'attack', 1)],
+        'aqua-step': [('attacker', 'speed', 1)],
+        'esper-wing': [('attacker', 'speed', 1)],
+        'rapid-spin': [('attacker', 'speed', 1)]
     }
     # 1. Complex Stat Anomalies
     if move_name in COMPLEX_STAT_MOVES:
@@ -659,7 +992,7 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
                 
             # Ensures secondary stat drops from attacks (like Moonblast) only happen if damage > 0
             if random.randint(1, 100) <= chance and (move_class == 'status' or damage > 0):
-                target = "attacker" if move.get('target') == 'user' else "defender"
+                target = "attacker" if move.get('target') in ['user', 'attacker'] else "defender"
                 
                 # 🚨 CONTRARY ABILITY INTERCEPTOR
                 active_ability = atk_ability if target == 'attacker' else def_ability
@@ -673,18 +1006,18 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
     # ==========================================
     # 1. Chemical Scrubbers (Clear Smog & Haze)
     if move_name == 'clear-smog' and damage > 0:
-        defender['stat_stages'] = {'attack': 0, 'defense': 0, 'special-attack': 0, 'special-defense': 0, 'speed': 0}
+        defender['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
         msg += f" 🌫️ {defender['name'].capitalize()}'s stat changes were neutralized by the smog!"
         
     elif move_name == 'haze':
-        attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'special-attack': 0, 'special-defense': 0, 'speed': 0}
-        defender['stat_stages'] = {'attack': 0, 'defense': 0, 'special-attack': 0, 'special-defense': 0, 'speed': 0}
+        attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+        defender['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
         msg += " 🌫️ All biological stat changes on the field were eliminated by the Haze!"
 
     # 2. Ecological Equipment Destruction (Knock Off)
     elif move_name == 'knock-off' and damage > 0:
         target_item_check = (defender.get('held_item') or "").lower().replace(' ', '-')
-        is_removable = target_item_check not in ['none', 'red-orb', 'blue-orb'] and not target_item_check.endswith('ite') and not target_item_check.endswith('ium-z')
+        is_removable = target_item_check not in ['none', 'red-orb', 'blue-orb', None] and not target_item_check.endswith('ite') and not target_item_check.endswith('ium-z')
         
         if is_removable:
             defender['held_item'] = 'none'
@@ -702,10 +1035,31 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
             msg += f" 🥷 {attacker['name'].capitalize()} stole the target's {def_item.replace('-', ' ').title()}!"
 
     # ==========================================
-    # PHASE 4: CELLULAR REGENERATION
+    # PHASE 4: CELLULAR REGENERATION & KINETIC RECOIL
     # ==========================================
-    if move.get('healing', 0) > 0:
-        healing_amount += math.floor(attacker.get('max_hp', 100) * (move['healing'] / 100.0))
+    drain_pct = move.get('drain', 0)
+    
+    # 1. Parasitic Healing (Giga Drain, Horn Leech)
+    if drain_pct > 0:
+        healing_amount += math.floor(damage * (drain_pct / 100.0))
+        
+    # 2. Kinetic Recoil (Double-Edge, Flare Blitz, Wild Charge)
+    elif drain_pct < 0:
+        # 🚨 ABILITY INTERCEPTOR: Rock Head & Magic Guard negate recoil!
+        if atk_ability not in ['rock-head', 'magic-guard']:
+            # Calculate the recoil based on the absolute value of the negative drain percentage
+            recoil_dmg = max(1, math.floor(damage * (abs(drain_pct) / 100.0)))
+            
+            # Apply the damage directly to the attacker's simulated biology
+            attacker['current_hp'] = max(0, attacker['current_hp'] - recoil_dmg)
+            msg += f" 💥 {attacker['name'].capitalize()} was damaged by the recoil!"
+            
+    # 3. Max-HP Recoil Anomalies (Mind Blown, Steel Beam)
+    if move_name in ['mind-blown', 'steel-beam', 'chloroblast']:
+        if atk_ability != 'magic-guard':
+            massive_recoil = max(1, math.floor(attacker.get('max_hp', 100) / 2))
+            attacker['current_hp'] = max(0, attacker['current_hp'] - massive_recoil)
+            msg += f" 💥 {attacker['name'].capitalize()} sacrificed half its max HP to unleash the attack!"
 
     # ==========================================
     # PHASE 5: BIOLOGICAL IMMUNITY FILTER
@@ -823,17 +1177,54 @@ def calculate_damage(attacker, defender, move, weather='none', target_hazards=No
         damage = math.floor(damage * 0.25)
         msg += f" 🛡️ **{defender['name'].capitalize()}** couldn't fully protect itself from the Max Move!"
 
+    # ==========================================
+    # 🚨 THE SURVIVAL INTERCEPTOR (Focus Sash & Sturdy)
+    # This acts as the absolute final filter before damage is returned!
+    # ==========================================
+    if damage >= defender['current_hp']:
+        def_item = (defender.get('held_item') or "").lower().replace(' ', '-')
+        def_ability = (defender.get('ability') or "").lower().replace(' ', '-')
+        
+        # 1. Focus Sash
+        if def_item == 'focus-sash' and defender['current_hp'] == defender.get('max_hp', 100):
+            # Cap the damage so it leaves exactly 1 HP!
+            damage = defender['current_hp'] - 1
+            defender['held_item'] = 'none' # The item disintegrates!
+            msg += " It hung on using its Focus Sash!"
+            
+        # 2. Sturdy Ability
+        elif def_ability == 'sturdy' and defender['current_hp'] == defender.get('max_hp', 100):
+            damage = defender['current_hp'] - 1
+            msg += " It endured the hit using Sturdy!"
+            
+        # 3. Endure Status (If you add the move 'Endure' later!)
+        elif defender.get('volatile_statuses', {}).get('endure'):
+            damage = defender['current_hp'] - 1
+            msg += " It endured the hit!"
+
+    # ==========================================
+    # 🚨 BIOLOGICAL CLEANSERS (Wake-Up Slap & Smelling Salts)
+    # ==========================================
+    if damage > 0:
+        if move_name == 'wake-up-slap' and defender.get('status_condition', {}).get('name') == 'sleep':
+            defender['status_condition'] = None
+            msg += f" The sheer force of the slap jolted {defender['name'].capitalize()} awake!"
+            
+        elif move_name == 'smelling-salts' and defender.get('status_condition', {}).get('name') == 'paralysis':
+            defender['status_condition'] = None
+            msg += f" {defender['name'].capitalize()}'s paralysis was completely cured by the shock!"
+
     return damage, msg.strip(), inflicted_status, stat_changes, healing_amount
 
-def fetch_base_stats(cursor, pokedex_id):
+async def fetch_base_stats(db, pokedex_id):
     """Pulls the 6 base stats for a specific species from the database."""
-    cursor.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (pokedex_id,))
-    rows = cursor.fetchall()
+    async with db.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (pokedex_id,)) as cursor:
+        rows = await cursor.fetchall()
     
     # Map the API names to our standard dictionary keys
     stat_map = {
         'hp': 'hp', 'attack': 'attack', 'defense': 'defense', 
-        'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed'
+        'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed', 'evasion': 'evasion', 'accuracy': 'accuracy'
     }
     
     base_stats = {}

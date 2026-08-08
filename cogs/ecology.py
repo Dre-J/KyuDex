@@ -1,12 +1,16 @@
 import discord
+import asyncio
+import time
+import os
 from discord.ext import commands, tasks
-import sqlite3
+import aiosqlite
+import datetime
 import random
 import math
 import uuid
-from utils.constants import DB_FILE, NATURES
+from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics
-from utils.db_manager import check_evolution_trigger
+import re
 from utils import checks
 
 # Memory dictionary to track what is currently spawned in each server
@@ -15,6 +19,94 @@ active_spawns = {}
 MESSAGES_REQUIRED_FOR_SPAWN = 10 
 user_active_spawns = {} # Tracks private expedition encounters (Key: user_id)
 
+class EvolutionConfirmView(discord.ui.View):
+    def __init__(self, owner_id: int, instance_id: str, new_pokedex_id: int, new_species_name: str, new_ability: str, db_file: str):
+        super().__init__(timeout=60)
+        self.owner_id = owner_id
+        self.instance_id = instance_id
+        self.new_pokedex_id = new_pokedex_id
+        self.new_species_name = new_species_name
+        self.new_ability = new_ability # Store the inherited trait!
+        self.db_file = db_file
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if hasattr(self, 'message') and self.message:
+            await self.message.edit(content="⏳ **Evolution window expired.** You can trigger it again next level.", view=self)
+
+    @discord.ui.button(label="🧬 Trigger Evolution", style=discord.ButtonStyle.success)
+    async def evolve_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("⚠️ You cannot evolve another researcher's specimen.", ephemeral=True)
+
+        async with aiosqlite.connect(self.db_file) as db:
+            # 🚨 UPDATE: Apply both the new species ID and the inherited ability
+            await db.execute("UPDATE caught_pokemon SET pokedex_id = ?, ability = ? WHERE instance_id = ?", 
+                             (self.new_pokedex_id, self.new_ability, self.instance_id))
+            await db.commit()
+
+        for child in self.children:
+            child.disabled = True
+            
+        await interaction.response.edit_message(
+            content=f"🎉 **Success!** The specimen successfully evolved into **{self.new_species_name}** with the ability **{self.new_ability.title()}**!", 
+            view=self
+        )
+
+    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("⚠️ You cannot interact with this menu.", ephemeral=True)
+
+        for child in self.children:
+            child.disabled = True
+            
+        await interaction.response.edit_message(
+            content="Evolution canceled. The specimen's biological structure remains unchanged.", 
+            view=self
+        )
+
+class ReturnMissionsView(discord.ui.View):
+    def __init__(self, cog, user_id, active_missions):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.user_id = user_id
+        
+        # active_missions is a list of tuples from the database: [('reef', 3), ('hp', 1)]
+        for mission_id, count in active_missions:
+            # Grab the pretty name from your FIELD_MISSIONS dictionary
+            mission_data = FIELD_MISSIONS.get(mission_id, {})
+            mission_name = mission_data.get("name", mission_id.capitalize())
+            
+            # Create a button for this specific mission
+            btn = discord.ui.Button(
+                label=f"{mission_name} ({count} Deployed)",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"return_{mission_id}"
+            )
+            # Bind the callback to pass the specific mission_id
+            btn.callback = self.make_callback(mission_id)
+            self.add_item(btn)
+            
+        # Always add a convenient "Recall All" button at the bottom
+        all_btn = discord.ui.Button(label="Recall All Teams", style=discord.ButtonStyle.success, row=2)
+        all_btn.callback = self.make_callback("all")
+        self.add_item(all_btn)
+
+    def make_callback(self, target_mission):
+        """Creates a unique callback for each button so we know which one was clicked."""
+        async def callback(interaction: discord.Interaction):
+            # 1. Disable all buttons immediately so they can't double-click and crash the DB
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self)
+            
+            # 2. Route to the heavy-lifting function in the Cog!
+            await self.cog.execute_return_logic(interaction, self.user_id, target_mission)
+            
+        return callback
+    
 class StarterSelect(discord.ui.Select):
     def __init__(self, region: str):
         self.region = region
@@ -48,82 +140,95 @@ class StarterSelect(discord.ui.Select):
         # Generate a unique biological tag for this specific instance
         instance_id = str(uuid.uuid4()) 
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # ==========================================
-            # 1. CREATE THE RESEARCHER PROFILE
-            # ==========================================
-            # Initialize with 0 tokens and the default 'canopy' visa
-            cursor.execute("""
-                INSERT INTO users (user_id, eco_tokens, unlocked_visas) 
-                VALUES (?, 0, 'canopy')
-            """, (user_id,))
-            
-            # ==========================================
-            # 2. GENERATE THE BIOLOGICAL SPECIMEN
-            # ==========================================
-            # Roll genetics and traits
-            ivs = {stat: random.randint(0, 31) for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
-            nature = random.choice(NATURES)
-            is_shiny = 1 if random.randint(1, 4096) == 1 else 0
-            
-            # ==========================================
-            # FETCH THE SPECIES' DEFAULT ABILITY
-            # ==========================================
-            cursor.execute("SELECT standard_abilities FROM base_pokemon_species WHERE pokedex_id = ?", (pokedex_id,))
-            ability_row = cursor.fetchone()
-            
-            if ability_row and ability_row[0]:
-                # If it's a comma-separated list (e.g., "overgrow,chlorophyll"), 
-                # we split it, grab the first one, and strip any stray spaces.
-                ability = ability_row[0].split(',')[0].strip()
-            else:
-                ability = 'overgrow' # Safe fallback
-            
-            # Fetch Level 1-5 starting moves
-            cursor.execute("""
-                SELECT move_name FROM species_movepool 
-                WHERE pokedex_id = ? AND learn_method = 'level-up' AND level_learned <= 5
-                ORDER BY level_learned DESC LIMIT 4
-            """, (pokedex_id,))
-            moves = [row[0] for row in cursor.fetchall()]
-            
-            # Pad empty move slots with 'none'
-            while len(moves) < 4:
-                moves.append('none')
+            async with aiosqlite.connect(DB_FILE) as db:
+                # ==========================================
+                # 1. CREATE THE RESEARCHER PROFILE
+                # ==========================================
+                # Initialize with 0 tokens and the default 'canopy' visa
+                await db.execute("""
+                    INSERT INTO users (user_id, eco_tokens, unlocked_visas) 
+                    VALUES (?, 0, 'canopy')
+                """, (user_id,))
                 
-            # Insert the specimen into the global wildlife database
-            cursor.execute("""
-                INSERT INTO caught_pokemon (
-                    instance_id, user_id, pokedex_id, level, experience, nature, is_shiny, ability,
-                    iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed,
-                    ev_hp, ev_attack, ev_defense, ev_sp_atk, ev_sp_def, ev_speed,
-                    move_1, move_2, move_3, move_4, held_item, gmax_factor
-                ) VALUES (
-                    ?, ?, ?, 5, 0, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?,
-                    0, 0, 0, 0, 0, 0,
-                    ?, ?, ?, ?, 'none', 0
-                )
-            """, (
-                instance_id, user_id, pokedex_id, nature, is_shiny, ability,
-                ivs['hp'], ivs['attack'], ivs['defense'], ivs['sp_atk'], ivs['sp_def'], ivs['speed'],
-                moves[0], moves[1], moves[2], moves[3]
-            ))
-            
-            # ==========================================
-            # 3. ASSIGN THE TACTICAL ROSTER
-            # ==========================================
-            # Assign to Slot 1 in the party
-            cursor.execute("INSERT INTO user_party (user_id, instance_id, slot) VALUES (?, ?, 1)", (user_id, instance_id))
-            
-            # Set this specific specimen as their active follower/partner
-            cursor.execute("UPDATE users SET active_partner = ? WHERE user_id = ?", (instance_id, user_id))
-            
-            # Commit the entire transaction to the database
-            conn.commit()
+                # ==========================================
+                # 2. GENERATE THE BIOLOGICAL SPECIMEN
+                # ==========================================
+                # Roll genetics and traits
+                ivs = {stat: random.randint(0, 31) for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
+                nature = random.choice(NATURES)
+                is_shiny = 1 if random.randint(1, 4096) == 1 else 0
+                
+                # ==========================================
+                # FETCH THE SPECIES' ABILITY & GENDER RATE
+                # ==========================================
+                # 🚨 UPDATED: Grabbing gender_rate in the same query!
+                async with db.execute("SELECT standard_abilities, gender_rate FROM base_pokemon_species WHERE pokedex_id = ?", (pokedex_id,)) as cursor:
+                    ability_row = await cursor.fetchone()
+                
+                if ability_row:
+                    raw_ability, raw_gender_rate = ability_row
+                    
+                    if raw_ability:
+                        ability = raw_ability.split(',')[0].strip()
+                    else:
+                        ability = 'overgrow' # Safe fallback
+                        
+                    gender_rate = raw_gender_rate if raw_gender_rate is not None else 4
+                else:
+                    ability = 'overgrow'
+                    gender_rate = 4 
+
+                # --- GENDER ROLL ---
+                gender = "None"
+                if gender_rate != -1:
+                    female_chance = (gender_rate / 8.0) * 100
+                    roll = random.uniform(0, 100)
+                    gender = "F" if roll <= female_chance else "M"
+                
+                # Fetch Level 1-5 starting moves
+                async with db.execute("""
+                    SELECT move_name FROM species_movepool 
+                    WHERE pokedex_id = ? AND learn_method = 'level-up' AND level_learned <= 5
+                    ORDER BY level_learned DESC LIMIT 4
+                """, (pokedex_id,)) as cursor:
+                    moves = [row[0] for row in await cursor.fetchall()]
+                
+                # Pad empty move slots with 'none'
+                while len(moves) < 4:
+                    moves.append('none')
+                    
+                # Insert the specimen into the global wildlife database
+                # 🚨 UPDATED: Added original_user_id and gender to the schema and values!
+                await db.execute("""
+                    INSERT INTO caught_pokemon (
+                        instance_id, user_id, original_user_id, pokedex_id, level, experience, nature, is_shiny, ability, gender,
+                        iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed,
+                        ev_hp, ev_attack, ev_defense, ev_sp_atk, ev_sp_def, ev_speed,
+                        move_1, move_2, move_3, move_4, held_item, gmax_factor
+                    ) VALUES (
+                        ?, ?, ?, ?, 5, 0, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?,
+                        0, 0, 0, 0, 0, 0,
+                        ?, ?, ?, ?, 'none', 0
+                    )
+                """, (
+                    instance_id, user_id, user_id, pokedex_id, nature, is_shiny, ability, gender,
+                    ivs['hp'], ivs['attack'], ivs['defense'], ivs['sp_atk'], ivs['sp_def'], ivs['speed'],
+                    moves[0], moves[1], moves[2], moves[3]
+                ))
+                
+                # ==========================================
+                # 3. ASSIGN THE TACTICAL ROSTER
+                # ==========================================
+                # Assign to Slot 1 in the party
+                await db.execute("INSERT INTO user_party (user_id, instance_id, slot) VALUES (?, ?, 1)", (user_id, instance_id))
+                
+                # Set this specific specimen as their active follower/partner
+                await db.execute("UPDATE users SET active_partner = ? WHERE user_id = ?", (instance_id, user_id))
+                
+                # Commit the entire transaction to the database
+                await db.commit()
             
             shiny_icon = "✨ " if is_shiny else ""
             await interaction.response.edit_message(
@@ -131,14 +236,13 @@ class StarterSelect(discord.ui.Select):
                 view=None
             )
             
-        except sqlite3.IntegrityError:
+        except aiosqlite.IntegrityError:
             # This catches the edge case where they somehow run the command twice at the exact same time
             await interaction.response.edit_message(content="⚠️ Registration failed: You are already in the database.", view=None)
         except Exception as e:
             print(f"Starter Registration Error: {e}")
             await interaction.response.edit_message(content="❌ A critical database error occurred during registration. Please contact a developer.", view=None)
-        finally:
-            conn.close()
+
 
 class RegionSelect(discord.ui.Select):
     def __init__(self):
@@ -164,6 +268,54 @@ class RegionSelect(discord.ui.Select):
         
         await interaction.response.edit_message(content=f"You selected **{selected_region}**. Now, choose your starting specimen:", view=view)
 
+class ReleaseConfirmView(discord.ui.View):
+    def __init__(self, ctx, db_file, pokemon_data, user_id):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.db_file = db_file
+        # pokemon_data contains (name, level, actual_tag)
+        self.pokemon_data = pokemon_data
+        self.user_id = user_id
+        self.reward = 10 + (pokemon_data[1] * 3) # Calculate reward here
+
+    @discord.ui.button(label="Confirm Release", style=discord.ButtonStyle.danger, custom_id="confirm_release")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("You cannot confirm this release.", ephemeral=True)
+
+        name, level, actual_tag = self.pokemon_data
+
+        # Disable buttons
+        for child in self.children:
+            child.disabled = True
+        
+        try:
+            async with aiosqlite.connect(self.db_file) as db:
+                await db.execute("BEGIN TRANSACTION")
+                await db.execute("DELETE FROM caught_pokemon WHERE instance_id = ?", (actual_tag,))
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (self.reward, self.user_id))
+                await db.commit()
+
+            embed = discord.Embed(title="🌿 Wildlife Reintroduced", color=discord.Color.green())
+            embed.description = f"**{self.ctx.author.name}** successfully rehabilitated and released their **{name.capitalize()}** back into the wild."
+            embed.add_field(name="Conservation Grant Awarded", value=f"🪙 +{self.reward} Eco-Tokens")
+            embed.set_footer(text=f"Tag ID Deleted: {actual_tag[:8]}")
+
+            await interaction.response.edit_message(embed=embed, view=self)
+
+        except Exception as e:
+            await interaction.response.edit_message(content="❌ A critical error occurred during release.", embed=None, view=self)
+            print(f"Release Error: {e}")
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="cancel_release")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("You cannot cancel this release.", ephemeral=True)
+            
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Release cancelled. The specimen remains in your PC.", embed=None, view=self)
+
 class PokemonPaginator(discord.ui.View):
     def __init__(self, bot, user_id, current_index, total_pokemon, active_partner_id):
         super().__init__(timeout=180) # Buttons disable after 3 minutes
@@ -172,7 +324,7 @@ class PokemonPaginator(discord.ui.View):
         self.current_index = current_index
         self.total_pokemon = total_pokemon
         self.active_partner_id = active_partner_id
-        self.update_button_states()
+        #self.update_button_states()
 
     def update_button_states(self):
         # Disable 'Prev' if we are at Pokemon #1, disable 'Next' if we are at the end
@@ -180,47 +332,71 @@ class PokemonPaginator(discord.ui.View):
         self.children[1].disabled = self.current_index >= self.total_pokemon
 
     async def generate_embed(self):
-        """Fetches the data for the current Field Number and builds the UI."""
-        conn = sqlite3.connect(DB_FILE) 
-        cursor = conn.cursor()
-
+        """Fetches the data for the current Field Number and builds the UI with local assets."""
         
-        cursor.execute("""
-            WITH Roster AS (
-                SELECT 
-                    cp.nickname, cp.pokedex_id, cp.level, cp.nature, cp.is_shiny, s.name, 
-                    cp.instance_id, cp.original_user_id, cp.experience, s.growth_rate,
-                    cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                    cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, 
-                    cp.ability, cp.happiness, cp.held_item, cp.gmax_factor,
-                    cp.height_multiplier, cp.weight_multiplier, s.height, s.weight,
-                    ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.user_id = ?
-            )
-            SELECT * FROM Roster WHERE field_number = ?
-        """, (self.user_id, self.current_index))
-        
-        data = cursor.fetchone()
-        
-        if not data:
-            conn.close()
-            return discord.Embed(title="Error", description="Specimen data corrupted.")
+        async with aiosqlite.connect(DB_FILE) as db:
+                
+            async with db.execute("""
+                WITH Roster AS (
+                    SELECT 
+                        cp.nickname, cp.pokedex_id, cp.level, cp.nature, cp.is_shiny, s.name, 
+                        cp.instance_id, cp.original_user_id, cp.experience, s.growth_rate,
+                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, 
+                        cp.ability, cp.happiness, cp.held_item, cp.gmax_factor,
+                        cp.height_multiplier, cp.weight_multiplier, s.height, s.weight,
+                        cp.gender, 
+                        ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                )
+                SELECT * FROM Roster WHERE field_number = ?
+            """, (self.user_id, self.current_index)) as cursor:
+                data = await cursor.fetchone()
+            
+            if not data:
+                return discord.Embed(title="Error", description="Specimen data corrupted."), None
 
-        # Unpack all 31 variables!
-        (nickname, poke_id, level, nature, is_shiny, name, actual_tag_id, original_user_id, current_xp, growth_rate,
-         iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, 
-         ability, happiness, held_item, gmax_factor, 
-         h_mult, w_mult, base_h, base_w, field_number) = data
+            # Unpack all 32 variables!
+            (nickname, poke_id, level, nature, is_shiny, name, actual_tag_id, original_user_id, current_xp, growth_rate,
+            iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, 
+            ability, happiness, held_item, gmax_factor, 
+            h_mult, w_mult, base_h, base_w, gender, field_number) = data
 
-        # Fetch Base Stats
-        cursor.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (poke_id,))
-        stats = {stat[0]: stat[1] for stat in cursor.fetchall()}
-        conn.close()
+            # Fetch Base Stats
+            async with db.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (poke_id,)) as cursor:
+                stats = {stat[0]: stat[1] for stat in await cursor.fetchall()}
+                
+            # Fetch Typings!
+            async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
+                type_rows = await cursor.fetchall()
+                type_list = [row[0].title() for row in type_rows]
+                type_str = " / ".join(type_list) if type_list else "Unknown"
 
         # --- CALCULATIONS ---
-        display_title = f'"{nickname}" the {name.capitalize()}' if nickname else name.capitalize()
+        # Format the Gender Icon
+        if gender == 'M': gender_icon = " ♂️"
+        elif gender == 'F': gender_icon = " ♀️"
+        else: gender_icon = " ⚧️" # Genderless
+        
+        # --- Original Trainer Logic ---
+        if str(original_user_id) == str(self.user_id):
+            ot_display = "You"
+        else:
+            # Look up the user in the bot's cache
+            ot_user = self.bot.get_user(int(original_user_id))
+            
+            if ot_user:
+                # .display_name grabs their server nickname if they have one, otherwise their global username
+                ot_display = ot_user.display_name 
+            else:
+                # Fallback just in case the original catcher left the server or the bot's cache cleared
+                ot_display = "Unknown Researcher"
+
+        display_title = f'"{nickname}" {name.capitalize()}' if nickname else name.capitalize()
         display_ability = ability.replace('-', ' ').title() if ability else "Unknown"
         item_display = held_item.replace('-', ' ').title() if held_item != 'none' else "None"
         gmax_icon = " 🌪️ (G-Max Factor)" if gmax_factor else ""
@@ -240,7 +416,6 @@ class PokemonPaginator(discord.ui.View):
         real_spe = calculate_real_stat('speed', stats.get('speed', 0), iv_spe, ev_spe, level)
 
         # --- BIOMETRIC MATH ---
-        # Fallbacks to 1.0 for specimens caught before the update
         h_mult = h_mult or 1.0
         w_mult = w_mult or 1.0
         
@@ -253,41 +428,77 @@ class PokemonPaginator(discord.ui.View):
         elif h_mult >= 1.30: size_tag = "ALPHA"
         elif h_mult >= 1.06: size_tag = "Large"
 
-        # --- BUILD EMBED ---
-        base_repo = "https://raw.githubusercontent.com/Dre-J/pokebotsprites/master/sprites/pokemon/other/official-artwork"
-        image_url = f"{base_repo}/shiny/{poke_id}.png" if is_shiny else f"{base_repo}/{poke_id}.png"
-        color = discord.Color.gold() if is_shiny else discord.Color.green()
-        title_prefix = "🌟 Shiny " if is_shiny else ""
+        # ==========================================
+        # LOCAL ASSET LOADING
+        # ==========================================
+        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
+        
+        if is_shiny:
+            file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
+            safe_filename = f"{poke_id}_shiny.png"
+        else:
+            file_path = os.path.join(base_path, f"{poke_id}.png")
+            safe_filename = f"{poke_id}.png"
+            
+        sprite_file = None
+        if os.path.exists(file_path):
+            sprite_file = discord.File(file_path, filename=safe_filename)
+        else:
+            print(f"⚠️ WARNING: Local sprite missing for ID {poke_id} at {file_path}")
 
-        embed = discord.Embed(title=f"{title_prefix}{display_title}{gmax_icon}", color=color)
-        embed.set_image(url=image_url)
+        # --- BUILD EMBED ---
+        color = discord.Color.gold() if is_shiny else discord.Color.green()
+        title_prefix = "🌟" if is_shiny else ""
+
+        # Inject the gender icon directly into the title!
+        embed = discord.Embed(title=f"{title_prefix}{display_title}{gender_icon}{gmax_icon}", color=color)
+        
+        # Attach the local file to the embed using the safe filename
+        if sprite_file:
+            embed.set_image(url=f"attachment://{safe_filename}")
 
         desc_prefix = "❤️ **Active Partner**\n" if actual_tag_id == self.active_partner_id else ""
         
-        # Inject the Biometrics right below the Held Item!
-        embed.description = f"{desc_prefix}**Level {level}** | **Nature:** {nature}\n🧬 **Ability:** {display_ability}\n🎒 **Held Item:** `{item_display}`\n📏 **Dimensions:** {size_tag} ({actual_height_m}m, {actual_weight_kg}kg)\n🤝 **Bond:** {bond_icon}\n✨ **XP:** {current_xp} / {xp_for_next_level}"
+        # 🚨 Added Original Trainer and Typings to the main description block!
+        embed.description = f"{desc_prefix}**Level {level}** | **Nature:** {nature}\n🔮 **Type:** {type_str}\n🧬 **Ability:** {display_ability}\n🎒 **Held Item:** `{item_display}`\n📏 **Dimensions:** {size_tag} ({actual_height_m}m, {actual_weight_kg}kg)\n🤝 **Bond:** {bond_icon}\n✨ **XP:** {current_xp} / {xp_for_next_level}\n👤 **Original Trainer:** {ot_display}"
 
+        # ==========================================
+        # GENETICS & STAT FORMATTING
+        # ==========================================
+        # Calculate Genetic Potential (IVs)
+        iv_total = iv_hp + iv_atk + iv_def + iv_spa + iv_spd + iv_spe
+        iv_percentage = int((iv_total / 186.0) * 100)
+        
+        if iv_percentage >= 90: appraisal = "S-Tier (Flawless)"
+        elif iv_percentage >= 80: appraisal = "A-Tier (Excellent)"
+        elif iv_percentage >= 60: appraisal = "B-Tier (Strong)"
+        elif iv_percentage >= 40: appraisal = "C-Tier (Average)"
+        else: appraisal = "D-Tier (Weak)"
+
+        # 🚨 UPDATED: Shows Genetic Potential, IVs, and EVs all in one clean block!
         stat_block = f"""
-        **HP:** {real_hp} `(IV: {iv_hp})`
-        **Attack:** {real_atk} `(IV: {iv_atk})`
-        **Defense:** {real_def} `(IV: {iv_def})`
-        **Sp. Atk:** {real_spa} `(IV: {iv_spa})`
-        **Sp. Def:** {real_spd} `(IV: {iv_spd})`
-        **Speed:** {real_spe} `(IV: {iv_spe})`
+🧬 **Genetic Potential:** {iv_percentage}% *({appraisal})*\n**HP:** {real_hp} `[IV: {iv_hp} | EV: {ev_hp}]`\n**Attack:** {real_atk} `[IV: {iv_atk} | EV: {ev_atk}]`\n**Defense:** {real_def} `[IV: {iv_def} | EV: {ev_def}]`\n**Sp. Atk:** {real_spa} `[IV: {iv_spa} | EV: {ev_spa}]`\n**Sp. Def:** {real_spd} `[IV: {iv_spd} | EV: {ev_spd}]`\n**Speed:** {real_spe} `[IV: {iv_spe} | EV: {ev_spe}]`
         """
-        embed.add_field(name="Current Biological Stats", value=stat_block, inline=False)
+        
+        # Add a quick EV Total tracker to the header
+        total_evs = ev_hp + ev_atk + ev_def + ev_spa + ev_spd + ev_spe
+        embed.add_field(name=f"Current Biological Stats (EV Total: {total_evs}/510)", value=stat_block, inline=False)
+        
         embed.set_footer(text=f"Field No. {field_number} of {self.total_pokemon} | Tag ID: {actual_tag_id[:8]}")
-
-        return embed
+        return embed, sprite_file
 
     @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.primary, custom_id="prev_poke")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != self.user_id:
             return await interaction.response.send_message("❌ This is not your field notebook!", ephemeral=True)
         self.current_index -= 1
-        self.update_button_states()
-        embed = await self.generate_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
+        self.update_button_states() # Update the states!
+
+        embed, sprite_file = await self.generate_embed()
+        if sprite_file:
+            await interaction.response.edit_message(embed=embed, attachments=[sprite_file], view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, attachments=[], view=self)
 
     @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, custom_id="next_poke")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -295,8 +506,12 @@ class PokemonPaginator(discord.ui.View):
             return await interaction.response.send_message("❌ This is not your field notebook!", ephemeral=True)
         self.current_index += 1
         self.update_button_states()
-        embed = await self.generate_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
+        embed, sprite_file = await self.generate_embed()
+        
+        if sprite_file:
+            await interaction.response.edit_message(embed=embed, attachments=[sprite_file], view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, attachments=[], view=self)
 
 class SurveyPaginator(discord.ui.View):
     def __init__(self, user_id, directives):
@@ -384,153 +599,243 @@ class SurveyPaginator(discord.ui.View):
 
 class InventoryPaginator(discord.ui.View):
     def __init__(self, ctx, rescued_pokemon, tokens):
-        # timeout=180 means the buttons will stop working after 3 minutes to save bot memory
         super().__init__(timeout=180)
         self.ctx = ctx
         self.rescued_pokemon = rescued_pokemon
         self.tokens = tokens
         self.current_page = 0
         self.items_per_page = 10
-        # Calculate the total number of pages needed
         self.max_pages = max(1, math.ceil(len(rescued_pokemon) / self.items_per_page))
         self.update_buttons()
 
     def update_buttons(self):
-        # FIX 2: Access the physical button objects via the children array
-        # self.children[0] is Prev, self.children[1] is Next
+        # 0: First, 1: Prev, 2: Next, 3: Last (Row 0)
         self.children[0].disabled = self.current_page == 0
-        self.children[1].disabled = self.current_page >= self.max_pages - 1
+        self.children[1].disabled = self.current_page == 0
+        self.children[2].disabled = self.current_page >= self.max_pages - 1
+        self.children[3].disabled = self.current_page >= self.max_pages - 1
 
     def create_embed(self):
-            start = self.current_page * self.items_per_page
-            end = start + self.items_per_page
-            chunk = self.rescued_pokemon[start:end]
+        start = self.current_page * self.items_per_page
+        end = start + self.items_per_page
+        chunk = self.rescued_pokemon[start:end]
 
-            embed = discord.Embed(title=f"📋 {self.ctx.author.name}'s Ecological Survey", color=discord.Color.blue())
-            embed.set_thumbnail(url=self.ctx.author.avatar.url if self.ctx.author.avatar else self.ctx.author.default_avatar.url)
-            embed.add_field(name="Global Eco-Tokens", value=f"🪙 {self.tokens:,}", inline=False)
+        embed = discord.Embed(title=f"📋 {self.ctx.author.name}'s Ecological Survey", color=discord.Color.blue())
+        embed.set_thumbnail(url=self.ctx.author.avatar.url if self.ctx.author.avatar else self.ctx.author.default_avatar.url)
+        embed.add_field(name="Global Eco-Tokens", value=f"🪙 {self.tokens:,}", inline=False)
 
-            # --- THE FIX: Just join the strings together! ---
-            if chunk:
-                embed.description = "\n".join(chunk)
-            else:
-                embed.description = "*No specimens recorded in this sector.*"
-                
-            embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Total Rescued: {len(self.rescued_pokemon)}")
-            return embed
+        if chunk:
+            embed.description = "\n".join(chunk)
+        else:
+            embed.description = "*No specimens match this filter.*"
+            
+        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Total Results: {len(self.rescued_pokemon)}")
+        return embed
 
-    @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Security check: only the person who ran the command can click the buttons
+    # --- ROW 0: PAGINATION CONTROLS ---
+
+    @discord.ui.button(label="⏪ First", style=discord.ButtonStyle.secondary, row=0)
+    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
-            
+        self.current_page = 0
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary, row=0)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
         self.current_page -= 1
         self.update_buttons()
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
-    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, row=0)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
-            
         self.current_page += 1
         self.update_buttons()
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        
+    @discord.ui.button(label="Last ⏩", style=discord.ButtonStyle.secondary, row=0)
+    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
+        self.current_page = self.max_pages - 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
+    # --- ROW 1: UTILITY CONTROLS ---
 
+    @discord.ui.button(label="📦 Copy Box Numbers", style=discord.ButtonStyle.success, row=1)
+    async def extract_ids_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
+        
+        # Get the currently displayed chunk
+        start = self.current_page * self.items_per_page
+        end = start + self.items_per_page
+        chunk = self.rescued_pokemon[start:end]
+
+        if not chunk:
+            return await interaction.response.send_message("No specimens on this page to copy.", ephemeral=True)
+
+        # Extract the Box numbers using Regex
+        box_numbers = []
+        for line in chunk:
+            # Looks for **#123** and extracts the 123
+            match = re.search(r'\*\*#(\d+)\*\*', line)
+            if match:
+                box_numbers.append(match.group(1))
+
+        if box_numbers:
+            output_string = ", ".join(box_numbers)
+            await interaction.response.send_message(
+                f"📋 **Trade Helper:**\nCopy and paste this exact string into your Trade Modals:\n\n`{output_string}`", 
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message("Could not extract any Box numbers from this page.", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Close Survey", style=discord.ButtonStyle.danger, row=1)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
+        
+        # Safely delete the message
+        try:
+            await interaction.message.delete()
+        except discord.NotFound:
+            pass # Message was already deleted
 
 class Ecology(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.habitat_activity = {}
+        self.xp_cooldowns = {}
     
+    async def spawn_timer(self, message: discord.Message, spawn_id: str, pokemon_name: str, guild_id: str = None, user_id: str = None, timeout: int = 300):
+        """Background task that waits `timeout` seconds, then despawns the specimen."""
+        # 1. Wait for 5 minutes (300 seconds) in the background
+        await asyncio.sleep(timeout)
+
+        expired = False
+
+        # 2. Check if the specimen is still in memory
+        if user_id:
+            # Private Expedition Spawn
+            if user_id in user_active_spawns and spawn_id in user_active_spawns[user_id]:
+                user_active_spawns[user_id].pop(spawn_id, None)
+                expired = True
+        elif guild_id:
+            # Global Camera Trap Spawn
+            if guild_id in active_spawns and spawn_id in active_spawns[guild_id]:
+                active_spawns[guild_id].pop(spawn_id, None)
+                expired = True
+
+        # 3. If it expired naturally, edit the Discord message!
+        if expired:
+            try:
+                # Fetch the original embed from the message
+                embed = message.embeds[0]
+                
+                # Format the name cleanly
+                clean_name = pokemon_name.capitalize().replace('-', ' ')
+                
+                # Update the visual data to show it left, including the name!
+                embed.title = "💨 Biological Signal Lost"
+                embed.description = f"The wild **{clean_name}** grew tired of waiting and wandered back into the wild. The area is now quiet."
+                embed.color = discord.Color.dark_grey()
+            
+                
+                # Edit the message AND explicitly clear the attachments to remove the stray image
+                await message.edit(embed=embed, attachments=[])
+                
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                # The channel or message was deleted by an admin before the timer finished, so we just safely ignore it.
+                pass
+
     # --- The Spawning Logic Extracted into a Helper Function ---
     async def trigger_activity_spawn(self, guild):
         guild_id = str(guild.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # Check if a habitat channel is actually set up
-        cursor.execute("SELECT spawn_channel_id, ecosystem_score, active_biome, pollution_type FROM servers WHERE guild_id = ?", (guild_id,))
-        server_data = cursor.fetchone()
-        
-        if not server_data or not server_data[0]:
-            conn.close()
-            return # No channel set up, do nothing
-            
-        channel_id, score, biome, pollution = server_data
-        channel = self.bot.get_channel(int(channel_id))
-        
-        if not channel:
-            conn.close()
-            return
-            
-        ecosystem_score = score if score else 50
-        active_biome = biome if biome else 'forest'
-        current_pollution = pollution if pollution else 'none'
-        
-        # --- ECOLOGICAL DISASTER ROLL (10% Chance) ---
-        event_roll = random.random()
-        if event_roll < 0.10 and current_pollution == 'none':
-            disasters = {
-                'oil_spill': {'damage': 20, 'msg': '⚠️ **ECOLOGICAL DISASTER:** A pipeline has ruptured, causing an oil spill!'},
-                'toxic_smog': {'damage': 15, 'msg': '⚠️ **HAZARD DETECTED:** A thick cloud of toxic smog has settled over the area.'},
-                'wildfire': {'damage': 25, 'msg': '⚠️ **ECOLOGICAL DISASTER:** An uncontrolled wildfire is sweeping through the habitat!'},
-                'spatial_rift': {'damage': 30, 'msg': '🌌 **DIMENSIONAL RIFT:** A space-time distortion has opened! Highly invasive Ultra Beasts are flooding the habitat!'}
-            }
-            
-            disaster_type = random.choice(list(disasters.keys()))
-            damage = disasters[disaster_type]['damage']
-            
-            new_score = max(0, ecosystem_score - damage)
-            cursor.execute("UPDATE servers SET ecosystem_score = ?, pollution_type = ? WHERE guild_id = ?", (new_score, disaster_type, guild_id))
-            conn.commit()
-            conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
 
-            await channel.send(f"{disasters[disaster_type]['msg']}\n*Biodiversity is dropping rapidly. Use `!intervene` or a `Purifier` to stabilize the area!*")
-            return # Skip spawning to simulate wildlife fleeing the disaster!
+            # Check if a habitat channel is actually set up
+            async with db.execute("SELECT spawn_channel_id, ecosystem_score, active_biome, pollution_type FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                server_data = await cursor.fetchone()
+            
+            if not server_data or not server_data[0]:
+                return # No channel set up, do nothing
+                
+            channel_id, score, biome, pollution = server_data
+            channel = self.bot.get_channel(int(channel_id))
+            
+            if not channel:
+                return
+                
+            ecosystem_score = score if score else 50
+            active_biome = biome if biome else 'forest'
+            current_pollution = pollution if pollution else 'none'
+            
+            # --- ECOLOGICAL DISASTER ROLL (10% Chance) ---
+            event_roll = random.random()
+            if event_roll < 0.10 and current_pollution == 'none':
+                disasters = {
+                    'oil_spill': {'damage': 20, 'msg': '⚠️ **ECOLOGICAL DISASTER:** A pipeline has ruptured, causing an oil spill!'},
+                    'toxic_smog': {'damage': 15, 'msg': '⚠️ **HAZARD DETECTED:** A thick cloud of toxic smog has settled over the area.'},
+                    'wildfire': {'damage': 25, 'msg': '⚠️ **ECOLOGICAL DISASTER:** An uncontrolled wildfire is sweeping through the habitat!'},
+                    'spatial_rift': {'damage': 30, 'msg': '🌌 **DIMENSIONAL RIFT:** A space-time distortion has opened! Highly invasive Ultra Beasts are flooding the habitat!'}
+                }
+                
+                disaster_type = random.choice(list(disasters.keys()))
+                damage = disasters[disaster_type]['damage']
+                
+                new_score = max(0, ecosystem_score - damage)
+                await db.execute("UPDATE servers SET ecosystem_score = ?, pollution_type = ? WHERE guild_id = ?", (new_score, disaster_type, guild_id))
+                await db.commit()
 
-        # --- INVASIVE RIFT OVERRIDE ---
-        if current_pollution == 'spatial_rift':
-            habitat_condition = "The local environment is being warped by invasive dimensional energy."
-            rarity_name = "🛸 ULTRA BEAST"
-            cursor.execute("SELECT pokedex_id, name, capture_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;")
-            spawned_data = cursor.fetchone()
-        else:
-            # --- STANDARD BIOME & POLLUTION LOGIC ---
-            if active_biome == 'urban': allowed_types = ['electric', 'steel', 'poison', 'normal']
-            elif active_biome == 'coastal': allowed_types = ['water', 'flying', 'ice', 'normal']
-            else: allowed_types = ['grass', 'bug', 'ground', 'normal']
+                await channel.send(f"{disasters[disaster_type]['msg']}\n*Biodiversity is dropping rapidly. Use `!intervene` or a `Purifier` to stabilize the area!*")
+                return # Skip spawning to simulate wildlife fleeing the disaster!
 
-            if ecosystem_score < 30:
-                allowed_types = ['poison', 'dark', 'steel']
-                habitat_condition = f"The {active_biome} is degraded and covered in thick smog."
-            elif ecosystem_score > 70:
-                allowed_types.extend(['fairy', 'dragon', 'psychic'])
-                habitat_condition = f"The {active_biome} is pristine, vibrant, and bursting with life."
+            # --- INVASIVE RIFT OVERRIDE ---
+            if current_pollution == 'spatial_rift':
+                habitat_condition = "The local environment is being warped by invasive dimensional energy."
+                rarity_name = "🛸 ULTRA BEAST"
+                async with db.execute("SELECT pokedex_id, name, capture_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
+                    spawned_data = await cursor.fetchone()
             else:
-                habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
+                # --- STANDARD BIOME & POLLUTION LOGIC ---
+                if active_biome == 'urban': allowed_types = ['electric', 'steel', 'poison', 'normal']
+                elif active_biome == 'coastal': allowed_types = ['water', 'flying', 'ice', 'normal']
+                else: allowed_types = ['grass', 'bug', 'ground', 'normal']
 
-            # Rarity Roll
-            roll = random.random()
-            if roll < 0.01: rarity_filter, rarity_name = "AND s.is_mythical = 1", "✨ MYTHICAL"
-            elif roll < 0.05: rarity_filter, rarity_name = "AND s.is_legendary = 1 AND s.is_mythical = 0", "⭐ LEGENDARY"
-            else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
+                if ecosystem_score < 30:
+                    allowed_types = ['poison', 'dark', 'steel']
+                    habitat_condition = f"The {active_biome} is degraded and covered in thick smog."
+                elif ecosystem_score > 70:
+                    allowed_types.extend(['fairy', 'dragon', 'psychic'])
+                    habitat_condition = f"The {active_biome} is pristine, vibrant, and bursting with life."
+                else:
+                    habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
 
-            query = f"""
-                SELECT s.pokedex_id, s.name, s.capture_rate 
-                FROM base_pokemon_species s
-                JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                AND s.pokedex_id NOT BETWEEN 793 AND 806 AND form_type IN ('base','alolan', 'galarian', 'hisuian', 'paldean')
-                {rarity_filter} ORDER BY RANDOM() LIMIT 1;
-            """
-            cursor.execute(query, allowed_types)
-            spawned_data = cursor.fetchone()
-            
-        conn.close()
+                # Rarity Roll
+                roll = random.random()
+                if roll < 0.01: rarity_filter, rarity_name = "AND s.is_mythical = 1", "✨ MYTHICAL"
+                elif roll < 0.05: rarity_filter, rarity_name = "AND s.is_legendary = 1 AND s.is_mythical = 0", "⭐ LEGENDARY"
+                else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
+
+                query = f"""
+                    SELECT s.pokedex_id, s.name, s.capture_rate 
+                    FROM base_pokemon_species s
+                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                    WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
+                    AND s.pokedex_id NOT BETWEEN 793 AND 806 AND form_type IN ('base','alolan', 'galarian', 'hisuian', 'paldean')
+                    {rarity_filter} ORDER BY RANDOM() LIMIT 1;
+                """
+                async with db.execute(query, allowed_types) as cursor:
+                    spawned_data = await cursor.fetchone()
 
         if not spawned_data:
             return
@@ -539,38 +844,78 @@ class Ecology(commands.Cog):
         is_shiny = random.randint(1, 4096) == 1 
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
         
-        active_spawns[guild_id] = {
+        # 🚨 NEW ARCHITECTURE: Initialize the guild's dictionary if it doesn't exist
+        if guild_id not in active_spawns:
+            active_spawns[guild_id] = {}
+            
+        # Create a unique 6-character tracking ID for this specific specimen
+        spawn_id = str(uuid.uuid4())[:6]
+
+        # 🚨 Store it UNDER the unique spawn_id, not just the guild_id!
+        active_spawns[guild_id][spawn_id] = {
             'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate, 'is_shiny': is_shiny 
         }
-        
+
     # 1. Generate the Mutation Status
         is_shiny = random.randint(1, 4096) == 1 
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
+
+        # ==========================================
+        # 4. LOCAL ASSET LOADING
+        # ==========================================
+        # Construct the safe OS path to your sprites
+        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
         
-        # 2. Update the active spawns memory
-        active_spawns[guild_id] = {
-            'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate, 'is_shiny': is_shiny 
-        }
-        
-        # 3. Format the Image URL based on Shiny Status
-        base_repo_url = "https://raw.githubusercontent.com/Dre-J/pokebotsprites/refs/heads/master/sprites/pokemon/other/official-artwork"
         if is_shiny:
-            image_url = f"{base_repo_url}/shiny/{poke_id}.png"
+            file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
+            safe_filename = f"{poke_id}_shiny.png"
             embed_color = discord.Color.gold()
         else:
-            image_url = f"{base_repo_url}/{poke_id}.png"
+            file_path = os.path.join(base_path, f"{poke_id}.png")
+            safe_filename = f"{poke_id}.png"
             embed_color = discord.Color.green()
-
+            
+        # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
+        if not os.path.exists(file_path):
+            # You can point this to a default "missingno" or placeholder sprite if you have one
+            print(f"⚠️ WARNING: Missing sprite for ID {poke_id} at {file_path}")
+            sprite_file = None
+        else:
+            # Package the image as a discord File object
+            sprite_file = discord.File(file_path, filename=safe_filename)
+        
+        def mask_name(name):
+            masked = ""
+            for i, char in enumerate(name):
+                if char == "-":
+                    masked += "- "
+                elif i == 0 or (i > 0 and name[i-1] == "-"):
+                    masked += f"{char.upper()} "
+                else:
+                    masked += "_ "
+            return masked
+        
+        masked_display = mask_name(name)
+        print(masked_display)
         # 4. Build the Visual Camera Trap Embed
         embed = discord.Embed(
             title=f"📸 Habitat Activity Detected!", 
-            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} {name.capitalize()}** has migrated into the area!\n\nUse `!catch {name}` to deploy equipment and rescue it.",
+            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} `{masked_display}`** has appeared!\n\nUse `!catch <pokemon>` to deploy equipment and rescue it.",
             color=embed_color
         )
-        embed.set_image(url=image_url)
-        embed.set_footer(text="Automated Field Camera Trap")
 
-        await channel.send(embed=embed)
+        # Mount the local image to the embed
+        if sprite_file:
+            embed.set_image(url=f"attachment://{safe_filename}")
+            
+        embed.set_footer(text="Automated Field Camera Trap")
+        # Send the message, passing BOTH the embed and the file object!
+        if sprite_file:
+            msg = await channel.send(embed=embed, file=sprite_file)
+        else:
+            msg = await channel.send(embed=embed)
+        
+        asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=name, guild_id=guild_id))
 
     async def execute_biome_shift(self, ctx, target_biome, title, description):
         guild_id = str(ctx.guild.id)
@@ -578,57 +923,53 @@ class Ecology(commands.Cog):
         cost = 100
         required_cp = 10
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # 2. Start the Atomic Transaction!
-            cursor.execute("BEGIN TRANSACTION")
-            
-            # Check Contribution Points (Do they have local authority?)
-            cursor.execute("SELECT contribution_points FROM guild_members WHERE user_id = ? AND guild_id = ?", (user_id, guild_id))
-            member_data = cursor.fetchone()
-            cp = member_data[0] if member_data else 0
-            
-            if cp < required_cp:
-                await ctx.send(f"⚠️ You need at least {required_cp} Contribution Points in this server to lead a major ecological project. You currently have {cp}.")
-                return
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 2. Start the Atomic Transaction!
+                await db.execute("BEGIN TRANSACTION")
                 
-            # Check Global Funding (Do they have the Eco-Tokens?)
-            cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,))
-            user_data = cursor.fetchone()
-            tokens = user_data[0] if user_data else 0
-            
-            if tokens < cost:
-                await ctx.send(f"⚠️ This project requires {cost} Eco-Tokens in funding. You only have {tokens}.")
-                return
+                # Check Contribution Points (Do they have local authority?)
+                async with db.execute("SELECT contribution_points FROM guild_members WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)) as cursor:
+                    member_data = await cursor.fetchone()
+                cp = member_data[0] if member_data else 0
                 
-            # Check if the biome is already set to the target
-            cursor.execute("SELECT active_biome FROM servers WHERE guild_id = ?", (guild_id,))
-            current_biome = cursor.fetchone()[0]
-            
-            if current_biome == target_biome:
-                await ctx.send(f"The server is already a {target_biome.capitalize()} biome!")
-                return
+                if cp < required_cp:
+                    await ctx.send(f"⚠️ You need at least {required_cp} Contribution Points in this server to lead a major ecological project. You currently have {cp}.")
+                    return
+                    
+                # Check Global Funding (Do they have the Eco-Tokens?)
+                async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    user_data = await cursor.fetchone()
+                tokens = user_data[0] if user_data else 0
+                
+                if tokens < cost:
+                    await ctx.send(f"⚠️ This project requires {cost} Eco-Tokens in funding. You only have {tokens}.")
+                    return
+                    
+                # Check if the biome is already set to the target
+                async with db.execute("SELECT active_biome FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                    current_biome = await cursor.fetchone()
+                    current_biome = current_biome[0]
+                
+                if current_biome == target_biome:
+                    await ctx.send(f"The server is already a {target_biome.capitalize()} biome!")
+                    return
 
-            # Execute the Shift! Deduct tokens and update the server
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (cost, user_id))
-            cursor.execute("UPDATE servers SET active_biome = ? WHERE guild_id = ?", (target_biome, guild_id))
-            conn.commit()
+                # Execute the Shift! Deduct tokens and update the server
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (cost, user_id))
+                await db.execute("UPDATE servers SET active_biome = ? WHERE guild_id = ?", (target_biome, guild_id))
+                await db.commit()
             
             # Send the celebration embed
             embed = discord.Embed(title=title, description=description, color=discord.Color.gold())
             embed.set_footer(text=f"Project funded and led by {ctx.author.name} (-{cost} Eco-Tokens)")
             await ctx.send(embed=embed)
             
-        except Exception as e:
-            # 3. ROLLBACK ADDED: If the database crashes, refund their tokens instantly!
-            conn.rollback()
-            await ctx.send("❌ A database error occurred during the biome shift. No funds were deducted.")
-            print(f"Biome Shift Error: {e}")
-            
-        finally:
-            conn.close()
+        except Exception as inner_e:
+            # 6. ROLLBACK ON ERROR (If the database crashes, refund the money automatically)
+            if db.in_transaction:
+                await db.rollback()
+            raise inner_e # Push the error out to the main handler
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -652,7 +993,7 @@ class Ecology(commands.Cog):
         if self.habitat_activity[guild_id] >= MESSAGES_REQUIRED_FOR_SPAWN:
             self.habitat_activity[guild_id] = 0 # Reset the counter immediately
 
-            #print(f"🌿 DEBUG: Spawn threshold reached in {message.guild.name}! Triggering spawn...")
+            print(f"🌿 DEBUG: Spawn threshold reached in {message.guild.name}! Triggering spawn...")
 
             await self.trigger_activity_spawn(message.guild)
     
@@ -662,13 +1003,11 @@ class Ecology(commands.Cog):
         user_id = str(ctx.author.id)
         
         # Check if they already exist
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
-        if cursor.fetchone():
-            conn.close()
-            return await ctx.send("⚠️ You are already a registered researcher! You cannot pick another starter.")
-        conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
+
+            async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                if await cursor.fetchone():
+                    return await ctx.send("⚠️ You are already a registered researcher! You cannot pick another starter.")
         
         # Spawn the interactive UI
         view = discord.ui.View()
@@ -698,162 +1037,202 @@ class Ecology(commands.Cog):
             'canopy': {'types': "('grass', 'bug', 'poison', 'flying', 'normal')", 'emoji': '🌲'},
             'trench': {'types': "('water', 'ice')", 'emoji': '🌊'},
             'core': {'types': "('fire', 'ground', 'rock', 'fighting')", 'emoji': '🌋'},
-            'sprawl': {'types': "('electric', 'steel', 'dark', 'ghost', 'psychic', 'fairy')", 'emoji': '🏙️'}
+            'sprawl': {'types': "('electric', 'steel', 'dark', 'ghost', 'psychic', 'fairy')", 'emoji': '🏙️'},
+            'apex': {'types': "('dragon')", 'emoji': '🐉'}
         }
         
         if biome not in biome_data:
             return await ctx.send("⚠️ Unknown biome. Available sectors: Canopy, Trench, Core, Sprawl.")
             
         # 2. Check if the user is already on an expedition
-        if user_id in user_active_spawns:
+        # 🚨 UPDATED CHECK: Looks to see if their personal dictionary exists AND has active spawns in it
+        if user_id in user_active_spawns and len(user_active_spawns[user_id]) > 0:
             return await ctx.send("🛑 You are already tracking a private spawn! Catch, defeat, or run from it first.")
-            
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
         try:
-            # 3. Verify Ecological Access (The Visa Check)
-            cursor.execute("SELECT unlocked_visas FROM users WHERE user_id = ?", (user_id,))
-            user_data = cursor.fetchone()
-            
-            # Default to canopy if they somehow don't have the column set
-            visas = user_data[0] if user_data and user_data[0] else "canopy"
-            
-            if biome not in visas.split(','):
-                conn.close()
-                return await ctx.send(f"⛔ **ACCESS DENIED:** You do not have the required Visa for the **{biome.title()}**. Defeat the local Sector Warden to advance.")
-            
-            # 4. Generate the Biome-Specific Encounter (With Rarity Filter)
-            type_tuple = biome_data[biome]['types']
-            
-            # Default to standard wildlife
-            rarity_filter = "AND s.is_legendary = 0 AND s.is_mythical = 0"
-            
-            # Roll the ecological dice!
-            rarity_roll = random.random()
-            if rarity_roll <= 0.005: 
-                # 0.5% chance for a Mythical anomaly
-                rarity_filter = "AND s.is_mythical = 1"
-            elif rarity_roll <= 0.015: 
-                # 1% chance for a Legendary predator (up to 0.015 total)
-                rarity_filter = "AND s.is_legendary = 1"
+            async with aiosqlite.connect(DB_FILE) as db:
 
-            # We inject the rarity_filter dynamically into the query
-            cursor.execute(f"""
-                SELECT DISTINCT s.pokedex_id, s.name, s.capture_rate 
-                FROM base_pokemon_species s
-                JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                WHERE t.type_name IN {type_tuple} 
-                AND s.pokedex_id NOT BETWEEN 793 AND 806 
-                AND s.form_type IN ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
-                {rarity_filter}
-                ORDER BY RANDOM() LIMIT 1
-            """)
-            
-            spawn_data = cursor.fetchone()
+                # 3. Verify Ecological Access (The Visa Check)
+                async with db.execute("SELECT unlocked_visas FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    user_data = await cursor.fetchone()
+                
+                # Default to canopy if they somehow don't have the column set
+                visas = user_data[0] if user_data and user_data[0] else "canopy"
+                
+                if biome not in visas.split(','):
+                    return await ctx.send(f"⛔ **ACCESS DENIED:** You do not have the required Visa for the **{biome.title()}**. Defeat the local Sector Warden to advance.")
+                
+                # 4. Generate the Biome-Specific Encounter (With Rarity Filter)
+                type_tuple = biome_data[biome]['types']
+                
+                # Default to standard wildlife
+                rarity_filter = "AND s.is_legendary = 0 AND s.is_mythical = 0"
+                
+                # Roll the ecological dice!
+                rarity_roll = random.random()
+                if rarity_roll <= 0.005: 
+                    # 0.5% chance for a Mythical anomaly
+                    rarity_filter = "AND s.is_mythical = 1"
+                elif rarity_roll <= 0.015: 
+                    # 1% chance for a Legendary predator (up to 0.015 total)
+                    rarity_filter = "AND s.is_legendary = 1"
+
+                # We inject the rarity_filter dynamically into the query
+                async with db.execute(f"""
+                    SELECT DISTINCT s.pokedex_id, s.name, s.capture_rate 
+                    FROM base_pokemon_species s
+                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                    WHERE t.type_name IN {type_tuple} 
+                    AND s.pokedex_id NOT BETWEEN 793 AND 806 
+                    AND s.form_type IN ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
+                    {rarity_filter}
+                    ORDER BY RANDOM() LIMIT 1
+                """) as cursor:
+                    spawn_data = await cursor.fetchone()
             
             if not spawn_data:
-                conn.close()
                 return await ctx.send("📡 Scanner error: Could not locate native wildlife in this sector. Try again.")
                 
             poke_id, poke_name, true_capture_rate = spawn_data
             
             # Roll for shiny (1/4096 standard rate)
             is_shiny = random.randint(1, 4096) == 1
+            # Create a unique 6-character tracking ID for this specific specimen
+            spawn_id = str(uuid.uuid4())[:6]
+
+            if user_id not in user_active_spawns:
+                user_active_spawns[user_id] = {}
             
             # 5. Lock the spawn to this specific user!
-            user_active_spawns[user_id] = {
+            user_active_spawns[user_id][spawn_id] = {
                 'pokedex_id': poke_id,
                 'name': poke_name,
                 'is_shiny': is_shiny,
                 'capture_rate': true_capture_rate # Dynamically assigned!
             }
             
-            conn.close()
-            
             # 6. UI Output
             shiny_icon = "✨ " if is_shiny else ""
             b_emoji = biome_data[biome]['emoji']
             
+            def mask_name(name):
+                masked = ""
+                for i, char in enumerate(name):
+                    if char == "-":
+                        masked += "- "
+                    elif i == 0 or (i > 0 and name[i-1] == "-"):
+                        masked += f"{char.upper()} "
+                    else:
+                        masked += "_ "
+                return masked
+            
+            masked_display = mask_name(poke_name)
             embed = discord.Embed(
                 title=f"{b_emoji} {biome.title()} Expedition",
-                description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**{poke_name.capitalize().replace('-', ' ')}** appeared!",
+                description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**`{masked_display}`** appeared!",
                 color=discord.Color.dark_green()
             )
             embed.set_footer(text="This is a private encounter. Use !catch [name]")
             
-            
-            # ---Format and attach the Specimen Image ---
-            base_repo_url = "https://raw.githubusercontent.com/Dre-J/pokebotsprites/refs/heads/master/sprites/pokemon/other/official-artwork"
+            # ==========================================
+            # 4. LOCAL ASSET LOADING
+            # ==========================================
+            # Construct the safe OS path to your sprites
+            base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
             
             if is_shiny:
-                image_url = f"{base_repo_url}/shiny/{poke_id}.png"
-                embed.color = discord.Color.gold() # Optionally override the color if it's shiny!
+                file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
+                safe_filename = f"{poke_id}_shiny.png"
             else:
-                image_url = f"{base_repo_url}/{poke_id}.png"
+                file_path = os.path.join(base_path, f"{poke_id}.png")
+                safe_filename = f"{poke_id}.png"
                 
-            embed.set_image(url=image_url)
+            # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
+            if not os.path.exists(file_path):
+                # You can point this to a default "missingno" or placeholder sprite if you have one
+                print(f"⚠️ WARNING: Missing sprite for ID {poke_id} at {file_path}")
+                sprite_file = None
+            else:
+                # Package the image as a discord File object
+                sprite_file = discord.File(file_path, filename=safe_filename)
+            # ==========================================
             
-            await ctx.send(embed=embed)
+            # Mount the local image to the embed
+            if sprite_file:
+                embed.set_image(url=f"attachment://{safe_filename}")
+                
+            # Send the message, passing BOTH the embed and the file object!
+            if sprite_file:
+                msg = await ctx.send(embed=embed, file=sprite_file)
+            else:
+                msg = await ctx.send(embed=embed)
             
+            asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=poke_name, user_id=user_id))
         except Exception as e:
             print(f"Expedition Error: {e}")
             await ctx.send("❌ A critical error occurred during field deployment.")
-            if conn:
-                conn.close()
 
     @commands.command(name="hint", aliases=["scan", "analyze_signal"])
     @checks.has_started()
     @checks.is_authorized()
-    async def spawn_hint(self, ctx):
-        """Uses field sensors to gather data on the current unidentified wild specimen."""
+    async def spawn_hint(self, ctx, lang_tag: str = "eng"):
+        """Uses field sensors to gather data. (Optionally pass a language code like 'fr' or 'ja')"""
         guild_id = str(ctx.guild.id)
+        lang = lang_tag.upper()
         
-        # 1. Check if there is actually a signal to analyze
-        if guild_id not in active_spawns: 
+        # 1. Check if there are active spawns in the new multi-spawn dictionary
+        if guild_id not in active_spawns or not active_spawns[guild_id]: 
             return await ctx.send("📡 **Sensors Quiet:** There are no localized biological signals to analyze right now. Keep exploring!")
             
-        target = active_spawns[guild_id]
-        poke_name = target['name'] 
-        poke_id = target['pokedex_id']
+        # 🚨 Grab the MOST RECENT spawn added to the dictionary
+        target_spawn_id = list(active_spawns[guild_id].keys())[-1]
+        target = active_spawns[guild_id][target_spawn_id]
         
-        # 2. Fetch the biological data from the registry
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        english_name = target['name'] 
+        poke_id = target['pokedex_id']
+        display_name = english_name # Default to English
         
         try:
-            # Query the exact column name and fetch ALL matching rows
-            cursor.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,))
-            db_data = cursor.fetchall()
-        except sqlite3.OperationalError as e:
+            async with aiosqlite.connect(DB_FILE) as db:
+                
+                # 2. LOCALIZATION OVERRIDE
+                if lang != "ENG":
+                    async with db.execute("SELECT foreign_name FROM species_translations WHERE english_name = ? AND language_tag = ?", (english_name, lang)) as cursor:
+                        trans_data = await cursor.fetchone()
+                    if trans_data:
+                        display_name = trans_data[0]
+                    else:
+                        await ctx.send(f"⚠️ *Sensor Warning: No telemetry data found for language code '{lang}'. Defaulting to ENG.*")
+                
+                # 3. Fetch Elemental Types
+                async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
+                    db_data = await cursor.fetchall()
+                    
+        except aiosqlite.OperationalError as e:
             print(f"Hint Query Error: {e}")
-            db_data = [] # Return an empty list if it fails
-        finally:
-            conn.close()
+            db_data = [] 
             
-        # 3. Format the Intelligence Report
+        # Format the Types
         if db_data:
-            # db_data looks like: [('grass',), ('poison',)]
-            # We loop through the tuples, extract the strings, capitalize them, and join them together!
             types_list = [row[0].title() for row in db_data]
             type_str = " / ".join(types_list)
         else:
             type_str = "Unknown"
             
+        # 4. MASK THE DISPLAY NAME
         masked_name = ""
-
-        for i, char in enumerate(poke_name):
+        for i, char in enumerate(display_name):
             if char == "-":
                 masked_name += "- "
-            elif i == 0 or (i > 0 and poke_name[i-1] == "-"):
+            elif i == 0 or (i > 0 and display_name[i-1] == "-"):
                 masked_name += f"{char.upper()} "
             else:
                 masked_name += "_ "
                 
-        # 4. Render the Sensor Dashboard
+        # 5. Render the Dashboard
         embed = discord.Embed(
-            title="📡 Biological Sensor Readout",
-            description="Your field equipment has isolated an unidentified specimen's signal nearby. Here is the partial telemetry data:",
+            title=f"📡 Biological Sensor Readout [{lang}]",
+            description="Your field equipment has isolated the strongest unidentified signal nearby. Here is the partial telemetry data:",
             color=discord.Color.blue()
         )
         
@@ -869,81 +1248,83 @@ class Ecology(commands.Cog):
     @commands.is_owner() # SECURITY: Only you can run this!
     async def force_spawn(self, ctx, target_species: str = None, force_shiny: bool = False):
         guild_id = str(ctx.guild.id)
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
-        # 1. SPECIFIC TARGET INJECTION
-        if target_species:
-            query = """
-                SELECT pokedex_id, name, capture_rate 
-                FROM base_pokemon_species 
-                WHERE name = ? LIMIT 1;
-            """
-            cursor.execute(query, (target_species.lower(),))
-            spawned_data = cursor.fetchone()
-            
-            if not spawned_data:
-                await ctx.send(f"❌ Error: Could not locate `{target_species}` in the national database.")
-                conn.close()
-                return
+        async with aiosqlite.connect(DB_FILE) as db:
+
+            # 1. SPECIFIC TARGET INJECTION
+            if target_species:
+                target_clean = target_species.lower()
                 
-            rarity_name = "Admin-Injected"
-            habitat_condition = "A localized spatial anomaly has occurred due to Director intervention."
-            is_shiny = force_shiny
-            
-        # 2. NORMAL OVERRIDE (If no specific Pokemon is typed)
-        else:
-            cursor.execute("SELECT ecosystem_score, active_biome, pollution_type FROM servers WHERE guild_id = ?", (guild_id,))
-            server_data = cursor.fetchone()
-            
-            ecosystem_score = server_data[0] if server_data else 50 
-            active_biome = server_data[1] if server_data else 'forest'
-            current_pollution = server_data[2] if server_data else 'none'
-
-            # --- INVASIVE RIFT OVERRIDE ---
-            if current_pollution == 'spatial_rift':
-                habitat_condition = "The local environment is being warped by invasive dimensional energy."
-                rarity_name = "🛸 ULTRA BEAST"
-                cursor.execute("SELECT pokedex_id, name, capture_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;")
-                spawned_data = cursor.fetchone()
-            else:
-                # --- STANDARD BIOME & POLLUTION LOGIC ---
-                if active_biome == 'urban': allowed_types = ['electric', 'steel', 'poison', 'normal']
-                elif active_biome == 'coastal': allowed_types = ['water', 'flying', 'ice', 'normal']
-                else: allowed_types = ['grass', 'bug', 'ground', 'normal']
-
-                if ecosystem_score < 30:
-                    allowed_types = ['poison', 'dark', 'steel']
-                    habitat_condition = f"The {active_biome} is degraded and covered in thick smog."
-                elif ecosystem_score > 70:
-                    allowed_types.extend(['fairy', 'dragon', 'psychic'])
-                    habitat_condition = f"The {active_biome} is pristine, vibrant, and bursting with life."
-                else:
-                    habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
-
-                # Rarity Roll
-                roll = random.random()
-                if roll < 0.01: rarity_filter, rarity_name = "AND s.is_mythical = 1", "✨ MYTHICAL"
-                elif roll < 0.05: rarity_filter, rarity_name = "AND s.is_legendary = 1 AND s.is_mythical = 0", "⭐ LEGENDARY"
-                else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
-
-                query = f"""
-                    SELECT s.pokedex_id, s.name, s.capture_rate 
-                    FROM base_pokemon_species s
-                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                    WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                    AND s.pokedex_id NOT BETWEEN 793 AND 806
-                    {rarity_filter} ORDER BY RANDOM() LIMIT 1;
+                # 🚨 UPDATED: Priority Sorting! Exact matches win, prefix matches randomize.
+                query = """
+                    SELECT pokedex_id, name, capture_rate 
+                    FROM base_pokemon_species 
+                    WHERE name = ? OR name LIKE ?
+                    ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, RANDOM() LIMIT 1;
                 """
-                cursor.execute(query, allowed_types)
-                spawned_data = cursor.fetchone()
+                # 🚨 Notice we pass target_clean THREE times now to satisfy the CASE WHEN statement!
+                async with db.execute(query, (target_clean, f"{target_clean}-%", target_clean)) as cursor:
+                    spawned_data = await cursor.fetchone()
+                
+                if not spawned_data:
+                    await ctx.send(f"❌ Error: Could not locate `{target_species}` or any of its regional/morphological variants in the national database.")
+                    return
+                    
+                rarity_name = "Admin-Injected"
+                habitat_condition = "A localized spatial anomaly has occurred due to Director intervention."
+                is_shiny = force_shiny
+                
+            # 2. NORMAL OVERRIDE (If no specific Pokemon is typed)
+            else:
+                async with db.execute("SELECT ecosystem_score, active_biome, pollution_type FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                    server_data = await cursor.fetchone()
+                
+                ecosystem_score = server_data[0] if server_data else 50 
+                active_biome = server_data[1] if server_data else 'forest'
+                current_pollution = server_data[2] if server_data else 'none'
+
+                # --- INVASIVE RIFT OVERRIDE ---
+                if current_pollution == 'spatial_rift':
+                    habitat_condition = "The local environment is being warped by invasive dimensional energy."
+                    rarity_name = "🛸 ULTRA BEAST"
+                    async with db.execute("SELECT pokedex_id, name, capture_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
+                        spawned_data = await cursor.fetchone()
+                else:
+                    # --- STANDARD BIOME & POLLUTION LOGIC ---
+                    if active_biome == 'urban': allowed_types = ['electric', 'steel', 'poison', 'normal']
+                    elif active_biome == 'coastal': allowed_types = ['water', 'flying', 'ice', 'normal']
+                    else: allowed_types = ['grass', 'bug', 'ground', 'normal']
+
+                    if ecosystem_score < 30:
+                        allowed_types = ['poison', 'dark', 'steel']
+                        habitat_condition = f"The {active_biome} is degraded and covered in thick smog."
+                    elif ecosystem_score > 70:
+                        allowed_types.extend(['fairy', 'dragon', 'psychic'])
+                        habitat_condition = f"The {active_biome} is pristine, vibrant, and bursting with life."
+                    else:
+                        habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
+
+                    # Rarity Roll
+                    roll = random.random()
+                    if roll < 0.01: rarity_filter, rarity_name = "AND s.is_mythical = 1", "✨ MYTHICAL"
+                    elif roll < 0.05: rarity_filter, rarity_name = "AND s.is_legendary = 1 AND s.is_mythical = 0", "⭐ LEGENDARY"
+                    else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
+
+                    query = f"""
+                        SELECT s.pokedex_id, s.name, s.capture_rate 
+                        FROM base_pokemon_species s
+                        JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                        WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
+                        AND s.pokedex_id NOT BETWEEN 793 AND 806
+                        {rarity_filter} ORDER BY RANDOM() LIMIT 1;
+                    """
+                    async with db.execute(query, allowed_types) as cursor:
+                        spawned_data = await cursor.fetchone()
                 
                 # The Genetic Mutation (Shiny) Roll 
                 is_shiny = random.randint(1, 4096) == 1 
-
-        conn.close()
         
-    # 3. EXECUTE THE SPAWN
+        # 3. EXECUTE THE SPAWN
         if not spawned_data:
             return await ctx.send("The environment is currently too unstable to support life.")
 
@@ -955,62 +1336,108 @@ class Ecology(commands.Cog):
 
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
         
-        # Update the active spawns memory
-        active_spawns[guild_id] = {
+        # ==========================================
+        # 🚨 MULTI-SPAWN NESTED DICTIONARY UPDATE
+        # ==========================================
+        # Initialize dictionary if missing
+        if guild_id not in active_spawns:
+            active_spawns[guild_id] = {}
+            
+        spawn_id = str(uuid.uuid4())[:6]
+        
+        # Update the active spawns memory using the unique ID
+        active_spawns[guild_id][spawn_id] = {
             'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate, 'is_shiny': is_shiny 
         }
         
-        # Format the Image URL based on Shiny Status
-        base_repo_url = "https://raw.githubusercontent.com/Dre-J/pokebotsprites/refs/heads/master/sprites/pokemon/other/official-artwork"
+        # ==========================================
+        # 4. LOCAL ASSET LOADING
+        # ==========================================
+        # Construct the safe OS path to your sprites
+        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
+        
         if is_shiny:
-            image_url = f"{base_repo_url}/shiny/{poke_id}.png"
+            file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
+            safe_filename = f"{poke_id}_shiny.png"
             embed_color = discord.Color.gold()
         else:
-            image_url = f"{base_repo_url}/{poke_id}.png"
+            file_path = os.path.join(base_path, f"{poke_id}.png")
+            safe_filename = f"{poke_id}.png"
             embed_color = discord.Color.green()
+            
+        # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
+        if not os.path.exists(file_path):
+            print(f"⚠️ WARNING: Missing sprite for ID {poke_id} at {file_path}")
+            sprite_file = None
+        else:
+            # Package the image as a discord File object
+            sprite_file = discord.File(file_path, filename=safe_filename)
+        # ==========================================
 
+        def mask_name(name):
+            masked = ""
+            for i, char in enumerate(name):
+                if char == "-":
+                    masked += "- "
+                elif i == 0 or (i > 0 and name[i-1] == "-"):
+                    masked += f"{char.upper()} "
+                else:
+                    masked += "_ "
+            return masked
+        
+        masked_display = mask_name(name)
         # Build the Visual Camera Trap Embed
         embed = discord.Embed(
             title=f"📸 Habitat Activity Detected!", 
-            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} {name.capitalize()}** has migrated into the area!\n\nUse `!catch {name}` to deploy equipment and rescue it.",
+            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} `{masked_display}`** has migrated into the area!\n\nUse `!catch <pokemon>` to deploy equipment and rescue it.",
             color=embed_color
         )
-        embed.set_image(url=image_url)
-        embed.set_footer(text="Automated Field Camera Trap")
 
-        await ctx.send(embed=embed)
+        # Mount the local image to the embed
+        if sprite_file:
+            embed.set_image(url=f"attachment://{safe_filename}")
+            
+        embed.set_footer(text="Automated Field Camera Trap")
+        
+        # Send the message, passing BOTH the embed and the file object!
+        if sprite_file:
+            msg = await ctx.send(embed=embed, file=sprite_file)
+        else:
+            msg = await ctx.send(embed=embed)
+
+        asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=name, guild_id=guild_id))
 
     @commands.command(name="nickname", aliases=["name"])
     @checks.has_started()
     @checks.is_authorized()
-    async def nickname_pokemon(self, ctx, tag_id: str, *, name: str):
+    async def nickname_pokemon(self, ctx, box_number: str, *, name: str):
         user_id = str(ctx.author.id)
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
-        # 1. Resolve Target (Box Number or UUID)
-        if tag_id.isdigit() and len(tag_id) <= 6:
-            cursor.execute("""
+        # 1. Strict Input Validation
+        if not box_number.isdigit():
+            return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!nickname 4 Sparky`).")
+            
+        async with aiosqlite.connect(DB_FILE) as db:
+            # 2. Resolve Target (Notice the 'cp' alias is fixed!)
+            async with db.execute("""
                 WITH Roster AS (
-                    SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
-                    FROM caught_pokemon WHERE user_id = ?
+                    SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp 
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
                 ) SELECT instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
-        else:
-            cursor.execute("SELECT instance_id FROM caught_pokemon WHERE instance_id LIKE ? AND user_id = ?", (f"{tag_id}%", user_id))
+            """, (user_id, int(box_number))) as cursor:
+                target = await cursor.fetchone()  
             
-        target = cursor.fetchone()
-        
-        if not target:
-            conn.close()
-            return await ctx.send(f"❌ Could not find a specimen matching `{tag_id}` in your survey.")
+            if not target:
+                return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`.")
+                
+            actual_id = target[0]
             
-        actual_id = target[0]
-        
-        # 2. Update using the exact UUID
-        cursor.execute("UPDATE caught_pokemon SET nickname = ? WHERE instance_id = ?", (name, actual_id))
-        conn.commit()
-        conn.close()
+            # 3. Execute Update
+            await db.execute("UPDATE caught_pokemon SET nickname = ? WHERE instance_id = ?", (name, actual_id))
+            await db.commit()
         
         await ctx.send(f"🏷️ Specimen `{actual_id[:8]}` has been successfully re-designated as **{name}**.")
 
@@ -1018,169 +1445,138 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_not_in_trade()
     @checks.is_authorized()
-    async def release_pokemon(self, ctx, tag_id: str):
+    async def release_pokemon(self, ctx, box_number: str):
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 1. Resolve Target and Verify Ownership
-        if tag_id.isdigit() and len(tag_id) <= 6:
-            cursor.execute("""
+        if not box_number.isdigit():
+            return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!release 4`).")
+            
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("""
                 WITH Roster AS (
                     SELECT s.name, cp.level, cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
                     FROM caught_pokemon cp
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
                     WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
                 ) SELECT name, level, instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
-        else:
-            cursor.execute("""
-                SELECT s.name, cp.level, cp.instance_id 
-                FROM caught_pokemon cp 
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id 
-                WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-            """, (f"{tag_id}%", user_id))
+            """, (user_id, int(box_number))) as cursor:
+                pokemon = await cursor.fetchone()
             
-        pokemon = cursor.fetchone()
-        
-        if not pokemon:
-            await ctx.send(f"❌ Could not find a specimen matching `{tag_id}` in your survey.")
-            conn.close()
-            return
+            if not pokemon:
+                return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`.")
+                
+            name, level, actual_tag = pokemon
             
-        name, level, actual_tag = pokemon
-        
-        # 2. Safety Check A: Is this their Active Partner?
-        cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-        partner_data = cursor.fetchone()
-        
-        if partner_data and partner_data[0] == actual_tag:
-            await ctx.send("⚠️ You cannot release your Active Partner! Use `!partner` to assign a new lead researcher first.")
-            conn.close()
-            return
+            async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                partner_data = await cursor.fetchone()
+            
+            if partner_data and partner_data[0] == actual_tag:
+                return await ctx.send("⚠️ You cannot release your Active Partner! Use `!partner` to assign a new lead researcher first.")
 
-        # 3. Safety Check B: Is this specimen currently equipped to the Fieldwork Roster?
-        cursor.execute("SELECT slot FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, actual_tag))
-        party_data = cursor.fetchone()
-        
-        if party_data:
-            await ctx.send(f"🛡️ **Safety Lock:** You cannot release a specimen that is actively deployed in your fieldwork roster (Slot {party_data[0]}). Please remove it from your party first.")
-            conn.close()
-            return
+            async with db.execute("SELECT slot FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, actual_tag)) as cursor:
+                party_data = await cursor.fetchone()
+            
+            if party_data:
+                return await ctx.send(f"🛡️ **Safety Lock:** You cannot release a specimen that is actively deployed in your fieldwork roster (Slot {party_data[0]}). Please remove it from your party first.")
 
-        # 4. Calculate Grant Reward (Base 10 + 3 per Level)
-        reward = 10 + (level * 3)
-
-        # 5. Execute the Release
-        try:
-            # We must use BEGIN TRANSACTION to ensure the deletion and reward are linked
-            cursor.execute("BEGIN TRANSACTION")
-            
-            # Delete the specific row from the database
-            cursor.execute("DELETE FROM caught_pokemon WHERE instance_id = ?", (actual_tag,))
-            
-            # Award the tokens
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (reward, user_id))
-            
-            conn.commit()
-            
-            embed = discord.Embed(title="🌿 Wildlife Reintroduced", color=discord.Color.green())
-            embed.description = f"**{ctx.author.name}** successfully rehabilitated and released their **{name.capitalize()}** back into the wild."
-            embed.add_field(name="Conservation Grant Awarded", value=f"🪙 +{reward} Eco-Tokens")
-            embed.set_footer(text=f"Tag ID Deleted: {actual_tag[:8]}")
-            
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            conn.rollback() # If it fails, refund the Pokemon and abort the grant!
-            print(f"Release Error: {e}")
-            await ctx.send("❌ A critical database error occurred during the reintroduction process. The release has been safely aborted.")
-        finally:
-            conn.close()
+        # --- Trigger the Confirmation UI ---
+        view = ReleaseConfirmView(ctx, DB_FILE, pokemon, user_id)
+        embed = discord.Embed(
+            title="⚠️ Confirm Reintroduction", 
+            description=f"Are you sure you want to release **{name.capitalize()}** (Lv. {level})?\n\n*This action is permanent and cannot be undone.*",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed, view=view)
 
     @commands.command(name="settag", aliases=["label"])
     @checks.has_started()
     @checks.is_authorized()
-    async def set_custom_tag(self, ctx, tag_id: str, *, custom_tag: str):
+    async def set_custom_tag(self, ctx, box_number: str, *, custom_tag: str):
         user_id = str(ctx.author.id)
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
-        # Resolve Target (Box Number or UUID)
-        if tag_id.isdigit() and len(tag_id) <= 6:
-            cursor.execute("""
+        # 1. Strict Input Validation
+        if not box_number.isdigit():
+            return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!settag 4 Favorite`).")
+            
+        async with aiosqlite.connect(DB_FILE) as db:
+            # 2. Resolve Target
+            async with db.execute("""
                 WITH Roster AS (
-                    SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
-                    FROM caught_pokemon WHERE user_id = ?
+                    SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp 
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
                 ) SELECT instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
-        else:
-            cursor.execute("SELECT instance_id FROM caught_pokemon WHERE instance_id LIKE ? AND user_id = ?", (f"{tag_id}%", user_id))
+            """, (user_id, int(box_number))) as cursor:
+                target = await cursor.fetchone()
             
-        target = cursor.fetchone()
-        
-        if not target:
-            conn.close()
-            return await ctx.send(f"❌ Could not find a specimen matching `{tag_id}` in your survey.")
+            if not target:
+                return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`.")
+                
+            actual_id = target[0]
             
-        actual_id = target[0]
-        
-        cursor.execute("UPDATE caught_pokemon SET custom_tag = ? WHERE instance_id = ?", (custom_tag, actual_id))
-        
-        if cursor.rowcount > 0:
-            await ctx.send(f"📁 Specimen `{actual_id[:8]}` has been categorized under the tag: **[{custom_tag}]**.")
+            # 3. Execute Update
+            async with db.execute("UPDATE caught_pokemon SET custom_tag = ? WHERE instance_id = ?", (custom_tag, actual_id)) as cursor:
+                if cursor.rowcount > 0:
+                    await ctx.send(f"📁 Specimen `{actual_id[:8]}` has been categorized under the tag: **[{custom_tag}]**.")
             
-        conn.commit()
-        conn.close()
+            await db.commit()
 
-    @commands.command(name="partner", aliases=["buddy", "lead"])
+    @commands.command(name="partner", aliases=["select"])
     @checks.has_started()
     @checks.is_authorized()
     async def set_partner(self, ctx, tag_id: str):
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # Verify ownership and resolve target
-        if tag_id.isdigit() and len(tag_id) <= 6:
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+        async with aiosqlite.connect(DB_FILE) as db:
+
+            # Verify ownership and resolve target
+            if tag_id.isdigit() and len(tag_id) <= 6:
+                async with db.execute("""
+                    WITH Roster AS (
+                        SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ?
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    ) SELECT name, instance_id FROM Roster WHERE box_number = ?
+                """, (user_id, int(tag_id))) as cursor:
+                    pokemon = await cursor.fetchone()
+            else:
+                async with db.execute("""
+                    SELECT s.name, cp.instance_id
                     FROM caught_pokemon cp
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                ) SELECT name, instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
-        else:
-            cursor.execute("""
-                SELECT s.name, cp.instance_id
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-            """, (f"{tag_id}%", user_id))
-        
-        pokemon = cursor.fetchone()
-        
-        if not pokemon:
-            await ctx.send(f"❌ Could not find a specimen matching `{tag_id}` in your survey notebook.")
-            conn.close()
-            return
+                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
+                """, (f"{tag_id}%", user_id)) as cursor:
+                    pokemon = await cursor.fetchone()
             
-        name, actual_tag = pokemon
-        
-        try:
-            cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-            cursor.execute("UPDATE users SET active_partner = ? WHERE user_id = ?", (actual_tag, user_id))
-            conn.commit()
+            if not pokemon:
+                await ctx.send(f"❌ Could not find a specimen matching `{tag_id}` in your survey notebook.")
+                return
+                
+            name, actual_tag = pokemon
             
-            await ctx.send(f"❤️ You have chosen **{name.capitalize()}** (`{actual_tag[:8]}`) as your lead fieldwork partner!")
-        except Exception as e:
-            await ctx.send("❌ A database error occurred while setting your partner.")
-            print(f"Partner error: {e}")
-        finally:
-            conn.close()
+            # ==========================================
+            # 🚨 NEW: DEPLOYMENT LOCKOUT CHECK
+            # ==========================================
+            async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (actual_tag,)) as cursor:
+                if await cursor.fetchone():
+                    return await ctx.send(f"⚠️ You cannot equip **{name.capitalize()}** right now, they are currently deployed on a field mission!")
+            
+            try:
+                await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+                await db.execute("UPDATE users SET active_partner = ? WHERE user_id = ?", (actual_tag, user_id))
+                await db.commit()
+                
+                await ctx.send(f"❤️ You have chosen **{name.capitalize()}** (`{actual_tag[:8]}`) as your lead fieldwork partner!")
+            except Exception as e:
+                await ctx.send("❌ A database error occurred while setting your partner.")
+                print(f"Partner error: {e}")
 
     @commands.command(name="intervene", aliases=["respond"])
     @checks.has_started()
@@ -1189,95 +1585,102 @@ class Ecology(commands.Cog):
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 1. Check if the server is actually in crisis
-        cursor.execute("SELECT pollution_type, ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,))
-        server_data = cursor.fetchone()
-        
-        if not server_data or server_data[0] == 'none':
-            await ctx.send("🌍 The environment is currently stable! Keep an eye on the monitors for future hazards.")
-            conn.close()
-            return
+        async with aiosqlite.connect(DB_FILE) as db:
+
+            # 1. Check if the server is actually in crisis
+            async with db.execute("SELECT pollution_type, ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                server_data = await cursor.fetchone()
             
-        active_hazard = server_data[0]
-        current_score = server_data[1]
-        
-        # 2. Verify ownership and fetch the deployed Pokemon's types
-        if tag_id.isdigit() and len(tag_id) <= 6:
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.pokedex_id, cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+            if not server_data or server_data[0] == 'none':
+                await ctx.send("🌍 The environment is currently stable! Keep an eye on the monitors for future hazards.")
+                return
+                
+            active_hazard = server_data[0]
+            current_score = server_data[1]
+            
+            # 2. Verify ownership and fetch the deployed Pokemon's types
+            if tag_id.isdigit() and len(tag_id) <= 6:
+                async with db.execute("""
+                    WITH Roster AS (
+                        SELECT cp.pokedex_id, cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ?
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    )
+                    -- 🚨 ADDED r.instance_id HERE
+                    SELECT r.name, t.type_name, r.instance_id 
+                    FROM Roster r
+                    JOIN base_pokemon_types t ON r.pokedex_id = t.pokedex_id
+                    WHERE r.box_number = ?
+                """, (user_id, int(tag_id))) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                async with db.execute("""
+                    -- 🚨 ADDED cp.instance_id HERE
+                    SELECT s.name, t.type_name, cp.instance_id 
                     FROM caught_pokemon cp
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                )
-                SELECT r.name, t.type_name
-                FROM Roster r
-                JOIN base_pokemon_types t ON r.pokedex_id = t.pokedex_id
-                WHERE r.box_number = ?
-            """, (user_id, int(tag_id)))
-        else:
-            cursor.execute("""
-                SELECT s.name, t.type_name
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-            """, (f"{tag_id}%", user_id))
-        
-        rows = cursor.fetchall()
-        if not rows:
-            await ctx.send("❌ You don't have that specimen in your survey notebook.")
-            conn.close()
-            return
+                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
+                """, (f"{tag_id}%", user_id)) as cursor:
+                    rows = await cursor.fetchall()
+                    
+            if not rows:
+                await ctx.send("❌ You don't have that specimen in your survey notebook.")
+                return
+                
+            poke_name = rows[0][0]
+            actual_id = rows[0][2] # 🚨 Extract the newly added Instance ID!
+            poke_types = [row[1] for row in rows]
             
-        poke_name = rows[0][0]
-        poke_types = [row[1] for row in rows]
-        
-        # 3. Type-Match Logic
-        solutions = {
-            'oil_spill': ['poison', 'water', 'grass'],
-            'toxic_smog': ['flying', 'electric', 'steel', 'poison'],
-            'wildfire': ['water', 'ground', 'rock'],
-            'spatial_rift': ['psychic', 'ghost', 'dark', 'fairy']
-        }
-        
-        valid_types = solutions.get(active_hazard, [])
-        is_effective = any(pt in valid_types for pt in poke_types)
-        
-        if not is_effective:
-            await ctx.send(f"⚠️ **Ineffective!** Your {poke_name.capitalize()} isn't biologically equipped to handle a **{active_hazard.replace('_', ' ').title()}**! You need a type like {', '.join(valid_types).title()}.")
-            conn.close()
-            return
+            # ==========================================
+            # 🚨 NEW: DEPLOYMENT LOCKOUT CHECK
+            # ==========================================
+            async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (actual_id,)) as cursor:
+                if await cursor.fetchone():
+                    return await ctx.send(f"⚠️ You cannot deploy **{poke_name.capitalize()}** to intervene right now, they are currently on a field mission!")
+            
+            # 3. Type-Match Logic
+            solutions = {
+                'oil_spill': ['poison', 'water', 'grass'],
+                'toxic_smog': ['flying', 'electric', 'steel', 'poison'],
+                'wildfire': ['water', 'ground', 'rock'],
+                'spatial_rift': ['psychic', 'ghost', 'dark', 'fairy']
+            }
+            
+            valid_types = solutions.get(active_hazard, [])
+            is_effective = any(pt in valid_types for pt in poke_types)
+            
+            if not is_effective:
+                await ctx.send(f"⚠️ **Ineffective!** Your {poke_name.capitalize()} isn't biologically equipped to handle a **{active_hazard.replace('_', ' ').title()}**! You need a type like {', '.join(valid_types).title()}.")
+                return
 
-        # 4. Success! Clear the hazard and reward the player
-        new_score = min(100, current_score + 20)
-        tokens_earned = 50 
-        
-        try:
-            cursor.execute("UPDATE servers SET pollution_type = 'none', ecosystem_score = ? WHERE guild_id = ?", (new_score, guild_id))
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
-            cursor.execute("""
-                INSERT INTO guild_members (user_id, guild_id, contribution_points)
-                VALUES (?, ?, 10)
-                ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 10;
-            """, (user_id, guild_id))
+            # 4. Success! Clear the hazard and reward the player
+            new_score = min(100, current_score + 20)
+            tokens_earned = 50 
             
-            conn.commit()
-            
-            embed = discord.Embed(title="🚨 Crisis Averted!", color=discord.Color.gold())
-            embed.description = f"**{ctx.author.name}** deployed their {poke_name.capitalize()}!\n\nUsing its typing, it completely neutralized the **{active_hazard.replace('_', ' ').title()}**!"
-            embed.add_field(name="Ecosystem Recovery", value=f"⬆️ +20 Points (Now {new_score}/100)", inline=True)
-            embed.add_field(name="Hero's Grant", value=f"🪙 +{tokens_earned} Tokens\n⭐ +10 Contribution", inline=True)
-            
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            print(f"Intervention error: {e}")
-        finally:
-            conn.close()
+            try:
+                await db.execute("UPDATE servers SET pollution_type = 'none', ecosystem_score = ? WHERE guild_id = ?", (new_score, guild_id))
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
+                await db.execute("""
+                    INSERT INTO guild_members (user_id, guild_id, contribution_points)
+                    VALUES (?, ?, 10)
+                    ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 10;
+                """, (user_id, guild_id))
+                
+                await db.commit()
+                
+                embed = discord.Embed(title="🚨 Crisis Averted!", color=discord.Color.gold())
+                embed.description = f"**{ctx.author.name}** deployed their {poke_name.capitalize()}!\n\nUsing its typing, it completely neutralized the **{active_hazard.replace('_', ' ').title()}**!"
+                embed.add_field(name="Ecosystem Recovery", value=f"⬆️ +20 Points (Now {new_score}/100)", inline=True)
+                embed.add_field(name="Hero's Grant", value=f"🪙 +{tokens_earned} Tokens\n⭐ +10 Contribution", inline=True)
+                
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                print(f"Intervention error: {e}")
 
     @commands.command(name="use")
     @checks.has_started()
@@ -1289,69 +1692,66 @@ class Ecology(commands.Cog):
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        try:
-            # 1. Global Inventory Check (Saves us from writing this for every single item!)
-            cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
-            inv_data = cursor.fetchone()
-            
-            if not inv_data or inv_data[0] < 1:
-                return await ctx.send(f"🎒 You don't have any `{item_input.title()}` in your field pack!")
-
-            # ==========================================
-            # 2. ITEM ROUTING LOGIC (The Dispatcher)
-            # ==========================================
-            
-            if formatted_item == "purifier":
-                # Check if the server actually needs purifying
-                cursor.execute("SELECT pollution_type, ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,))
-                server_data = cursor.fetchone()
+        async with aiosqlite.connect(DB_FILE) as db:
+            try:
+                # 1. Global Inventory Check (Saves us from writing this for every single item!)
+                async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item)) as cursor:
+                    inv_data = await cursor.fetchone()
                 
-                if not server_data or server_data[0] == 'none':
-                    return await ctx.send("🌍 This environment is already clear of major hazards! Save your Purifier for an emergency.")
+                if not inv_data or inv_data[0] < 1:
+                    return await ctx.send(f"🎒 You don't have any `{item_input.title()}` in your field pack!")
+
+                # ==========================================
+                # 2. ITEM ROUTING LOGIC (The Dispatcher)
+                # ==========================================
+                
+                if formatted_item == "purifier":
+                    # Check if the server actually needs purifying
+                    async with db.execute("SELECT pollution_type, ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                        server_data = await cursor.fetchone()
                     
-                pollution = server_data[0]
-                current_score = server_data[1]
-                
-                # Deduct from inventory (Using formatted_item instead of hardcoding)
-                cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
-                
-                # Clear pollution and boost score by 15 (capping at 100)
-                new_score = min(100, current_score + 15)
-                cursor.execute("""
-                    UPDATE servers 
-                    SET pollution_type = 'none', ecosystem_score = ?, last_maintained = CURRENT_TIMESTAMP 
-                    WHERE guild_id = ?
-                """, (new_score, guild_id))
-                
-                # Reward the player
-                cursor.execute("""
-                    INSERT INTO guild_members (user_id, guild_id, contribution_points)
-                    VALUES (?, ?, 5)
-                    ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 5;
-                """, (user_id, guild_id))
-                
-                conn.commit()
-                
-                embed = discord.Embed(title="🫧 Environmental Hazard Cleared!", color=discord.Color.blue())
-                embed.description = f"**{ctx.author.name}** deployed a Purifier and successfully eradicated the **{pollution.replace('_', ' ').title()}**!"
-                embed.add_field(name="Ecosystem Health", value=f"⬆️ +15 Points (Now {new_score}/100)", inline=True)
-                embed.add_field(name="Community Impact", value="⭐ +5 Contribution Points", inline=True)
-                
-                await ctx.send(embed=embed)
+                    if not server_data or server_data[0] == 'none':
+                        return await ctx.send("🌍 This environment is already clear of major hazards! Save your Purifier for an emergency.")
+                        
+                    pollution = server_data[0]
+                    current_score = server_data[1]
+                    
+                    # Deduct from inventory (Using formatted_item instead of hardcoding)
+                    await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
+                    
+                    # Clear pollution and boost score by 15 (capping at 100)
+                    new_score = min(100, current_score + 15)
+                    await db.execute("""
+                        UPDATE servers 
+                        SET pollution_type = 'none', ecosystem_score = ?, last_maintained = CURRENT_TIMESTAMP 
+                        WHERE guild_id = ?
+                    """, (new_score, guild_id))
+                    
+                    # Reward the player
+                    await db.execute("""
+                        INSERT INTO guild_members (user_id, guild_id, contribution_points)
+                        VALUES (?, ?, 5)
+                        ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 5;
+                    """, (user_id, guild_id))
+                    
+                    await db.commit()
+                    
+                    embed = discord.Embed(title="🫧 Environmental Hazard Cleared!", color=discord.Color.blue())
+                    embed.description = f"**{ctx.author.name}** deployed a Purifier and successfully eradicated the **{pollution.replace('_', ' ').title()}**!"
+                    embed.add_field(name="Ecosystem Health", value=f"⬆️ +15 Points (Now {new_score}/100)", inline=True)
+                    embed.add_field(name="Community Impact", value="⭐ +5 Contribution Points", inline=True)
+                    
+                    await ctx.send(embed=embed)
 
-            # --- INVALID DEPLOYMENT ---
-            else:
-                return await ctx.send(f"⚠️ `{item_input.title()}` is a passive item and cannot be deployed directly from the backpack.")
+                # --- INVALID DEPLOYMENT ---
+                else:
+                    return await ctx.send(f"⚠️ `{item_input.title()}` is a passive item and cannot be deployed directly from the backpack.")
 
-        except Exception as e:
-            conn.rollback()
-            print(f"Error deploying item: {e}")
-            await ctx.send("An error occurred while deploying the item. No items were consumed.")
-        finally:
-            conn.close()
+            except Exception as e:
+                if db.in_transaction:
+                    await db.rollback()
+                print(f"Error deploying item: {e}")
+                await ctx.send("An error occurred while deploying the item. No items were consumed.")
 
     # --- Setup Habitat Channel ---
     @commands.command(name="sethabitat")
@@ -1362,12 +1762,10 @@ class Ecology(commands.Cog):
         guild_id = str(ctx.guild.id)
         channel_id = str(ctx.channel.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO servers (guild_id) VALUES (?)", (guild_id,))
-        cursor.execute("UPDATE servers SET spawn_channel_id = ? WHERE guild_id = ?", (channel_id, guild_id))
-        conn.commit()
-        conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("INSERT OR IGNORE INTO servers (guild_id) VALUES (?)", (guild_id,))
+            await db.execute("UPDATE servers SET spawn_channel_id = ? WHERE guild_id = ?", (channel_id, guild_id))
+            await db.commit()
         
         await ctx.send(f"🌿 Habitat established! Wild Pokémon will now naturally migrate to {ctx.channel.mention} over time.")
 
@@ -1396,188 +1794,160 @@ class Ecology(commands.Cog):
 
 
     @commands.command(name="plant", aliases=["sow"])
-    @commands.cooldown(1, 3600, commands.BucketType.user)
+    @commands.cooldown(1, 300, commands.BucketType.user)
     @checks.has_started()
     @checks.is_authorized()
     async def plant_flora(self, ctx):
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,))
-        server_data = cursor.fetchone()
-        score = server_data[0] if server_data else 50
-            
-        if score >= 100:
-            ctx.command.reset_cooldown(ctx)
-            await ctx.send("🌍 The ecosystem is already fully saturated with flora! Great job.")
-            conn.close()
-            return
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("SELECT ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                server_data = await cursor.fetchone()
+            score = server_data[0] if server_data else 50
+                
+            if score >= 100:
+                ctx.command.reset_cooldown(ctx)
+                await ctx.send("🌍 The ecosystem is already fully saturated with flora! Great job.")
+                return
 
-        # Planting restores 1 to 3 health points, but gives a higher chance of rare spawns later
-        health_restored = random.randint(1, 3)
-        new_score = min(100, score + health_restored) 
-        
-        # Planting yields slightly fewer tokens than cleaning (5 to 15)
-        tokens_earned = random.randint(5, 15)
-        
-        try:
-            cursor.execute("UPDATE servers SET ecosystem_score = ? WHERE guild_id = ?", (new_score, guild_id))
-            cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
+            # Planting restores 1 to 3 health points, but gives a higher chance of rare spawns later
+            health_restored = random.randint(1, 3)
+            new_score = min(100, score + health_restored) 
             
-            cursor.execute("""
-                INSERT INTO guild_members (user_id, guild_id, contribution_points)
-                VALUES (?, ?, 1)
-                ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 1;
-            """, (user_id, guild_id))
+            # Planting yields slightly fewer tokens than cleaning (5 to 15)
+            tokens_earned = random.randint(5, 15)
             
-            conn.commit()
-            
-            embed = discord.Embed(title="🌱 Flora Restoration Logged", color=discord.Color.dark_green())
-            embed.description = f"**{ctx.author.name}** planted native species to stabilize the soil and increase biodiversity!"
-            embed.add_field(name="Ecosystem Health", value=f"⬆️ +{health_restored} (Now {new_score}/100)", inline=True)
-            embed.add_field(name="Field Pay", value=f"🪙 +{tokens_earned} Eco-Tokens", inline=True)
-            
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            print(e)
-        finally:
-            conn.close()
+            try:
+                await db.execute("UPDATE servers SET ecosystem_score = ? WHERE guild_id = ?", (new_score, guild_id))
+                await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
+                
+                await db.execute("""
+                    INSERT INTO guild_members (user_id, guild_id, contribution_points)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 1;
+                """, (user_id, guild_id))
+                
+                await db.commit()
+                
+                embed = discord.Embed(title="🌱 Flora Restoration Logged", color=discord.Color.dark_green())
+                embed.description = f"**{ctx.author.name}** planted native species to stabilize the soil and increase biodiversity!"
+                embed.add_field(name="Ecosystem Health", value=f"⬆️ +{health_restored} (Now {new_score}/100)", inline=True)
+                embed.add_field(name="Field Pay", value=f"🪙 +{tokens_earned} Eco-Tokens", inline=True)
+                
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                print(e)
 
     @commands.command(name="clean", aliases=["remediate"])
-    @commands.cooldown(1, 3600, commands.BucketType.user) # 1 use per 3600 seconds (1 hour) per user
+    @commands.cooldown(1, 300, commands.BucketType.user)
     @checks.has_started()
     @checks.is_authorized()
     async def clean_habitat(self, ctx):
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 1. Check current server status
-        cursor.execute("SELECT ecosystem_score, pollution_type FROM servers WHERE guild_id = ?", (guild_id,))
-        server_data = cursor.fetchone()
-        
-        if not server_data:
-            # Initialize if not present
-            cursor.execute("INSERT INTO servers (guild_id, ecosystem_score) VALUES (?, 50)", (guild_id,))
-            score = 50
-            pollution = 'none'
-        else:
-            score, pollution = server_data
+        async with aiosqlite.connect(DB_FILE) as db:
+            # 1. Check current server status
+            async with db.execute("SELECT ecosystem_score, pollution_type FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                server_data = await cursor.fetchone()
             
-        if score >= 100:
-            # Reset their cooldown so they aren't punished for trying to clean a perfect server
-            ctx.command.reset_cooldown(ctx)
-            await ctx.send("🌍 The ecosystem here is already at 100% pristine health! Try `!plant` to maintain it, or visit another server.")
-            conn.close()
-            return
+            if not server_data:
+                await db.execute("INSERT INTO servers (guild_id, ecosystem_score) VALUES (?, 50)", (guild_id,))
+                score = 50
+                pollution = 'none'
+            else:
+                score, pollution = server_data
+                
+            if score >= 100:
+                ctx.command.reset_cooldown(ctx)
+                await ctx.send("🌍 The ecosystem here is already at 100% pristine health! Try `!plant` to maintain it, or visit another server.")
+                return
 
-        # 2. Calculate Restoration and Rewards
-        # Cleaning restores 2 to 5 health points
-        health_restored = random.randint(2, 5)
-        new_score = min(100, score + health_restored) 
-        
-        # Players earn 10 to 20 Eco-Tokens for their hard work
-        tokens_earned = random.randint(10, 20)
-        
-        # 3. Update the Database
-        try:
-            # Update Server Health
-            cursor.execute("UPDATE servers SET ecosystem_score = ? WHERE guild_id = ?", (new_score, guild_id))
+            # 2. Calculate Restoration and Standard Rewards
+            health_restored = random.randint(2, 5)
+            new_score = min(100, score + health_restored) 
+            tokens_earned = random.randint(10, 20)
             
-            # Give Tokens to User
-            cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
+            # 3. Calculate XP & Rare Item Drops
+            xp_gained = random.randint(50, 150) # Generous XP for helping out!
+            found_item = None
+            active_partner_id = None
+            partner_name = "Unknown"
             
-            # Give Contribution Points
-            cursor.execute("""
-                INSERT INTO guild_members (user_id, guild_id, contribution_points)
-                VALUES (?, ?, 1)
-                ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 1;
-            """, (user_id, guild_id))
+            # Query the active partner
+            async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                partner_data = await cursor.fetchone()
             
-            conn.commit()
-            
-            # 4. Send the Report
-            embed = discord.Embed(title="🧹 Habitat Remediation Successful", color=discord.Color.teal())
-            embed.description = f"**{ctx.author.name}** spent an hour cleaning up the local environment!"
-            embed.add_field(name="Ecosystem Health", value=f"⬆️ +{health_restored} (Now {new_score}/100)", inline=True)
-            embed.add_field(name="Field Pay", value=f"🪙 +{tokens_earned} Eco-Tokens", inline=True)
-            
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            await ctx.send("Database error during the cleaning process.")
-            print(e)
-        finally:
-            conn.close()
+            if partner_data and partner_data[0]:
+                active_partner_id = partner_data[0]
 
-    @commands.command(name="release", aliases=["reintroduce", "free"])
-    @checks.has_started()
-    @checks.is_authorized()
-    @checks.is_not_in_trade()
-    async def release_pokemon(self, ctx, tag_id: str):
-        user_id = str(ctx.author.id)
-        
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # 1. Verify ownership
-        cursor.execute("""
-            SELECT s.name, cp.level, cp.instance_id 
-            FROM caught_pokemon cp 
-            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id 
-            WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-        """, (f"{tag_id}%", user_id))
-        
-        pokemon = cursor.fetchone()
-        
-        if not pokemon:
-            await ctx.send(f"Could not find a specimen with Tag `{tag_id}` in your survey.")
-            conn.close()
-            return
-            
-        name, level, actual_tag = pokemon
-        
-        # 2. Safety Check: Is this their Active Partner?
-        cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-        partner_data = cursor.fetchone()
-        
-        if partner_data and partner_data[0] == actual_tag:
-            await ctx.send("⚠️ You cannot release your Active Partner! Use `!partner` to assign a new lead researcher first.")
-            conn.close()
-            return
+                # ==========================================
+                # 🚨 NEW: DEPLOYMENT LOCKOUT FAIL-SAFE
+                # ==========================================
+                async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (active_partner_id,)) as cursor:
+                    if await cursor.fetchone():
+                        return await ctx.send("⚠️ Your Active Partner is currently deployed on a field mission! Recall them with `!return` or equip a different specimen first.")
+                    
+                # Grab the partner's name for the UI
+                async with db.execute("SELECT s.name FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id WHERE cp.instance_id = ?", (active_partner_id,)) as cursor:
+                    name_data = await cursor.fetchone()
+                    if name_data:
+                        partner_name = name_data[0].capitalize()
 
-        # 3. Calculate Grant Reward (Base 10 + 3 per Level)
-        reward = 10 + (level * 3)
+            # 5% chance to find something incredibly rare in the pollution
+            if random.random() <= 0.05:
+                rare_pool = ['rare-candy', 'reveal-glass', 'dna-splicers']
+                found_item = random.choice(rare_pool)
+            
+            # 4. Update the Database
+            try:
+                await db.execute("UPDATE servers SET ecosystem_score = ? WHERE guild_id = ?", (new_score, guild_id))
+                await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
+                
+                await db.execute("""
+                    INSERT INTO guild_members (user_id, guild_id, contribution_points)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 1;
+                """, (user_id, guild_id))
+                
+                # Apply the XP!
+                if active_partner_id:
+                    await db.execute("UPDATE caught_pokemon SET experience = experience + ? WHERE instance_id = ?", (xp_gained, active_partner_id))
+                    
+                # Apply the Item!
+                if found_item:
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity) 
+                        VALUES (?, ?, 1) 
+                        ON CONFLICT(user_id, item_name) 
+                        DO UPDATE SET quantity = quantity + 1
+                    """, (user_id, found_item))
 
-        # 4. Execute the Release
-        try:
-            # Delete the specific row from the database
-            cursor.execute("DELETE FROM caught_pokemon WHERE instance_id = ?", (actual_tag,))
-            
-            # Award the tokens
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (reward, user_id))
-            conn.commit()
-            
-            embed = discord.Embed(title="🌿 Wildlife Reintroduced", color=discord.Color.green())
-            embed.description = f"**{ctx.author.name}** successfully rehabilitated and released their **{name.capitalize()}** back into the wild."
-            embed.add_field(name="Conservation Grant Awarded", value=f"🪙 +{reward} Eco-Tokens")
-            embed.set_footer(text=f"Tag ID Deleted: {actual_tag[:8]}")
-            
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            print(f"Release Error: {e}")
-            await ctx.send("A database error occurred during the reintroduction process.")
-        finally:
-            conn.close()
+                await db.commit()
+                
+                # 5. Send the Report
+                embed = discord.Embed(title="🧹 Habitat Remediation Successful", color=discord.Color.teal())
+                embed.description = f"**{ctx.author.name}** spent an hour cleaning up the local environment!"
+                embed.add_field(name="Ecosystem Health", value=f"⬆️ +{health_restored} (Now {new_score}/100)", inline=True)
+                embed.add_field(name="Field Pay", value=f"🪙 +{tokens_earned} Eco-Tokens", inline=True)
+                
+                # Add the XP line if they had a partner
+                if active_partner_id:
+                    embed.add_field(name="Training", value=f"✨ {partner_name} gained {xp_gained} XP!", inline=False)
+                    
+                # Add the Rare Item line
+                if found_item:
+                    embed.add_field(name="⚠️ RARE DISCOVERY", value=f"You unearthed a `{found_item.replace('-', ' ').title()}` from the debris!", inline=False)
+                
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                await ctx.send("Database error during the cleaning process.")
+                print(e)
 
     @commands.command(name="abandon", aliases=["drop", "discard", "archive"])
     @checks.has_started()
@@ -1586,46 +1956,42 @@ class Ecology(commands.Cog):
         """Discards an active ecological directive from your field notebook."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        try:
-            # 1. Verify the directive exists and belongs to this specific researcher
-            cursor.execute("""
-                SELECT objective_type, target_variable 
-                FROM field_directives 
-                WHERE directive_id = ? AND user_id = ? AND is_completed = 0
-            """, (directive_id, user_id))
-            
-            target_quest = cursor.fetchone()
-            
-            if not target_quest:
-                conn.close()
-                return await ctx.send(f"⚠️ **Directive #{directive_id}** not found. Ensure you are providing a valid, active ID from your `!survey` ledger.")
-            
-            # 2. Execute the precise deletion
-            cursor.execute("DELETE FROM field_directives WHERE directive_id = ? AND user_id = ?", (directive_id, user_id))
-            conn.commit()
-            
-            obj_type, target_var = target_quest
-            formatted_target = target_var.capitalize().replace('-', ' ')
-            
-            embed = discord.Embed(
-                title="🗑️ Directive Archived",
-                description=f"You have successfully abandoned **Directive #{directive_id}** ({formatted_target}).\n\nThe unviable tracking data has been cleared from your field notebook.",
-                color=discord.Color.dark_gray()
-            )
-            await ctx.send(embed=embed)
-            
-        except ValueError:
-            await ctx.send("❌ Please provide a valid numerical ID. Example: `!abandon 4`")
-        except Exception as e:
-            conn.rollback()
-            print(f"Abandon error: {e}")
-            await ctx.send("❌ A critical database error occurred while trying to drop the directive.")
-        finally:
-            conn.close()
+        async with aiosqlite.connect(DB_FILE) as db:
 
+            try:
+                # 1. Verify the directive exists and belongs to this specific researcher
+                async with db.execute("""
+                    SELECT objective_type, target_variable 
+                    FROM field_directives 
+                    WHERE directive_id = ? AND user_id = ? AND is_completed = 0
+                """, (directive_id, user_id)) as cursor:
+                    target_quest = await cursor.fetchone()
+                
+                if not target_quest:
+                    return await ctx.send(f"⚠️ **Directive #{directive_id}** not found. Ensure you are providing a valid, active ID from your `!survey` ledger.")
+                
+                # 2. Execute the precise deletion
+                await db.execute("DELETE FROM field_directives WHERE directive_id = ? AND user_id = ?", (directive_id, user_id))
+                await db.commit()
+                
+                obj_type, target_var = target_quest
+                formatted_target = target_var.capitalize().replace('-', ' ')
+                
+                embed = discord.Embed(
+                    title="🗑️ Directive Archived",
+                    description=f"You have successfully abandoned **Directive #{directive_id}** ({formatted_target}).\n\nThe unviable tracking data has been cleared from your field notebook.",
+                    color=discord.Color.dark_gray()
+                )
+                await ctx.send(embed=embed)
+                
+            except ValueError:
+                await ctx.send("❌ Please provide a valid numerical ID. Example: `!abandon 4`")
+            except Exception as e:
+                if db.in_transaction:
+                    await db.rollback()
+                print(f"Abandon error: {e}")
+                await ctx.send("❌ A critical database error occurred while trying to drop the directive.")
+                
     @commands.command(name="survey", aliases=["quests", "directives", "tasks"])
     @checks.has_started()
     @checks.is_authorized()
@@ -1633,87 +1999,184 @@ class Ecology(commands.Cog):
         """Displays your active ecological field directives and progress."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_FILE) as db:
         
-        try:
-            # Fetch all active directives
-            cursor.execute("""
-                SELECT directive_id, objective_type, target_variable, required_amount, 
-                       current_progress, reward_type, reward_payload
-                FROM field_directives
-                WHERE user_id = ? AND is_completed = 0
-            """, (user_id,))
-            
-            directives = cursor.fetchall()
-            
-            if not directives:
-                return await ctx.send("📋 **Field Notebook Empty:** You have no active ecological directives at this time. Explore the ecosystem to find encrypted data!")
+            try:
+                # Fetch all active directives
+                async with db.execute("""
+                    SELECT directive_id, objective_type, target_variable, required_amount, 
+                        current_progress, reward_type, reward_payload
+                    FROM field_directives
+                    WHERE user_id = ? AND is_completed = 0
+                """, (user_id,)) as cursor:
+                    directives = await cursor.fetchall()
                 
-            # Launch the Paginator!
-            view = SurveyPaginator(user_id, directives)
-            embed = await view.generate_embed()
-            
-            await ctx.send(embed=embed, view=view)
-            
-        except Exception as e:
-            print(f"Survey UI Error: {e}")
-            await ctx.send("❌ Error accessing the laboratory database.")
-        finally:
-            conn.close()
+                if not directives:
+                    return await ctx.send("📋 **Field Notebook Empty:** You have no active ecological directives at this time. Explore the ecosystem to find encrypted data!")
+                    
+                # Launch the Paginator!
+                view = SurveyPaginator(user_id, directives)
+                embed = await view.generate_embed()
+                
+                await ctx.send(embed=embed, view=view)
+                
+            except Exception as e:
+                print(f"Survey UI Error: {e}")
+                await ctx.send("❌ Error accessing the laboratory database.")
 
-    @commands.command(name="inventory", aliases=["inv", "box"])
+    def get_daily_missions(self):
+        """Generates a consistent daily list of available missions based on the calendar date."""
+        # Create a unique string for today (e.g., "2026-04-04")
+        today_str = datetime.date.today().isoformat()
+        
+        # Create an isolated random generator so we don't mess with the bot's normal RNG!
+        daily_rng = random.Random(today_str) 
+        
+        # Separate our master dictionary into pools
+        exp_pool = [k for k, v in FIELD_MISSIONS.items() if v["category"] == "exp"]
+        ev_pool = [k for k, v in FIELD_MISSIONS.items() if v["category"] == "ev"]
+        
+        # Pick 2 random EXP missions and 3 random EV missions for today's board
+        todays_exp = daily_rng.sample(exp_pool, 2)
+        todays_ev = daily_rng.sample(ev_pool, 3)
+        
+        return todays_exp + todays_ev # Returns a list of job IDs like ['reef', 'power', 'hp', 'speed', 'attack']
+
+    @commands.command(name="jobs", aliases=["missions", "board"])
     @checks.has_started()
     @checks.is_authorized()
-    async def inventory(self, ctx, sort_by: str = "recent"):
+    async def view_mission_board(self, ctx):
+        """Displays today's rotating Field Missions and PokéJobs."""
+        
+        todays_active_ids = self.get_daily_missions()
+        
+        embed = discord.Embed(
+            title="📋 Daily Fieldwork Board",
+            description="Deploy your specimens using `!deploy <job_id> <box_numbers>`.\nExample: `!deploy reef 4, 7, 12`\n\n*Missions rotate every day at midnight!*",
+            color=discord.Color.gold()
+        )
+        
+        exp_text = ""
+        ev_text = ""
+        
+        # Only loop through the ones chosen for today!
+        for job_id in todays_active_ids:
+            data = FIELD_MISSIONS[job_id]
+            
+            if data["category"] == "exp":
+                exp_text += f"**ID:** `{job_id}` — {data['name']}\n"
+                exp_text += f"└ *{data['desc']}*\n"
+                exp_text += f"└ 💡 **Advantage:** {data['preferred_type'].title()} types earn +20% XP!\n\n"
+            elif data["category"] == "ev":
+                stat_name = data["target_ev"].replace("ev_", "").upper()
+                ev_text += f"**ID:** `{job_id}` — {data['name']}\n"
+                ev_text += f"└ 🏋️ **Yield:** +{data['ev_hr']} {stat_name} EVs / hour\n\n"
+                
+        embed.add_field(name="🌍 Ecological Surveys (XP Gain)", value=exp_text if exp_text else "None available.", inline=False)
+        embed.add_field(name="💪 Intensive Training (EV Gain)", value=ev_text if ev_text else "None available.", inline=False)
+        
+        embed.set_footer(text="Missions also yield rare items like Evolution Stones and Special Balls!")
+        
+        await ctx.send(embed=embed)
+
+    @commands.command(name="inventory", aliases=["inv", "find pokemon", "box", "pc"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def inventory(self, ctx, *, search_query: str = ""):
         user_id = str(ctx.author.id)
-        sort_by = sort_by.lower()
-
-        # --- 1. Dynamic Sorting Logic ---
-        if sort_by in ["iv", "ivs", "stats"]:
-            order_clause = "ORDER BY (cp.iv_hp + cp.iv_attack + cp.iv_defense + cp.iv_sp_atk + cp.iv_sp_def + cp.iv_speed) DESC"
-        elif sort_by in ["name", "nickname", "az"]:
-            order_clause = "ORDER BY COALESCE(cp.nickname, s.name) ASC"
-        elif sort_by in ["tag", "label", "folder"]:
-            order_clause = "ORDER BY cp.custom_tag DESC, cp.rowid DESC"
-        elif sort_by in ["asc", "ascending"]:
-            order_clause = "ORDER BY cp.rowid ASC"
-        else:
-            order_clause = "ORDER BY cp.rowid DESC"
-
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
-        cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,))
-        user_data = cursor.fetchone()
-        tokens = user_data[0] if user_data else 0
-
-        # --- 2. The Updated Query ---
-        # We inject the ROW_NUMBER() function at the very end of the SELECT statement!
-        query = f"""
-            SELECT 
-                s.name, cp.level, cp.is_shiny, cp.instance_id, 
-                cp.nickname, cp.custom_tag,
-                cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-            FROM caught_pokemon cp
-            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-            WHERE cp.user_id = ?
-            {order_clause}
-        """
-        cursor.execute(query, (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        # 1. Base CTE Parameters (This ensures Box Numbers are mapped correctly!)
+        cte_params = [user_id]
         
+        # 2. Dynamic Outer Filters
+        outer_where_clauses = ["1=1"] # Default to true so we can easily append with AND
+        outer_params = []
+        order_clause = "ORDER BY cp.box_number ASC"
+        
+        # --- The Smart Parser ---
+        if search_query:
+            args = search_query.lower().split()
+            for arg in args:
+                # 🏷️ TAG FILTER
+                if arg.startswith("tag:") or arg.startswith("label:"):
+                    val = arg.split(":")[1]
+                    outer_where_clauses.append("LOWER(cp.custom_tag) = ?")
+                    outer_params.append(val)
+                    
+                # 💧 TYPE FILTER 
+                elif arg.startswith("type:"):
+                    val = arg.split(":")[1]
+                    outer_where_clauses.append("EXISTS (SELECT 1 FROM base_pokemon_types t WHERE t.pokedex_id = cp.pokedex_id AND LOWER(t.type_name) = ?)")
+                    outer_params.append(val)
+                    
+                # ✨ SHINY FILTER
+                elif arg in ["shiny", "is:shiny"]:
+                    outer_where_clauses.append("cp.is_shiny = 1")
+                    
+                # 🔀 SORTING
+                elif arg.startswith("sort:"):
+                    val = arg.split(":")[1]
+                    if val in ["iv", "ivs", "stats"]:
+                        order_clause = "ORDER BY (cp.iv_hp + cp.iv_attack + cp.iv_defense + cp.iv_sp_atk + cp.iv_sp_def + cp.iv_speed) DESC"
+                    elif val in ["name", "az"]:
+                        order_clause = "ORDER BY COALESCE(cp.nickname, cp.name) ASC"
+                    elif val in ["tag", "label"]:
+                        order_clause = "ORDER BY cp.custom_tag DESC, cp.box_number DESC"
+                    elif val in ["desc", "new"]:
+                        order_clause = "ORDER BY cp.box_number DESC"
+                        
+                # 🔍 NAME SEARCH (Fixed the alias crash!)
+                elif ":" not in arg:
+                    outer_where_clauses.append("(LOWER(cp.name) LIKE ? OR LOWER(cp.nickname) LIKE ?)")
+                    outer_params.extend([f"%{arg}%", f"%{arg}%"])
+
+        outer_where_string = " AND ".join(outer_where_clauses)
+        final_params = cte_params + outer_params # Combine CTE params with the Outer params
+
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    user_data = await cursor.fetchone()
+                tokens = user_data[0] if user_data else 0
+
+                # --- The Anchored Query ---
+                query = f"""
+                    WITH AnchoredRoster AS (
+                        SELECT 
+                            s.name, cp.level, cp.is_shiny, cp.instance_id, 
+                            cp.nickname, cp.custom_tag, cp.pokedex_id, cp.user_id,
+                            cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                            ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ? 
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    )
+                    SELECT 
+                        cp.name, cp.level, cp.is_shiny, cp.instance_id, cp.nickname, cp.custom_tag,
+                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, cp.box_number
+                    FROM AnchoredRoster cp
+                    WHERE {outer_where_string}
+                    {order_clause}
+                """
+                
+                async with db.execute(query, final_params) as cursor:
+                    rows = await cursor.fetchall()
+                    
+        except Exception as e:
+            print(f"🚨 SQL ERROR IN PC COMMAND: {e}")
+            return await ctx.send("❌ A database error occurred while filtering your PC. Please check your search terms.")
+            
+        # --- Formatting the Output ---
         if not rows:
-            return await ctx.send("🎒 Your survey notebook is completely empty!")
+            return await ctx.send("🎒 No specimens match your search filters!")
         
-        # --- 3. Formatting the Output ---
         lines = []
         for row in rows:
             species_name, level, is_shiny, tag_id, nickname, custom_tag = row[0:6]
             iv_tuple = row[6:12]
-            box_number = row[12] # The newly injected chronological ID!
+            box_number = row[12] 
             
             iv_total = sum(iv_tuple)
             iv_percentage = int((iv_total / 186.0) * 100)
@@ -1722,261 +2185,386 @@ class Ecology(commands.Cog):
             shiny_icon = "🌟" if is_shiny else "🌿"
             tag_display = f" `[{custom_tag}]`" if custom_tag else ""
             
-            # Formatted to prominently display the Box Number first!
-            # Output: **#12** | 🌟 "Bubbles" (Squirtle) | Lvl 15 | IV: 85% | Tag: `123e4567` [Water]
             line = f"**#{box_number}** | {shiny_icon} **{display_name}** | Lvl {level} | IV: {iv_percentage}% | Tag: `{tag_id[:8]}`{tag_display}"
             lines.append(line)
   
         view = InventoryPaginator(ctx, lines, tokens)
         initial_embed = view.create_embed()
+        
+        if search_query:
+            initial_embed.title = f"📋 Filtered Survey Results"
+            initial_embed.set_footer(text=f"Filter: '{search_query}' | " + initial_embed.footer.text)
+            
         await ctx.send(embed=initial_embed, view=view)
 
     @commands.command(name="catch")
     @checks.has_started()
     @checks.is_authorized()
-    async def catch_pokemon(self, ctx, *, full_input: str):
-        guild_id = str(ctx.guild.id)
-        user_id = str(ctx.author.id)
-
-        # 1. THE PARSER: Split the user's input into separate words
-        input_words = full_input.strip().lower().split()
-
-        # 2. Extract the ball type if they typed one
-        ball_type = "pokeball" # Default
-        valid_balls = ["pokeball", "greatball", "ultraball", "masterball"]
-
-
-        # Check if the very last word they typed is a valid ball
-        if input_words[-1] in valid_balls:
-            ball_type = input_words.pop() # Remove the ball from the list and save it
-
-        # 3. DATA SANITIZATION: Rejoin whatever is left into the Pokemon's name
-        # If they typed "wooper paldea greatball", it is now just "wooper-paldea"
-        pokemon_name = "-".join(input_words)
-    
-        # ==========================================
-        # LOCALIZATION INTERCEPTOR (Masuda Method Prep)
-        # ==========================================
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+    async def catch_pokemon(self, ctx, *, full_input: str = None):
         
-        origin_lang = "ENG" # Default to English
-        
-        # Check if the name they typed exists as a foreign name in our matrix
-        cursor.execute("SELECT english_name, language_tag FROM species_translations WHERE foreign_name = ?", (pokemon_name,))
-        translation_data = cursor.fetchone()
-        
-        if translation_data:
-            # Swap the typed name for the internal English name so the bot can process it!
-            pokemon_name = translation_data[0] 
-            origin_lang = translation_data[1] # e.g., 'FRE', 'JPN', 'GER'
-            
-        conn.close()
-        # ==========================================
+        if not full_input:
+            return await ctx.send("🎒 You need to specify a target! Example: `!catch pikachu` or `!catch pikachu greatball`")
 
-        equipment_stats = {
-            "pokeball": {"multiplier": 1.0},
-            "greatball": {"multiplier": 1.5},
-            "ultraball": {"multiplier": 2.0},
-            "masterball": {"multiplier": 255}
-        }
-
-        if ball_type not in equipment_stats:
-            await ctx.send("Invalid equipment. Please use `pokeball`, `greatball`, or `ultraball`.")
-            return
-            
-        # ==========================================
-        # TARGET SELECTOR: Private vs Global Spawns (DEBUG MODE)
-        # ==========================================
-        print(f"\n--- DEBUG: Catch Attempt by {ctx.author.name} ({user_id}) ---")
-        print(f"Typed Name: '{pokemon_name}'")
-        print(f"Private Spawns Dict: {user_active_spawns.get(user_id)}")
-        print(f"Global Spawns Dict (Guild {guild_id}): {active_spawns.get(guild_id)}")
-
-        target = None
-        is_private_spawn = False
-
-        # 1. Check the researcher's private expedition first
-        if user_id in user_active_spawns:
-            expected_name = user_active_spawns[user_id]['name']
-            print(f"Private spawn found. Expected Name: '{expected_name}', Typed Name: '{pokemon_name}'")
-            if expected_name == pokemon_name:
-                print("Match successful! Target locked to Private Spawn.")
-                target = user_active_spawns[user_id]
-                is_private_spawn = True
-            else:
-                print("Name mismatch on private spawn.")
-
-        # 2. Check the global server environment
-        if not is_private_spawn:
-            if guild_id in active_spawns:
-                expected_name = active_spawns[guild_id]['name']
-                print(f"Global spawn found. Expected Name: '{expected_name}', Typed Name: '{pokemon_name}'")
-                if expected_name == pokemon_name:
-                    print("Match successful! Target locked to Global Spawn.")
-                    target = active_spawns[guild_id]
-                else:
-                    print("Name mismatch on global spawn.")
-            else:
-                print("No global spawn active in this guild.")
-
-        # 3. Abort if no match
-        if target is None:
-            print("Target is still None. Aborting catch.")
-            return await ctx.send(f"There is no {pokemon_name.capitalize().replace('-', ' ')} here right now.")
-
-        multiplier = equipment_stats[ball_type]["multiplier"]
-        print(f"Target successfully locked. Proceeding to calculations...")
-        # ==========================================
-        
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # Check their Inventory for specialized gear
-            if ball_type != "pokeball":
-                cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, ball_type))
-                inv_data = cursor.fetchone()
-                quantity = inv_data[0] if inv_data else 0
-                
-                if quantity < 1:
-                    await ctx.send(f"🎒 You don't have any {ball_type.capitalize()}s in your field pack! Buy some from the `!market`.")
-                    return
+            guild_id = str(ctx.guild.id)
+            user_id = str(ctx.author.id)
+
+            # 1. THE PARSER
+            input_words = full_input.strip().lower().split()
+            ball_type = None 
+            valid_balls = ["pokeball", "greatball", "ultraball", "masterball"]
+
+            if input_words[-1] in valid_balls:
+                ball_type = input_words.pop() 
+
+            typed_name = "-".join(input_words)
             
-            # Calculate Probability
-            base_chance = target['capture_rate'] / 255.0
-            final_chance = min(1.0, base_chance * multiplier)
-            roll = random.random() 
+            if not typed_name:
+                return await ctx.send(f"🎒 You pulled out a {ball_type.capitalize()}, but you didn't specify what to throw it at!")
+
+            # ==========================================
+            # 4 & 5. TARGET SELECTOR & LOCALIZATION
+            # ==========================================
+            target = None
+            target_spawn_id = None
+            is_private_spawn = False
+            origin_lang = "ENG"
             
-            # Deduct the equipment from inventory
-            if ball_type != "pokeball":
-                cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, ball_type))
-            
-            # Check if the catch failed
-            if roll > final_chance:
-                conn.commit() 
-                if is_private_spawn:
-                    del user_active_spawns[user_id]
-                else:
-                    del active_spawns[guild_id]
-                await ctx.send(f"💥 Oh no! The **{pokemon_name.capitalize()}** broke free from the {ball_type.capitalize()} and fled! (Catch chance was {final_chance:.1%})")
-                return
-        
-            # ---The Genetic Ability Roll ---
-            # Fetch the possible abilities for this specific species
-            cursor.execute("SELECT standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (target['pokedex_id'],))
-            ability_data = cursor.fetchone()
-            
-            assigned_ability = "Unknown"
-            if ability_data:
-                standard_str, hidden_str = ability_data
-                standard_list = standard_str.split(",") if standard_str else ["Unknown"]
-                
-                # 20% chance to inherit the recessive Hidden Ability
-                if hidden_str != "None" and random.random() <= 0.20:
-                    assigned_ability = hidden_str
-                else:
-                    assigned_ability = random.choice(standard_list)
+            async with aiosqlite.connect(DB_FILE) as db:
+                async def check_spawn(spawn_data):
+                    expected_english = spawn_data.get('name')
+                    if not expected_english: return False, "ENG"
+                        
+                    if typed_name == expected_english or expected_english.startswith(f"{typed_name}-"):
+                        return True, "ENG"
+                        
+                    async with db.execute("SELECT english_name, language_tag FROM species_translations WHERE foreign_name = ?", (typed_name,)) as cursor:
+                        translations = await cursor.fetchall()
+                        
+                    for eng_name, lang_tag in translations:
+                        if eng_name == expected_english or expected_english.startswith(f"{eng_name}-"):
+                            return True, lang_tag 
+                            
+                    return False, "ENG"
+
+                if user_id in user_active_spawns and isinstance(user_active_spawns[user_id], dict):
+                    for sid, spawn_data in list(user_active_spawns[user_id].items()):
+                        if not isinstance(spawn_data, dict):
+                            user_active_spawns.pop(user_id, None)
+                            break
+                        
+                        is_match, matched_lang = await check_spawn(spawn_data)
+                        if is_match:
+                            target = spawn_data
+                            target_spawn_id = sid
+                            is_private_spawn = True
+                            origin_lang = matched_lang
+                            break
+
+                if not target and guild_id in active_spawns and isinstance(active_spawns[guild_id], dict):
+                    for sid, spawn_data in list(active_spawns[guild_id].items()):
+                        if not isinstance(spawn_data, dict):
+                            active_spawns.pop(guild_id, None)
+                            break
+                            
+                        is_match, matched_lang = await check_spawn(spawn_data)
+                        if is_match:
+                            target = spawn_data
+                            target_spawn_id = sid
+                            origin_lang = matched_lang
+                            break
+
+                if not target:
+                    return await ctx.send(f"There is no {typed_name.capitalize().replace('-', ' ')} here right now.")
+
+                pokemon_name = target['name'] 
+
+                # ==========================================
+                # CAPTURE LOGIC & SMART AUTO-BALL
+                # ==========================================
+                if not ball_type:
+                    async with db.execute("SELECT item_name, quantity FROM user_inventory WHERE user_id = ? AND item_name IN ('ultraball', 'greatball') AND quantity > 0", (user_id,)) as cursor:
+                        inv_rows = await cursor.fetchall()
                     
+                    inv_dict = {row[0]: row[1] for row in inv_rows}
+                    if inv_dict.get('ultraball', 0) > 0:
+                        ball_type = "ultraball"
+                    elif inv_dict.get('greatball', 0) > 0:
+                        ball_type = "greatball"
+                    else:
+                        ball_type = "pokeball"
+                
+                equipment_stats = {
+                    "pokeball": {"multiplier": 1.5},
+                    "greatball": {"multiplier": 2.5},
+                    "ultraball": {"multiplier": 4.0},
+                    "masterball": {"multiplier": 255}
+                }
 
-            # Generate IVs, Instance ID, Nature, and BIOMETRICS
-            instance_id = str(uuid.uuid4())
-            nature = random.choice(NATURES)
-            ivs = [random.randint(0, 31) for _ in range(6)]
-            
-            # ---BIOMETRIC ROLL ---
-            h_mult, w_mult, size_class = generate_biometrics()
-            
-            # Apply the Alpha prefix dynamically!
-            display_name = f"Alpha {pokemon_name}" if size_class == "Alpha" else pokemon_name
+                if ball_type not in equipment_stats:
+                    return await ctx.send("Invalid equipment. Please use `pokeball`, `greatball`, or `ultraball`.")
 
-            cursor.execute("INSERT OR IGNORE INTO servers (guild_id) VALUES (?)", (guild_id,))
-            cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-        
-            cursor.execute("""
-                INSERT INTO guild_members (user_id, guild_id, contribution_points)
-                VALUES (?, ?, 1)
-                ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 1;
-            """, (user_id, guild_id))
+                multiplier = equipment_stats[ball_type]["multiplier"]
+
+                if ball_type != "pokeball":
+                    async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, ball_type)) as cursor:
+                        inv_data = await cursor.fetchone()
+                    quantity = inv_data[0] if inv_data else 0
+                    
+                    if quantity < 1:
+                        return await ctx.send(f"🎒 You don't have any {ball_type.capitalize()}s in your field pack! Buy some from the `!market`.")
+                
+                base_chance = (target['capture_rate'] + 50) / 305.0
+                final_chance = min(1.0, base_chance * multiplier)
+                roll = random.random() 
+                
+                if ball_type != "pokeball":
+                    await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, ball_type))
+                
+                # ==========================================
+                # 🚨 THE NEW FLEE MECHANIC
+                # ==========================================
+                if roll > final_chance:
+                    await db.commit() 
+                    flee_roll = random.random()
+                    
+                    if flee_roll <= 0.30:
+                        if is_private_spawn:
+                            user_active_spawns[user_id].pop(target_spawn_id, None)
+                        else:
+                            active_spawns[guild_id].pop(target_spawn_id, None)
+                                    
+                        return await ctx.send(f"💥 Oh no! The **{typed_name.capitalize().replace('-', ' ')}** broke free and fled into the wild! *(Catch chance was {final_chance:.1%})*")
+                    else:
+                        return await ctx.send(f"💨 The **{typed_name.capitalize().replace('-', ' ')}** broke free from the {ball_type.capitalize()}, but it's still watching you! Try again! *(Catch chance was {final_chance:.1%})*")
+                
+                # --- GENETICS & RARE SPAWN DATA FETCH ---
+                async with db.execute("SELECT standard_abilities, hidden_ability, gender_rate, is_legendary, is_mythical FROM base_pokemon_species WHERE pokedex_id = ?", (target['pokedex_id'],)) as cursor:
+                    ability_data = await cursor.fetchone()
+                
+                assigned_ability = "Unknown"
+                is_legendary = False
+                is_mythical = False
+                
+                if ability_data:
+                    standard_str, hidden_str, raw_gender_rate, is_legendary, is_mythical = ability_data
+                    standard_list = standard_str.split(",") if standard_str else ["Unknown"]
+                    
+                    if hidden_str != "None" and random.random() <= 0.20:
+                        assigned_ability = hidden_str
+                    else:
+                        assigned_ability = random.choice(standard_list)   
+                    gender_rate = raw_gender_rate if raw_gender_rate is not None else 4
+                else:
+                    gender_rate = 4
+
+                if gender_rate != -1:
+                    female_chance = (gender_rate / 8.0) * 100
+                    roll = random.uniform(0, 100)
+                    gender = "F" if roll <= female_chance else "M"
+                else:
+                    gender = "None"
+
+                if gender == "M":
+                    gender_emoji = "♂️"
+                elif gender == "F":
+                    gender_emoji = "♀️"
+                else:
+                    gender_emoji = "⚧️" 
+
+                # ==========================================
+                # BIOMETRICS & ALPHA IV LOGIC
+                # ==========================================
+                h_mult, w_mult, size_class = generate_biometrics()
+                is_alpha = (h_mult >= 1.30)
+
+                if is_alpha:
+                    ivs = [random.randint(20, 31) for _ in range(6)]
+                    max_indices = random.sample(range(6), 3)
+                    for idx in max_indices:
+                        ivs[idx] = 31
+                else:
+                    ivs = [random.randint(0, 31) for _ in range(6)]
+                    
+                instance_id = str(uuid.uuid4())
+                nature = random.choice(NATURES)
+                level = random.randint(1, 15)
+
+                # ==========================================
+                # SAVE TO DATABASE
+                # ==========================================
+                await db.execute("INSERT OR IGNORE INTO servers (guild_id) VALUES (?)", (guild_id,))
+                await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
             
-            
-            cursor.execute("""
-                INSERT INTO caught_pokemon (
-                    instance_id, user_id, pokedex_id, caught_in_guild, level, nature, is_shiny, original_user_id,
-                    iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed, ability, height_multiplier, weight_multiplier, origin_language
+                await db.execute("""
+                    INSERT INTO guild_members (user_id, guild_id, contribution_points)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(user_id, guild_id) DO UPDATE SET contribution_points = contribution_points + 1;
+                """, (user_id, guild_id))
+                
+                await db.execute("""
+                    INSERT INTO caught_pokemon (
+                        instance_id, user_id, pokedex_id, caught_in_guild, gender, level, nature, is_shiny, original_user_id,
+                        iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed, ability, height_multiplier, weight_multiplier, origin_language
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (instance_id, user_id, target['pokedex_id'], guild_id, gender, level, nature, target['is_shiny'], user_id, *ivs, assigned_ability, h_mult, w_mult, origin_lang))
+                
+                target_species = pokemon_name 
+
+                await db.execute("""
+                    UPDATE field_directives
+                    SET current_progress = current_progress + 1
+                    WHERE user_id = ? AND objective_type = 'survey_species' AND target_variable = ? AND is_completed = 0
+                """, (user_id, target_species))
+
+                async with db.execute("""
+                    SELECT required_amount, current_progress 
+                    FROM field_directives
+                    WHERE user_id = ? AND objective_type = 'survey_species' AND target_variable = ? AND is_completed = 0
+                """, (user_id, target_species)) as cursor:
+                    survey_row = await cursor.fetchone()
+
+                if survey_row and survey_row[1] == survey_row[0]:
+                    await ctx.send(f"📡 **Directive Complete:** You successfully surveyed the local **{target_species.capitalize().replace('-', ' ')}** population! Run `!claim` to receive your funding.")
+
+                found_notes = False 
+                found_tokens = 0
+                found_berry = None
+
+                if random.random() <= 0.10: 
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity) 
+                        VALUES (?, 'encrypted-field-notes', 1) 
+                        ON CONFLICT(user_id, item_name) 
+                        DO UPDATE SET quantity = quantity + 1
+                    """, (user_id,))
+                    found_notes = True 
+                    
+                if random.random() <= 0.40:
+                    berry_pool = list(CONSUMABLE_DATABASE.keys())
+                    found_berry = random.choice(berry_pool)
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity) 
+                        VALUES (?, ?, 1) 
+                        ON CONFLICT(user_id, item_name) 
+                        DO UPDATE SET quantity = quantity + 1
+                    """, (user_id, found_berry))
+
+                if random.random() <= 0.50:
+                    found_tokens = random.randint(5, 150)
+                    await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (found_tokens, user_id))
+
+                await db.commit()
+                
+                if is_private_spawn:
+                    user_active_spawns[user_id].pop(target_spawn_id, None)
+                else:
+                    active_spawns[guild_id].pop(target_spawn_id, None)
+
+                # ==========================================
+                # LOCAL SPRITE GENERATOR
+                # ==========================================
+                poke_id = target['pokedex_id']
+                is_shiny = target['is_shiny']
+                base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
+                
+                if is_shiny:
+                    file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
+                    safe_filename = f"{poke_id}_shiny.png"
+                else:
+                    file_path = os.path.join(base_path, f"{poke_id}.png")
+                    safe_filename = f"{poke_id}.png"
+                    
+                sprite_file_local = None
+                sprite_file_global = None
+                
+                if os.path.exists(file_path):
+                    # We create two File instances because Discord.py consumes them upon sending!
+                    sprite_file_local = discord.File(file_path, filename=safe_filename)
+                    sprite_file_global = discord.File(file_path, filename=safe_filename)
+                else:
+                    print(f"⚠️ WARNING: Local sprite missing for ID {poke_id} at {file_path}")
+                    
+                # ==========================================
+                # UI ENHANCEMENT: SHOW LEVEL & IVS
+                # ==========================================
+                iv_total = sum(ivs)
+                iv_percentage = int((iv_total / 186.0) * 100)
+                
+                if iv_percentage >= 90: appraisal = "S-Tier (Flawless)"
+                elif iv_percentage >= 80: appraisal = "A-Tier (Excellent)"
+                elif iv_percentage >= 60: appraisal = "B-Tier (Strong)"
+                elif iv_percentage >= 40: appraisal = "C-Tier (Average)"
+                else: appraisal = "D-Tier (Weak)"
+                
+                alpha_tag = "🔥 **ALPHA** " if is_alpha else ""
+
+                base_desc = f"**{ctx.author.name}** successfully tagged the {alpha_tag}**{gender_emoji} {typed_name.capitalize().replace('-', ' ')}** using a {ball_type.capitalize()}!\n\n"
+                
+                stat_block = f"📊 **Level:** {level}\n🧬 **Genetic Potential:** {iv_percentage}% *({appraisal})*\n"
+                base_desc += stat_block
+                
+                loot_text = []
+                if found_notes: loot_text.append("`Encrypted Field Notes`")
+                if found_berry: loot_text.append(f"`{found_berry.title().replace('-', ' ')}`")
+                if found_tokens > 0: loot_text.append(f"`{found_tokens} Eco-Tokens`")
+                
+                if loot_text:
+                    base_desc += f"\n🎁 **Recovered:** {', '.join(loot_text)}"
+
+                shiny_icon = "🌟" if is_shiny else "🌿"
+                
+                embed = discord.Embed(
+                    title=f"{shiny_icon} Specimen Safely Rescued! [{origin_lang}]", 
+                    description=base_desc,
+                    color=discord.Color.green() if not is_alpha else discord.Color.red()
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (instance_id, user_id, target['pokedex_id'], guild_id, random.randint(1, 15), nature, target['is_shiny'], user_id, *ivs, assigned_ability, h_mult, w_mult, origin_lang))
-            # ==========================================
-            # DIRECTIVE TRACKER: POPULATION SURVEY
-            # ==========================================
-            # We use pokemon_name because your parser already perfectly formatted it (e.g., 'wooper-paldea')
-            target_species = pokemon_name
-
-            # 1. Increment the progress
-            cursor.execute("""
-                UPDATE field_directives
-                SET current_progress = current_progress + 1
-                WHERE user_id = ? AND objective_type = 'survey_species' AND target_variable = ? AND is_completed = 0
-            """, (user_id, target_species))
-
-            # 2. Check for completion
-            cursor.execute("""
-                SELECT required_amount, current_progress 
-                FROM field_directives
-                WHERE user_id = ? AND objective_type = 'survey_species' AND target_variable = ? AND is_completed = 0
-            """, (user_id, target_species))
-            
-            survey_row = cursor.fetchone()
-            if survey_row and survey_row[1] == survey_row[0]:
-                await ctx.send(f"📡 **Directive Complete:** You successfully surveyed the local **{target_species.capitalize().replace('-', ' ')}** population! Run `!claim` to receive your funding.")
-            # ==========================================
-
-            # ==========================================
-            # FIELD DATA RECOVERY (CATCH)
-            # ==========================================
-            found_notes = False # We set a flag to track if the drop occurred
-
-            if random.random() <= 0.10: #100% for testing
-                cursor.execute("""
-                    INSERT INTO user_inventory (user_id, item_name, quantity) 
-                    VALUES (?, 'encrypted-field-notes', 1) 
-                    ON CONFLICT(user_id, item_name) 
-                    DO UPDATE SET quantity = quantity + 1
-                """, (user_id,))
-                found_notes = True # The drop was successful!
-                # You can append a quick note to your catch Embed description later!
-            # ==========================================
-
-            # Commit BOTH the caught pokemon and the updated quest progress at the exact same time!
-            conn.commit()
-            if is_private_spawn:
-                del user_active_spawns[user_id]
-            else:
-                del active_spawns[guild_id]
-            
-            # Build the base narrative string
-            base_desc = f"**{ctx.author.name}** successfully tagged the **{pokemon_name.capitalize().replace('-', ' ')}** using a {ball_type.capitalize()}!\n\nYour contribution to this server's ecosystem has increased."
-            
-            # If the flag is True, we cleanly append the alert!
-            if found_notes:
-                base_desc += "\n\n📝 **DATA RECOVERED:** You found some `Encrypted Field Notes` near the habitat! Run `!analyze notes`."
-
-            shiny_icon = "🌟" if target['is_shiny'] else "🌿"
-            
-            embed = discord.Embed(
-                title=f"{shiny_icon} Specimen Safely Rescued! [{origin_lang}]", 
-                description=base_desc,
-                color=discord.Color.green()
-            )
-            embed.set_footer(text=f"Tag ID: {instance_id[:8]}")
-            await ctx.send(embed=embed)
-            
+                embed.set_footer(text=f"Tag ID: {instance_id[:8]}")
+                
+                # Attach the local sprite if it exists
+                if sprite_file_local:
+                    embed.set_thumbnail(url=f"attachment://{safe_filename}")
+                    await ctx.send(embed=embed, file=sprite_file_local)
+                else:
+                    await ctx.send(embed=embed)
+                
+                # ==========================================
+                # 🌐 GLOBAL BROADCAST MECHANIC
+                # ==========================================
+                if is_legendary or is_mythical or is_shiny:
+                    OFFICIAL_BROADCAST_CHANNEL_ID = 1487606904321736764 #Kyu Official Server: 1487606904321736764 / Kyu Beta: 1491524019495895171
+                    broadcast_channel = self.bot.get_channel(OFFICIAL_BROADCAST_CHANNEL_ID)
+                    
+                    if broadcast_channel:
+                        rarity_parts = []
+                        if is_shiny:
+                            rarity_parts.append("✨ Shiny")
+                        if is_mythical:
+                            rarity_parts.append("Mythical")
+                        elif is_legendary:
+                            rarity_parts.append("Legendary")
+                            
+                        rarity_title = " ".join(rarity_parts) if rarity_parts else "Rare"
+                        
+                        broadcast_embed = discord.Embed(
+                            title=f"🚨 Global {rarity_title} Capture!",
+                            description=f"Trainer **{ctx.author.name}** has successfully captured a **{pokemon_name.capitalize()}**!",
+                            color=discord.Color.gold()
+                        )
+                        broadcast_embed.add_field(name="🌍 Location Detected", value=f"*{ctx.guild.name}*")
+                        broadcast_embed.add_field(name="🧬 Specimen Details", value=f"Level {level} | {iv_percentage}% IVs")
+                        
+                        # Attach the secondary sprite to the global broadcast!
+                        if sprite_file_global:
+                            broadcast_embed.set_thumbnail(url=f"attachment://{safe_filename}")
+                            await broadcast_channel.send(embed=broadcast_embed, file=sprite_file_global)
+                        else:
+                            await broadcast_channel.send(embed=broadcast_embed)
+                
         except Exception as e:
-            await ctx.send("Database error during the tagging process.")
-            print(f"Error: {e}")
-        finally:
-            conn.close()
+            await ctx.send("❌ A critical database or memory error occurred during the tagging process.")
+            print(f"Catch Command Error: {e}")
 
     @commands.command(name="claim", aliases=["funding", "grant"])
     @checks.has_started()
@@ -1985,55 +2573,51 @@ class Ecology(commands.Cog):
         """Claims funding and equipment for completed field directives."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_FILE) as db:
         
-        try:
-            # 1. Find all completed but unclaimed directives
-            cursor.execute("""
-                SELECT directive_id, reward_type, reward_payload, objective_type 
-                FROM field_directives 
-                WHERE user_id = ? AND current_progress >= required_amount AND is_completed = 0
-            """, (user_id,))
-            
-            completed_tasks = cursor.fetchall()
-            
-            if not completed_tasks:
-                conn.close()
-                return await ctx.send("⚠️ You have no completed directives awaiting grant disbursement.")
+            try:
+                # 1. Find all completed but unclaimed directives
+                async with db.execute("""
+                    SELECT directive_id, reward_type, reward_payload, objective_type 
+                    FROM field_directives 
+                    WHERE user_id = ? AND current_progress >= required_amount AND is_completed = 0
+                """, (user_id,)) as cursor:
+                    completed_tasks = await cursor.fetchall()
                 
-            claim_log = "🎉 **Grants Disbursed!** The environmental council has approved your fieldwork:\n\n"
-            
-            # 2. Process each reward
-            for d_id, r_type, r_payload, obj_type in completed_tasks:
-                if r_type == 'eco_tokens':
-                    amount = int(r_payload)
-                    cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (amount, user_id))
-                    claim_log += f"💰 Received **{amount}** Eco Tokens for completing a {obj_type.replace('_', ' ').title()} directive.\n"
+                if not completed_tasks:
+                    return await ctx.send("⚠️ You have no completed directives awaiting grant disbursement.")
                     
-                elif r_type == 'item':
-                    cursor.execute("""
-                        INSERT INTO user_inventory (user_id, item_name, quantity) 
-                        VALUES (?, ?, 1) 
-                        ON CONFLICT(user_id, item_name) 
-                        DO UPDATE SET quantity = quantity + 1
-                    """, (user_id, r_payload))
-                    claim_log += f"📦 Received **1x {r_payload.replace('-', ' ').title()}** from laboratory supply.\n"
+                claim_log = "🎉 **Grants Disbursed!** The environmental council has approved your fieldwork:\n\n"
                 
-                # 3. Mark the directive as claimed/archived
-                cursor.execute("UPDATE field_directives SET is_completed = 1 WHERE directive_id = ?", (d_id,))
+                # 2. Process each reward
+                for d_id, r_type, r_payload, obj_type in completed_tasks:
+                    if r_type == 'eco_tokens':
+                        amount = int(r_payload)
+                        cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (amount, user_id))
+                        claim_log += f"💰 Received **{amount}** Eco Tokens for completing a {obj_type.replace('_', ' ').title()} directive.\n"
+                        
+                    elif r_type == 'item':
+                        await db.execute("""
+                            INSERT INTO user_inventory (user_id, item_name, quantity) 
+                            VALUES (?, ?, 1) 
+                            ON CONFLICT(user_id, item_name) 
+                            DO UPDATE SET quantity = quantity + 1
+                        """, (user_id, r_payload))
+                        claim_log += f"📦 Received **1x {r_payload.replace('-', ' ').title()}** from laboratory supply.\n"
+                    
+                    # 3. Mark the directive as claimed/archived
+                    await db.execute("UPDATE field_directives SET is_completed = 1 WHERE directive_id = ?", (d_id,))
+                    
+                await db.commit()
                 
-            conn.commit()
-            
-            embed = discord.Embed(description=claim_log, color=discord.Color.gold())
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"Claim error: {e}")
-            await ctx.send("❌ An accounting error occurred while processing your grant funding.")
-        finally:
-            conn.close()
+                embed = discord.Embed(description=claim_log, color=discord.Color.gold())
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                if db.in_transaction:
+                    await db.rollback()
+                print(f"Claim error: {e}")
+                await ctx.send("❌ An accounting error occurred while processing your grant funding.")
 
     @commands.command(name="analyze", aliases=["decode", "research"])
     @checks.has_started()
@@ -2045,348 +2629,704 @@ class Ecology(commands.Cog):
             
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_FILE) as db:
         
-        try:
-            # 1. Check Inventory
-            cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'encrypted-field-notes'", (user_id,))
-            inv_data = cursor.fetchone()
-            
-            if not inv_data or inv_data[0] < 1:
-                conn.close()
-                return await ctx.send("🎒 You do not have any `Encrypted Field Notes` to analyze!")
+            try:
+                # 1. Check Inventory
+                async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'encrypted-field-notes'", (user_id,)) as cursor:
+                    inv_data = await cursor.fetchone()
                 
-            # 2. Deduct the item
-            cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'encrypted-field-notes'", (user_id,))
-            
-            # ==========================================
-            # 3. PROCEDURAL DIRECTIVE GENERATION
-            # ==========================================
-            objective_types = ['cull_type', 'survey_species', 'trigger_mutation']
-            chosen_obj = random.choice(objective_types)
-            
-            if chosen_obj == 'cull_type':
-                elements = ['normal', 'fire', 'water', 'grass', 'electric', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy']
-                target_var = random.choice(elements)
-                req_amt = random.randint(5, 12)
-                rev_type = 'eco_tokens'
-                rev_payload = str(req_amt * 250) # Scale payout based on the random difficulty!
-                narrative_title = f"Invasive {target_var.capitalize()}-Type Culling"
+                if not inv_data or inv_data[0] < 1:
+                    return await ctx.send("🎒 You do not have any `Encrypted Field Notes` to analyze!")
+                    
+                # 2. Deduct the item
+                await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'encrypted-field-notes'", (user_id,))
                 
-            elif chosen_obj == 'survey_species':
-                # Dynamically query the ecosystem for a random species!
-                cursor.execute("SELECT name FROM base_pokemon_species ORDER BY RANDOM() LIMIT 1")
-                db_species = cursor.fetchone()
-                target_var = db_species[0] if db_species else 'pidgey'
+                # ==========================================
+                # 3. PROCEDURAL DIRECTIVE GENERATION
+                # ==========================================
+                objective_types = ['cull_type', 'survey_species', 'trigger_mutation']
+                chosen_obj = random.choice(objective_types)
                 
-                req_amt = random.randint(1, 3)
-                rev_type = 'item'
-                rev_payload = random.choice(['greatball', 'ultraball'])
-                narrative_title = f"Genetic Population Survey: {target_var.capitalize().replace('-', ' ')}"
+                if chosen_obj == 'cull_type':
+                    elements = ['normal', 'fire', 'water', 'grass', 'electric', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy']
+                    target_var = random.choice(elements)
+                    req_amt = random.randint(5, 12)
+                    rev_type = 'eco_tokens'
+                    rev_payload = str(req_amt * 250) # Scale payout based on the random difficulty!
+                    narrative_title = f"Invasive {target_var.capitalize()}-Type Culling"
+                    
+                elif chosen_obj == 'survey_species':
+                    # Dynamically query the ecosystem for a random species!
+                    async with db.execute("SELECT name FROM base_pokemon_species ORDER BY RANDOM() LIMIT 1") as cursor:
+                        db_species = await cursor.fetchone()
+                    target_var = db_species[0] if db_species else 'pidgey'
+                    
+                    req_amt = random.randint(1, 3)
+                    rev_type = 'item'
+                    rev_payload = random.choice(['greatball', 'ultraball'])
+                    narrative_title = f"Genetic Population Survey: {target_var.capitalize().replace('-', ' ')}"
+                    
+                else: # trigger_mutation
+                    target_var = 'any'
+                    req_amt = 1
+                    rev_type = 'item'
+                    rev_payload = random.choice(['rare-candy', 'raw-keystone', 'wishing-fragment'])
+                    narrative_title = "Kinetic Maturation Study"
+                # ==========================================
                 
-            else: # trigger_mutation
-                target_var = 'any'
-                req_amt = 1
-                rev_type = 'item'
-                rev_payload = random.choice(['rare-candy', 'raw-keystone', 'wishing-fragment'])
-                narrative_title = "Kinetic Maturation Study"
-            # ==========================================
-            
-            # 4. Inject the generated directive
-            cursor.execute("""
-                INSERT INTO field_directives (user_id, objective_type, target_variable, required_amount, reward_type, reward_payload)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (user_id, chosen_obj, target_var, req_amt, rev_type, rev_payload))
-            
-            conn.commit()
-            
-            embed = discord.Embed(
-                title="💻 Data Decryption Successful",
-                description=f"You fed the raw data into the laboratory mainframe. A new ecological directive has been extracted:\n\n**{narrative_title}**\n\nRun `!survey` to view your updated task parameters.",
-                color=discord.Color.teal()
-            )
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"Decryption error: {e}")
-            await ctx.send("❌ A critical error occurred in the laboratory mainframe.")
-        finally:
-            conn.close()
+                # 4. Inject the generated directive
+                await db.execute("""
+                    INSERT INTO field_directives (user_id, objective_type, target_variable, required_amount, reward_type, reward_payload)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (user_id, chosen_obj, target_var, req_amt, rev_type, rev_payload))
+                
+                await db.commit()
+                
+                embed = discord.Embed(
+                    title="💻 Data Decryption Successful",
+                    description=f"You fed the raw data into the laboratory mainframe. A new ecological directive has been extracted:\n\n**{narrative_title}**\n\nRun `!survey` to view your updated task parameters.",
+                    color=discord.Color.teal()
+                )
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                if db.in_transaction:
+                    await db.rollback()
+                print(f"Decryption error: {e}")
+                await ctx.send("❌ A critical error occurred in the laboratory mainframe.")
 
-    @commands.command(name="view", aliases=["inspect"])
+    @commands.command(name="view", aliases=["inspect", "i", "I", "info"])
     @checks.has_started()
     @checks.is_authorized()
     async def view_pokemon(self, ctx, tag_id: str = None):
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE) 
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_FILE) as db:
         
-        # 1. Fetch total Pokemon count (Synchronized with the UI Join!)
-        cursor.execute("""
-            SELECT COUNT(*) 
-            FROM caught_pokemon cp
-            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-            WHERE cp.user_id = ?
-        """, (user_id,))
-        total_pokemon = cursor.fetchone()[0]
-        
-        if total_pokemon == 0:
-            conn.close()
-            return await ctx.send("🎒 Your field notebook is completely empty!")
+            # 1. Fetch total Pokemon count (Synchronized with the UI Join!)
+            async with db.execute("""
+                SELECT COUNT(*) 
+                FROM caught_pokemon cp
+                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                WHERE cp.user_id = ?
+                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+            """, (user_id,)) as cursor:
+                total_pokemon = await cursor.fetchone()
+                total_pokemon = total_pokemon[0]
             
-        cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-        partner_data = cursor.fetchone()
-        active_partner_id = partner_data[0] if partner_data else None
-        
-        # 2. Determine the Target Index
-        target_index = 1
-        
-        if not tag_id:
-            if not active_partner_id:
-                conn.close()
-                return await ctx.send("You don't have an Active Partner! Use `!view [Number]`.")
+            if total_pokemon == 0:
+                return await ctx.send("🎒 Your field notebook is completely empty!")
                 
-            # Synchronized Roster CTE
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                ) SELECT field_number FROM Roster WHERE instance_id = ?
-            """, (user_id, active_partner_id))
+            async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                partner_data = await cursor.fetchone()
+            active_partner_id = partner_data[0] if partner_data else None
             
-            result = cursor.fetchone()
-            target_index = result[0] if result else 1
+            # 2. Determine the Target Index
+            target_index = 1
             
-        elif tag_id.lower() in ["new", "latest", "last"]:
-            target_index = total_pokemon # The very last one!
-            
-        # THE FIX: Ensure it's treated as a box index ONLY if it's less than 6 digits!
-        # (Since UUID tags are 8 characters long)
-        elif tag_id.isdigit() and len(tag_id) <= 6:
-            target_index = int(tag_id)
-            if target_index < 1 or target_index > total_pokemon:
-                conn.close()
-                return await ctx.send(f"⚠️ Invalid index. You only have {total_pokemon} intact specimens.")
+            if not tag_id:
+                if not active_partner_id:
+                    return await ctx.send("You don't have an Active Partner! Use `!view [Number]`.")
+                    
+                # Synchronized Roster CTE
+                async with db.execute("""
+                    WITH Roster AS (
+                        SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ?
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    ) SELECT field_number FROM Roster WHERE instance_id = ?
+                """, (user_id, active_partner_id)) as cursor:
+                    result = await cursor.fetchone()
+                target_index = result[0] if result else 1
                 
-        else:
-            # It's a UUID tag! Synchronized Roster CTE for perfect indexing.
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                ) SELECT field_number FROM Roster WHERE instance_id LIKE ?
-            """, (user_id, f"{tag_id}%"))
-            
-            res = cursor.fetchone()
-            if not res:
-                conn.close()
-                return await ctx.send(f"⚠️ Could not find an intact specimen matching Tag ID `{tag_id}`.")
-            target_index = res[0]
-            
-        conn.close()
+            elif tag_id.lower() in ["new", "latest", "last"]:
+                target_index = total_pokemon # The very last one!
+                
+            # THE FIX: Ensure it's treated as a box index ONLY if it's less than 6 digits!
+            # (Since UUID tags are 8 characters long)
+            elif tag_id.isdigit() and len(tag_id) <= 6:
+                target_index = int(tag_id)
+                if target_index < 1 or target_index > total_pokemon:
+                    return await ctx.send(f"⚠️ Invalid index. You only have {total_pokemon} intact specimens.")
+                    
+            else:
+                # It's a UUID tag! Synchronized Roster CTE for perfect indexing.
+                async with db.execute("""
+                    WITH Roster AS (
+                        SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ?
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    ) SELECT field_number FROM Roster WHERE instance_id LIKE ?
+                """, (user_id, f"{tag_id}%")) as cursor:
+                    res = await cursor.fetchone()
+                if not res:
+                    return await ctx.send(f"⚠️ Could not find an intact specimen matching Tag ID `{tag_id}`.")
+                target_index = res[0]
 
         # 3. Launch the Paginator!
         view = PokemonPaginator(self.bot, user_id, target_index, total_pokemon, active_partner_id)
-        embed = await view.generate_embed()
-        
-        await ctx.send(embed=embed, view=view)
+        view.update_button_states()
+        embed, sprite_file = await view.generate_embed()
 
-    @commands.command(name="deploy", aliases=["fieldwork"])
-    @commands.cooldown(1, 3600, commands.BucketType.user) # 1 expedition per hour
+        if sprite_file:
+            await ctx.send(embed=embed, file=sprite_file, view=view)
+        else:
+            await ctx.send(embed=embed, view=view)
+    
+    @commands.command(name="rarecandy", aliases=["candy"])
     @checks.has_started()
     @checks.is_authorized()
-    async def deploy_pokemon(self, ctx, tag_id: str = None):
+    @checks.is_not_in_combat()
+    async def use_rare_candy(self, ctx, box_number: int, amount: int = 1):
+        """Feed rare candies to a specimen to artificially accelerate its growth."""
+        if amount <= 0:
+            return await ctx.send("⚠️ You must use at least 1 candy.")
+
+        user_id = str(ctx.author.id)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("""
+                SELECT quantity FROM user_inventory 
+                WHERE user_id = ? AND item_name IN ('rare candy', 'rare-candy')
+            """, (user_id,)) as cursor:
+                candy_record = await cursor.fetchone()
+
+            if not candy_record or candy_record[0] < amount:
+                return await ctx.send(f"🍬 You do not have `{amount}x Rare Candy` in your inventory.")
+
+            # 🚨 UPDATE: Fetch held_item and ability traits
+            async with db.execute("""
+                WITH NumberedPC AS (
+                    SELECT 
+                        cp.instance_id, cp.level, cp.pokedex_id, cp.happiness, cp.held_item, cp.ability,
+                        s.name, s.growth_rate, s.standard_abilities, s.hidden_ability,
+                        ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ? 
+                      AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                      AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)  
+                )
+                SELECT instance_id, level, pokedex_id, happiness, name, growth_rate, held_item, ability, standard_abilities, hidden_ability 
+                FROM NumberedPC 
+                WHERE box_number = ?
+            """, (user_id, box_number)) as cursor:
+                pokemon = await cursor.fetchone()
+
+            if not pokemon:
+                return await ctx.send(f"⚠️ Could not find a valid specimen at Box `#{box_number}`. It may be deployed on a mission or doesn't exist.")
+
+            instance_id, current_level, pokedex_id, happiness, species_name, growth_rate, held_item, current_ability, current_standards, current_hidden = pokemon
+
+            if current_level >= 100:
+                return await ctx.send(f"🛑 **{species_name.capitalize()}** is already Level 100! They cannot consume any more candies.")
+
+            levels_gained = min(amount, 100 - current_level)
+            new_level = current_level + levels_gained
+            refunded_candies = amount - levels_gained
+            new_total_xp = get_xp_requirement(new_level, growth_rate)
+
+            await db.execute("BEGIN TRANSACTION")
+            try:
+                await db.execute("""
+                    UPDATE user_inventory SET quantity = quantity - ? 
+                    WHERE user_id = ? AND item_name IN ('rare candy', 'rare-candy')
+                """, (levels_gained, user_id))
+                await db.execute("DELETE FROM user_inventory WHERE quantity <= 0")
+                await db.execute("""
+                    UPDATE caught_pokemon SET level = ?, experience = ? 
+                    WHERE instance_id = ?
+                """, (new_level, new_total_xp, instance_id))
+                await db.commit()
+            except Exception as e:
+                await db.rollback()
+                print(f"Candy Error: {e}")
+                return await ctx.send("❌ A database error occurred while consuming the item.")
+
+            response_msg = f"🍬 **{species_name.capitalize()}** consumed `{levels_gained}x Rare Candy` and grew to **Level {new_level}**!"
+            if refunded_candies > 0:
+                response_msg += f"\n*(Capped at Lv. 100! Refunded `{refunded_candies}x` unused candies to your inventory.)*"
+
+            # ==========================================
+            # EVOLUTION & TRAIT INHERITANCE
+            # ==========================================
+            possible_evolution = None
+            
+            # The Everstone Bypass Shield
+            if held_item != 'everstone':
+                async with db.execute("SELECT evolved_species_id, trigger_name, min_level, min_happiness FROM evolution_rules WHERE base_species_id = ?", (pokedex_id,)) as cursor:
+                    evo_options = await cursor.fetchall()
+
+                for evolved_id, trigger, req_level, req_happy in evo_options:
+                    can_evolve = False
+                    if trigger == 'level-up' and req_level and new_level >= req_level: can_evolve = True
+                    elif trigger == 'happiness' and req_happy and happiness >= req_happy: can_evolve = True
+                        
+                    if can_evolve:
+                        # Fetch the evolved species data to map traits
+                        async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
+                            evo_data = await cursor.fetchone()
+                            
+                        if evo_data:
+                            new_species_name, ev_standards, ev_hidden = evo_data
+                            new_species_name = new_species_name.capitalize()
+                            
+                            # Trait Mapping Logic
+                            is_ha = (current_ability == current_hidden)
+                            slot_index = 0
+                            
+                            # Find which slot their standard ability was in (0 or 1)
+                            if not is_ha and current_standards:
+                                st_list = [a.strip() for a in current_standards.split(",")]
+                                if current_ability in st_list:
+                                    slot_index = st_list.index(current_ability)
+                                    
+                            # Assign the mapped ability
+                            if is_ha and ev_hidden:
+                                new_ability = ev_hidden
+                            else:
+                                ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
+                                new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+
+                            possible_evolution = {"id": evolved_id, "name": new_species_name, "ability": new_ability}
+                            break
+
+            if possible_evolution:
+                view = EvolutionConfirmView(
+                    owner_id=ctx.author.id, 
+                    instance_id=instance_id, 
+                    new_pokedex_id=possible_evolution["id"], 
+                    new_species_name=possible_evolution["name"],
+                    new_ability=possible_evolution["ability"],
+                    db_file=DB_FILE
+                )
+                response_msg += f"\n\n✨ **What? {species_name.capitalize()} is evolving!** Do you want to initiate the process?"
+                message = await ctx.send(response_msg, view=view)
+                view.message = message 
+            else:
+                await ctx.send(response_msg)
+
+    @commands.command(name="return", aliases=["recall"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def return_pokemon(self, ctx):
+        """View and recall deployed field teams."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # ==========================================
-        # 1. RESOLVE THE TARGET (Partner, Box Number, or UUID)
-        # ==========================================
-        actual_tag = None
-        
-        if not tag_id:
-            cursor.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,))
-            partner_data = cursor.fetchone()
-            
-            if partner_data and partner_data[0]:
-                actual_tag = partner_data[0]
-            else:
-                ctx.command.reset_cooldown(ctx)
-                await ctx.send("⚠️ You haven't specified a Box Number or Tag ID, and you don't have an Active Partner equipped!")
-                conn.close()
-                return
+        async with aiosqlite.connect(DB_FILE) as db:
+            # Group their active deployments by mission type and count how many are on each
+            async with db.execute("""
+                SELECT mission_type, COUNT(*) 
+                FROM active_deployments 
+                WHERE user_id = ? 
+                GROUP BY mission_type
+            """, (user_id,)) as cursor:
+                active_missions = await cursor.fetchall()
                 
-        elif tag_id.isdigit() and len(tag_id) <= 6:
-            # It's a Box Number! 
-            cursor.execute("""
-                WITH Roster AS (
-                    SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
-                    FROM caught_pokemon WHERE user_id = ?
-                ) SELECT instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(tag_id)))
+        if not active_missions:
+            return await ctx.send("⛺ You don't have any specimens out on field missions right now.")
             
-            res = cursor.fetchone()
-            if not res:
-                ctx.command.reset_cooldown(ctx)
-                await ctx.send(f"❌ You don't have a specimen in Box `#{tag_id}` available for fieldwork.")
-                conn.close()
-                return
-            actual_tag = res[0]
-            
-        else:
-            # It's a UUID Tag!
-            cursor.execute("SELECT instance_id FROM caught_pokemon WHERE instance_id LIKE ? AND user_id = ?", (f"{tag_id}%", user_id))
-            res = cursor.fetchone()
-            if not res:
-                ctx.command.reset_cooldown(ctx)
-                await ctx.send(f"❌ You don't have a specimen with tag `{tag_id}` available for fieldwork.")
-                conn.close()
-                return
-            actual_tag = res[0]
+        # Spawn the interactive UI
+        view = ReturnMissionsView(self, user_id, active_missions)
+        embed = discord.Embed(
+            title="📡 Active Field Deployments", 
+            description="Select a team to recall them to base and process their field data.",
+            color=discord.Color.teal()
+        )
+        await ctx.send(embed=embed, view=view)
 
-        # ==========================================
-        # 2. FETCH TYPES FOR THEMATIC MISSION
-        # ==========================================
-        # Notice we are now using exact '=' matching with actual_tag instead of LIKE!
-        cursor.execute("""
-            SELECT s.name, t.type_name
-            FROM caught_pokemon cp
-            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-            JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-            WHERE cp.instance_id = ? AND cp.user_id = ?
-        """, (actual_tag, user_id))
+    async def execute_return_logic(self, interaction: discord.Interaction, user_id: str, target_mission: str):
+        """The heavy lifting function triggered by the Discord Buttons."""
         
-        rows = cursor.fetchall()
-        
-        # (We technically don't need this check anymore since we verified above, but good for safety!)
-        if not rows:
-            ctx.command.reset_cooldown(ctx)
-            await ctx.send(f"❌ Could not retrieve biological data for specimen.")
-            conn.close()
-            return
+        async with aiosqlite.connect(DB_FILE) as db:
+            # 🚨 UPDATE: Joined held_item and ability logic
+            query = """
+                SELECT d.instance_id, d.start_time, d.mission_type, s.name, cp.experience, cp.level, s.growth_rate, cp.happiness, cp.pokedex_id,
+                       cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
+                       GROUP_CONCAT(LOWER(t.type_name)),
+                       cp.held_item, cp.ability, s.standard_abilities, s.hidden_ability
+                FROM active_deployments d
+                JOIN caught_pokemon cp ON d.instance_id = cp.instance_id
+                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                WHERE d.user_id = ?
+            """
+            params = [user_id]
             
-        poke_name = rows[0][0]
-        # A Pokemon can have 1 or 2 types. This creates a list of them (e.g., ['grass', 'poison'])
-        poke_types = [row[1] for row in rows] 
+            if target_mission != "all":
+                query += " AND d.mission_type = ?"
+                params.append(target_mission)
+                
+            query += " GROUP BY d.instance_id"
+            
+            async with db.execute(query, params) as cursor:
+                deployed_team = await cursor.fetchall()
+                
+            if not deployed_team:
+                return await interaction.followup.send("⛺ You don't have any specimens out on field missions right now.")
+                
+            results = []
+            items_found = []
+            pending_evolutions = [] 
+            current_time = time.time()
+            
+            await db.execute("BEGIN TRANSACTION")
+            
+            try:
+                for p_data in deployed_team:
+                    (instance_id, start_time, mission_type, name, current_xp, current_level, growth_rate, happiness, pokedex_id,
+                     ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, all_types, held_item, current_ability, current_standards, current_hidden) = p_data
+                     
+                    elapsed_hours = (current_time - start_time) / 3600.0
+                    
+                    if elapsed_hours < 0.25:
+                        await db.execute("DELETE FROM active_deployments WHERE instance_id = ?", (instance_id,))
+                        results.append(f"🔸 **{name.capitalize()}** returned early. *(No data gathered)*")
+                        continue
+                        
+                    capped_hours = min(elapsed_hours, 24.0)
+                    mission_data = FIELD_MISSIONS.get(mission_type, FIELD_MISSIONS.get("hp"))
+                    
+                    new_total_xp = current_xp
+                    new_level = current_level
+                    ev_updates = {}
+                    gains_text = ""
+                    
+                    if mission_data["category"] == "exp":
+                        base_xp = int(capped_hours * mission_data["base_xp_hr"])
+                        type_list = all_types.split(',') if all_types else []
+
+                        if mission_data["preferred_type"] in type_list:
+                            base_xp = int(base_xp * 1.20)
+                            gains_text = f"gained **{base_xp} XP** *(Type Bonus!)*"
+                        else:
+                            gains_text = f"gained **{base_xp} XP**"
+                            
+                        new_total_xp += base_xp
+                        
+                        while new_level < 100 and new_total_xp >= get_xp_requirement(new_level, growth_rate):
+                            new_level += 1
+                            
+                    elif mission_data["category"] == "ev":
+                        target_stat = mission_data["target_ev"]
+                        raw_ev_gain = int(capped_hours * mission_data["ev_hr"])
+                        current_total_evs = ev_hp + ev_atk + ev_def + ev_spa + ev_spd + ev_spe
+                        current_stat_value = locals()[target_stat.replace("ev_", "ev_").replace("atk", "attack").replace("spa", "sp_atk").replace("spd", "sp_def").replace("spe", "speed")]
+                        overall_room = max(0, 510 - current_total_evs)
+                        stat_room = max(0, 252 - current_stat_value)
+                        actual_ev_gain = min(raw_ev_gain, overall_room, stat_room)
+                        ev_label = target_stat.replace('ev_', '').upper()
+                        
+                        if actual_ev_gain > 0:
+                            ev_updates[target_stat] = current_stat_value + actual_ev_gain
+                            gains_text = f"gained **+{actual_ev_gain} {ev_label} EVs**!"
+                        else:
+                            gains_text = f"is already maxed out! *(No EVs gained)*"
+
+                    # ==========================================
+                    # EVOLUTION CHECK & LOOT ROLLS
+                    # ==========================================
+                    # The Everstone Bypass Shield
+                    if new_level > current_level and held_item != 'everstone':
+                        async with db.execute("SELECT evolved_species_id, trigger_name, min_level, min_happiness FROM evolution_rules WHERE base_species_id = ?", (pokedex_id,)) as cursor:
+                            evo_options = await cursor.fetchall()
+                            
+                        for evolved_id, trigger, req_level, req_happy in evo_options:
+                            can_evolve = False
+                            if trigger == 'level-up' and req_level and new_level >= req_level: can_evolve = True
+                            elif trigger == 'happiness' and req_happy and happiness >= req_happy: can_evolve = True
+                                
+                            if can_evolve:
+                                async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
+                                    evo_data = await cursor.fetchone()
+                                    
+                                if evo_data:
+                                    new_species_name, ev_standards, ev_hidden = evo_data
+                                    new_species_name = new_species_name.capitalize()
+                                    
+                                    # Trait Mapping
+                                    is_ha = (current_ability == current_hidden)
+                                    slot_index = 0
+                                    
+                                    if not is_ha and current_standards:
+                                        st_list = [a.strip() for a in current_standards.split(",")]
+                                        if current_ability in st_list:
+                                            slot_index = st_list.index(current_ability)
+                                            
+                                    if is_ha and ev_hidden:
+                                        new_ability = ev_hidden
+                                    else:
+                                        ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
+                                        new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+
+                                    pending_evolutions.append({
+                                        "instance_id": instance_id,
+                                        "old_name": name.capitalize(),
+                                        "new_pokedex_id": evolved_id,
+                                        "new_species_name": new_species_name,
+                                        "new_ability": new_ability
+                                    })
+                                break 
+                                
+                    if elapsed_hours >= 4.0 and mission_data.get("item_pool"):
+                        found_item = random.choice(mission_data["item_pool"])
+                        items_found.append(found_item)
+                        await db.execute("INSERT INTO user_inventory (user_id, item_name, quantity) VALUES (?, ?, 1) ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + 1", (user_id, found_item))
+
+                    if ev_updates:
+                        target_col = list(ev_updates.keys())[0]
+                        new_val = ev_updates[target_col]
+                        await db.execute(f"UPDATE caught_pokemon SET experience = ?, level = ?, {target_col} = ? WHERE instance_id = ?", 
+                                         (new_total_xp, new_level, new_val, instance_id))
+                    else:
+                        await db.execute("UPDATE caught_pokemon SET experience = ?, level = ? WHERE instance_id = ?", 
+                                         (new_total_xp, new_level, instance_id))
+                                         
+                    await db.execute("DELETE FROM active_deployments WHERE instance_id = ?", (instance_id,))
+                    
+                    level_text = f" ⬆️ *(Lv. {new_level})*" if new_level > current_level else ""
+                    evo_hint = " 🧬 *(Ready to evolve!)*" if any(p['instance_id'] == instance_id for p in pending_evolutions) else ""
+                    results.append(f"🔸 **{name.capitalize()}** {gains_text}{level_text}{evo_hint}")
+
+                await db.commit()
+                
+            except Exception as e:
+                await db.rollback()
+                print(f"Error processing return: {e}")
+                return await interaction.followup.send("❌ A database error occurred while recalling your team.")
+            
+            embed = discord.Embed(title="⛺ Field Missions Concluded", description="\n\n".join(results), color=discord.Color.green())
+            
+            if items_found:
+                item_counts = {i: items_found.count(i) for i in set(items_found)}
+                loot_str = ", ".join([f"`{count}x {item.replace('-', ' ').title()}`" for item, count in item_counts.items()])
+                embed.add_field(name="🎁 Team Forage Haul", value=loot_str, inline=False)
+                
+            await interaction.followup.send(embed=embed)
+            
+            # Fire off interactive prompts with the mapped traits!
+            for pending_evo in pending_evolutions:
+                view = EvolutionConfirmView(
+                    owner_id=int(user_id), 
+                    instance_id=pending_evo["instance_id"], 
+                    new_pokedex_id=pending_evo["new_pokedex_id"], 
+                    new_species_name=pending_evo["new_species_name"],
+                    new_ability=pending_evo["new_ability"],
+                    db_file=DB_FILE
+                )
+                
+                msg = await interaction.followup.send(
+                    content=f"✨ **What? {pending_evo['old_name']} is evolving!** Do you want to initiate the process?", 
+                    view=view,
+                    wait=True 
+                )
+                view.message = msg
+    
+    @commands.command(name="vitamins", aliases=["feed"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def use_vitamin(self, ctx, item_name: str, box_number: str, amount: int = 1):
+        """Feed EV Vitamins to your specimens. (e.g., !use protein 4 10)"""
+        user_id = str(ctx.author.id)
+        item_name = item_name.lower()
         
-        # Thematic missions based on biology
-        missions = {
-            'electric': "optimized a local solar microgrid ☀️",
-            'water': "filtered microplastics out of the local river 🌊",
-            'grass': "assisted in a massive reforestation project 🌲",
-            'poison': "safely broke down and neutralized toxic waste ☣️",
-            'fire': "performed a controlled burn to prevent future wildfires 🔥",
-            'ground': "stabilized an eroding cliffside near the coast 🪨",
-            'flying': "conducted an aerial survey of migratory bird patterns 🦅",
-            'bug': "pollinated a struggling community garden 🌸",
-            'steel': "helped recycle scrap metal into building materials 🏗️",
-            'ice': "helped stabilize core temperatures in a local data center ❄️"
+        # 1. Define the Vitamin Mapping (+10 EVs per item)
+        VITAMINS = {
+            "hp-up": "ev_hp",
+            "protein": "ev_attack",
+            "iron": "ev_defense",
+            "calcium": "ev_sp_atk",
+            "zinc": "ev_sp_def",
+            "carbos": "ev_speed"
         }
         
-        # Pick a mission based on one of the Pokemon's types (default to a generic one if no match)
-        mission_text = "conducted a general biodiversity survey 📋"
-        for pt in poke_types:
-            if pt in missions:
-                mission_text = missions[pt]
-                break
-                
-        # --- Calculate Rewards & Experience ---
-        tokens_earned = random.randint(15, 30)
-        
-        # Base XP earned from fieldwork
-        base_xp_earned = random.randint(50, 150)
-        
-        # 1. Fetch the exact specimen data
-        cursor.execute("""
-            SELECT cp.level, cp.experience, cp.original_user_id, s.growth_rate, cp.pokedex_id, cp.happiness
-            FROM caught_pokemon cp
-            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-            WHERE cp.instance_id = ? AND cp.user_id = ?
-        """, (actual_tag, user_id))
-        
-        current_level, current_xp, original_owner, growth_rate, current_pokedex_id, current_happiness = cursor.fetchone()
-        
-        # 2. The "Traded" Specimen Boost
-        if original_owner != user_id:
-            xp_earned = int(base_xp_earned * 1.5)
-            boost_text = "\n*(Traded Specimen Bonus: 1.5x XP!)*"
-        else:
-            xp_earned = base_xp_earned
-            boost_text = ""
+        if item_name not in VITAMINS:
+            valid_items = ", ".join([f"`{v}`" for v in VITAMINS.keys()])
+            return await ctx.send(f"⚠️ I can only process EV Vitamins right now. Valid items: {valid_items}")
             
-        new_total_xp = current_xp + xp_earned
-        
-        # ---Friendship/Happiness Boost ---
-        # Max happiness in the biological data is usually 255
-        new_happiness = min(255, current_happiness + random.randint(2, 5))
-        
-        # 3. Check for Level Up!
-        xp_needed_for_next_level = get_xp_requirement(current_level, growth_rate)
-        leveled_up = False
-        new_level = current_level
-        evolved_into_name = None
-        
-        if new_total_xp >= xp_needed_for_next_level and current_level < 100:
-            leveled_up = True
-            new_level += 1
-            
-            # --- Circadian Rhythm (Day/Night) Check ---
-            current_planetary_state = get_planetary_cycle()
-            
-            evo_data = check_evolution_trigger(cursor, current_pokedex_id, new_level, new_happiness, current_planetary_state)
-            
-            if evo_data:
-                new_pokedex_id, evolved_into_name = evo_data
-                current_pokedex_id = new_pokedex_id # Update local variable for the DB save
+        if not box_number.isdigit() or amount < 1:
+            return await ctx.send("⚠️ Usage: `!use <item> <box_number> [amount]`\nExample: `!use protein 4 10`")
 
-        # THE SAFETY BLOCK
-        try:
-            # Update User Tokens
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (tokens_earned, user_id))
-            
-            # Update Pokemon XP, Level, Happiness, and POTENTIALLY the Pokedex ID if it evolved!
-            cursor.execute("""
-                UPDATE caught_pokemon 
-                SET experience = ?, level = ?, happiness = ?, pokedex_id = ? 
-                WHERE instance_id = ?
-            """, (new_total_xp, new_level, new_happiness, current_pokedex_id, actual_tag))
-            
-            conn.commit()
-            
-            embed = discord.Embed(title="🎒 Fieldwork Expedition Complete!", color=discord.Color.green())
-            
-            # Adjust the description if a metamorphosis occurred
-            if evolved_into_name:
-                embed.description = f"**{ctx.author.name}** deployed their **{poke_name.capitalize()}** into the field!\n\nUsing its natural biology, it {mission_text}\n\n✨ **WHAT'S THIS?!** The intense fieldwork triggered a biological metamorphosis! Your specimen evolved into a **{evolved_into_name.capitalize()}**!"
-            else:
-                embed.description = f"**{ctx.author.name}** deployed their **{poke_name.capitalize()}** into the field!\n\nUsing its natural biology, it {mission_text}"
-            
-            embed.add_field(name="Mission Funding", value=f"🪙 +{tokens_earned} Eco-Tokens", inline=True)
-            embed.add_field(name="Combat Data", value=f"✨ +{xp_earned} XP {boost_text}", inline=True)
-            
-            if leveled_up:
-                embed.add_field(name="🎉 Level Up!", value=f"Grew to **Level {new_level}**!", inline=False)
-            else:
-                embed.add_field(name="Progress", value=f"XP to next level: {xp_needed_for_next_level - new_total_xp}", inline=False)
+        async with aiosqlite.connect(DB_FILE) as db:
+            # 2. Check their Inventory
+            async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, item_name)) as cursor:
+                inv_data = await cursor.fetchone()
                 
-            embed.set_footer(text=f"Tag ID: {actual_tag[:8]}")
+            if not inv_data or inv_data[0] < 1:
+                return await ctx.send(f"🎒 You don't have any `{item_name.title()}` in your bag!")
+                
+            owned_amount = inv_data[0]
+            target_amount = min(amount, owned_amount) # Don't let them use more than they own
+            
+            # 3. Resolve Target (Using Soft Hide to prevent feeding deployed Pokemon!)
+            async with db.execute("""
+                WITH Roster AS (
+                    SELECT cp.instance_id, s.name, cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
+                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ? AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                ) SELECT * FROM Roster WHERE box_number = ?
+            """, (user_id, int(box_number))) as cursor:
+                target = await cursor.fetchone()
+                
+            if not target:
+                return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`. Are they deployed?")
+                
+            (instance_id, name, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, _) = target
+            
+            # 4. Enforce Strict EV Caps
+            target_stat_col = VITAMINS[item_name]
+            
+            # Map the exact current value based on the column name
+            stat_map = {"ev_hp": ev_hp, "ev_attack": ev_atk, "ev_defense": ev_def, "ev_sp_atk": ev_spa, "ev_sp_def": ev_spd, "ev_speed": ev_spe}
+            current_stat_value = stat_map[target_stat_col]
+            current_total_evs = sum(stat_map.values())
+            
+            # Calculate how much EV room is left overall and for this specific stat
+            overall_room = max(0, 510 - current_total_evs)
+            stat_room = max(0, 252 - current_stat_value)
+            
+            if overall_room <= 0:
+                return await ctx.send(f"🧬 **{name.capitalize()}** has reached its absolute genetic limit (510 Total EVs). It cannot consume any more vitamins.")
+            if stat_room <= 0:
+                return await ctx.send(f"💪 **{name.capitalize()}** has already maxed out its {item_name.title()} potential (252 EVs).")
+                
+            # 5. Calculate ACTUAL consumption
+            # Each vitamin gives 10 EVs. How many vitamins fit in the remaining room?
+            import math
+            max_vitamins_for_stat = math.ceil(stat_room / 10.0)
+            max_vitamins_for_total = math.ceil(overall_room / 10.0)
+            
+            # The bottleneck is the lowest of: What they asked to use, what they own, stat cap, or total cap
+            vitamins_to_consume = min(target_amount, max_vitamins_for_stat, max_vitamins_for_total)
+            
+            # The actual EV gain might be slightly less than (vitamins * 10) if they hit the hard cap
+            # e.g., if they have 248 EVs, 1 vitamin gives +4, not +10.
+            actual_ev_gain = min(vitamins_to_consume * 10, stat_room, overall_room)
+            
+            # 6. Execute the Updates
+            await db.execute(f"UPDATE caught_pokemon SET {target_stat_col} = {target_stat_col} + ? WHERE instance_id = ?", (actual_ev_gain, instance_id))
+            
+            # Deduct the vitamins from inventory (If it hits 0, delete the row to keep the DB clean)
+            if owned_amount - vitamins_to_consume <= 0:
+                await db.execute("DELETE FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, item_name))
+            else:
+                await db.execute("UPDATE user_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (vitamins_to_consume, user_id, item_name))
+                
+            await db.commit()
+            
+            # 7. UI Output
+            stat_label = target_stat_col.replace("ev_", "").upper()
+            embed = discord.Embed(title="💊 Nutritional Supplement Administered", color=discord.Color.green())
+            embed.description = f"**{name.capitalize()}** consumed **{vitamins_to_consume}x `{item_name.title()}`**!"
+            embed.add_field(name="Stat Increase", value=f"⬆️ +{actual_ev_gain} {stat_label} EVs")
+            
+            if vitamins_to_consume < amount:
+                embed.set_footer(text="Notice: Consumption was halted early to prevent exceeding genetic stat caps.")
+                
             await ctx.send(embed=embed)
+
+    @commands.command(name="deploy")
+    @checks.has_started()
+    @checks.is_authorized()
+    async def deploy_pokemon(self, ctx, mission_type: str = None, *, box_numbers: str = None):
+        """Send multiple specimens on a Field Mission. (e.g. !deploy reef 4, 7, 12)"""
+        user_id = str(ctx.author.id)
+        
+        if not mission_type or not box_numbers:
+            return await ctx.send("⚠️ Usage: `!deploy <mission_id> <box_numbers>`\nExample: `!deploy reef 1, 4, 5`")
             
-        except Exception as e:
-            print(f"Deploy error: {e}")
-            await ctx.send("Oh no! The fieldwork data was corrupted during transmission.")
+        mission_type = mission_type.lower()
+        
+        # 1. Validate against TODAY'S active board!
+        active_missions = self.get_daily_missions()
+        if mission_type not in active_missions:
+            return await ctx.send("⚠️ That mission is not on the board today! Run `!jobs` to see today's available postings.")
             
-        finally:
-            conn.close()
+        # 2. Parse the comma-separated box numbers
+        try:
+            targets = [int(x.strip()) for x in box_numbers.split(',') if x.strip()]
+        except ValueError:
+            return await ctx.send("⚠️ Please provide valid Box Numbers separated by commas. (e.g., `1, 4, 5`)")
+
+        # (Notice we removed the old len(targets) > 5 check here, because we handle it smarter below!)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            
+            # ==========================================
+            # 🚨 UPDATED: PER-MISSION DEPLOYMENT CAP
+            # ==========================================
+            MAX_PER_MISSION = 5
+            
+            # We now check how many they have deployed TO THIS SPECIFIC MISSION
+            async with db.execute("SELECT COUNT(*) FROM active_deployments WHERE user_id = ? AND mission_type = ?", (user_id, mission_type)) as cursor:
+                current_deployments = (await cursor.fetchone())[0]
+                
+            available_slots = MAX_PER_MISSION - current_deployments
+            
+            if available_slots <= 0:
+                return await ctx.send(f"⚠️ You already have a full team of {MAX_PER_MISSION} deployed to the **{FIELD_MISSIONS[mission_type]['name']}**! Try a different mission.")
+                
+            if len(targets) > available_slots:
+                return await ctx.send(f"⚠️ You only have **{available_slots}** slot(s) remaining for this specific mission! You cannot deploy {len(targets)} right now.")
+            # ==========================================
+            # 3. Resolve ALL Box Numbers simultaneously (The Batch Fetch Fix)
+            # ==========================================
+            placeholders = ', '.join('?' for _ in targets)
+            query = f"""
+                WITH Roster AS (
+                    SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                ) 
+                SELECT instance_id, name FROM Roster WHERE box_number IN ({placeholders})
+            """
+            
+            async with db.execute(query, [user_id] + targets) as cursor:
+                team_data = await cursor.fetchall()
+                
+            if not team_data:
+                return await ctx.send("❌ None of those specimens could be deployed. Check your Box Numbers!")
+                
+            deployed_names = []
+            current_time = time.time()
+            
+            # 4. Safely loop through the confirmed IDs and deploy them!
+            for instance_id, name in team_data:
+                
+                # Safety Cleanup: Strip Active Partner and Party status
+                await db.execute("UPDATE users SET active_partner = NULL WHERE user_id = ? AND active_partner = ?", (user_id, instance_id))
+                await db.execute("DELETE FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, instance_id))
+                
+                # Log the deployment
+                await db.execute("""
+                    INSERT INTO active_deployments (user_id, instance_id, start_time, mission_type) 
+                    VALUES (?, ?, ?, ?)
+                """, (user_id, instance_id, current_time, mission_type))
+                
+                deployed_names.append(name.capitalize())
+                
+            await db.commit()
+            
+            mission_name = FIELD_MISSIONS[mission_type]["name"]
+            embed = discord.Embed(
+                title=f"⛺ Mission Commenced: {mission_name}",
+                description=f"**{ctx.author.name}** dispatched a team into the field:\n\n" + "\n".join([f"🔸 {n}" for n in deployed_names]),
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="They have been temporarily removed from your PC. Use !return to recall the team.")
+            await ctx.send(embed=embed)
 
     @commands.command(name="refine", aliases=["craft", "synthesize"])
     @checks.has_started()
@@ -2424,56 +3364,54 @@ class Ecology(commands.Cog):
             
         recipe = LAB_BLUEPRINTS[blueprint_name]
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        async with aiosqlite.connect(DB_FILE) as db:
         
-        try:
-            cursor.execute("BEGIN TRANSACTION")
-            
-            # 1. Check Funding
-            cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,))
-            user_data = cursor.fetchone()
-            current_funds = user_data[0] if user_data else 0
-            
-            if current_funds < recipe['cost']:
-                conn.rollback()
-                return await ctx.send(f"⚠️ Insufficient funding. You need **{recipe['cost']} Eco Tokens** to operate the refinement machinery.")
+            try:
+                await db.execute("BEGIN TRANSACTION")
                 
-            # 2. Check Raw Materials
-            cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, recipe['material']))
-            mat_data = cursor.fetchone()
-            
-            if not mat_data or mat_data[0] < recipe['material_qty']:
-                conn.rollback()
-                return await ctx.send(f"⚠️ Missing materials. You need **{recipe['material_qty']}x {recipe['material'].replace('-', ' ').title()}** to synthesize this item.")
+                # 1. Check Funding
+                async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                    user_data = await cursor.fetchone()
+                current_funds = user_data[0] if user_data else 0
                 
-            # 3. Process the Transaction (Deduct Funds & Materials)
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (recipe['cost'], user_id))
-            cursor.execute("UPDATE user_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (recipe['material_qty'], user_id, recipe['material']))
-            
-            # 4. Synthesize the Output
-            cursor.execute("""
-                INSERT INTO user_inventory (user_id, item_name, quantity) 
-                VALUES (?, ?, 1) 
-                ON CONFLICT(user_id, item_name) 
-                DO UPDATE SET quantity = quantity + 1
-            """, (user_id, blueprint_name))
-            
-            conn.commit()
-            
-            embed = discord.Embed(
-                title="⚙️ Synthesis Complete", 
-                description=f"You successfully refined the raw geological materials into a **{recipe['display']}**!\n\nThe mechanical bypass in your battle UI has been permanently authorized.",
-                color=discord.Color.purple()
-            )
-            await ctx.send(embed=embed)
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"Refinement Error: {e}")
-            await ctx.send("❌ A critical error occurred in the laboratory machinery.")
-        finally:
-            conn.close()
+                if current_funds < recipe['cost']:
+                    await db.rollback()
+                    return await ctx.send(f"⚠️ Insufficient funding. You need **{recipe['cost']} Eco Tokens** to operate the refinement machinery.")
+                    
+                # 2. Check Raw Materials
+                async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, recipe['material'])) as cursor:
+                    mat_data = await cursor.fetchone()
+                
+                if not mat_data or mat_data[0] < recipe['material_qty']:
+                    await db.rollback()
+                    return await ctx.send(f"⚠️ Missing materials. You need **{recipe['material_qty']}x {recipe['material'].replace('-', ' ').title()}** to synthesize this item.")
+                    
+                # 3. Process the Transaction (Deduct Funds & Materials)
+                await db.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (recipe['cost'], user_id))
+                await db.execute("UPDATE user_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (recipe['material_qty'], user_id, recipe['material']))
+                
+                # 4. Synthesize the Output
+                await db.execute("""
+                    INSERT INTO user_inventory (user_id, item_name, quantity) 
+                    VALUES (?, ?, 1) 
+                    ON CONFLICT(user_id, item_name) 
+                    DO UPDATE SET quantity = quantity + 1
+                """, (user_id, blueprint_name))
+                
+                await db.commit()
+                
+                embed = discord.Embed(
+                    title="⚙️ Synthesis Complete", 
+                    description=f"You successfully refined the raw geological materials into a **{recipe['display']}**!\n\nThe mechanical bypass in your battle UI has been permanently authorized.",
+                    color=discord.Color.purple()
+                )
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                if db.in_transaction:
+                    db.rollback()
+                print(f"Refinement Error: {e}")
+                await ctx.send("❌ A critical error occurred in the laboratory machinery.")
     
     @commands.command(name="habitat", aliases=["server", "environment"])
     @checks.has_started()
@@ -2481,12 +3419,10 @@ class Ecology(commands.Cog):
     async def habitat_status(self, ctx):
         guild_id = str(ctx.guild.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT ecosystem_score, active_biome, pollution_type FROM servers WHERE guild_id = ?", (guild_id,))
-        server_data = cursor.fetchone()
-        conn.close()
-        
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("SELECT ecosystem_score, active_biome, pollution_type FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:
+                server_data = await cursor.fetchone()
+            
         if not server_data:
             return await ctx.send("This server's habitat hasn't been initialized yet. Start chatting to attract wildlife!")
             

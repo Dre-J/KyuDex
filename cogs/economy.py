@@ -1,49 +1,535 @@
 import datetime
+import os
 import random
 import discord
 from discord.ext import commands
-import sqlite3
-from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP
+from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP, CATEGORY_OPTIONS
 from utils import checks
 import math
+import aiosqlite
+import uuid
 
-class BackpackPaginator(discord.ui.View):
-    def __init__(self, user, inventory_data, catalog):
-        super().__init__(timeout=120) # 2 minute timeout
+class GTSFulfillModal(discord.ui.Modal, title="Fulfill GTS Trade"):
+    box_input = discord.ui.TextInput(
+        label="Your Specimen's Box Number",
+        placeholder="e.g., 15",
+        min_length=1,
+        max_length=5
+    )
+
+    def __init__(self, trade_data, db_file, parent_view):
+        super().__init__()
+        self.trade_data = trade_data
+        self.db_file = db_file
+        self.parent_view = parent_view 
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        gts_id, target_user_id, _, req_sp, req_min, req_max, req_gen = self.trade_data[:7]
+        
+        try:
+            box_num = int(self.box_input.value.strip())
+        except ValueError:
+            return await interaction.response.send_message("⚠️ Please enter a valid Box Number.", ephemeral=True)
+
+        await interaction.response.defer()
+
+        try:
+            async with aiosqlite.connect(self.db_file) as db:
+                # 1. Fetch their offered Pokémon
+                async with db.execute("""
+                    WITH NumberedPC AS (
+                        SELECT instance_id, level, gender, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ? AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments) AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    )
+                    SELECT instance_id, name, level, gender FROM NumberedPC WHERE box_number = ?
+                """, (user_id, box_num)) as cursor:
+                    offered_poke = await cursor.fetchone()
+
+                if not offered_poke:
+                    return await interaction.followup.send("⚠️ Could not find a valid specimen at that Box Number.")
+
+                offered_id, offered_name, offered_lvl, offered_gen = offered_poke
+
+                # 2. STRICT VALIDATION
+                if offered_name.lower() != req_sp.lower():
+                    return await interaction.followup.send(f"⚠️ Trade Failed: They requested a **{req_sp}**, but you offered a **{offered_name}**.")
+                if not (req_min <= offered_lvl <= req_max):
+                    return await interaction.followup.send(f"⚠️ Trade Failed: They requested Level **{req_min}-{req_max}**, but yours is Level **{offered_lvl}**.")
+                if req_gen != "ANY" and offered_gen != req_gen:
+                    return await interaction.followup.send(f"⚠️ Trade Failed: They requested Gender **{req_gen}**, but yours is **{offered_gen}**.")
+
+                # 3. EXECUTE THE ATOMIC SWAP
+                await db.execute("BEGIN TRANSACTION")
+                try:
+                    async with db.execute("SELECT instance_id FROM gts_deposits WHERE gts_id = ?", (gts_id,)) as cursor:
+                        gts_instance_row = await cursor.fetchone()
+                    
+                    if not gts_instance_row:
+                        await db.rollback()
+                        return await interaction.followup.send("❌ Error: This GTS listing no longer exists. Someone may have beaten you to it!")
+                    
+                    gts_instance_id = gts_instance_row[0]
+
+                    # Swap the IDs!
+                    await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (target_user_id, offered_id))
+                    await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (user_id, gts_instance_id))
+                    
+                    await db.execute("DELETE FROM gts_deposits WHERE gts_id = ?", (gts_id,))
+                    
+                    # 🚨 INLINE ALERT DISPATCH!
+                    alert_msg = f"🤝 **GTS Update:** Your deposited **{self.trade_data[7]}** was successfully traded for a **{offered_name}** by {interaction.user.name}!"
+                    await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (target_user_id, alert_msg))
+
+                    await db.commit()
+
+                    # Success UI Update
+                    for child in self.parent_view.children: child.disabled = True
+                    await interaction.message.edit(view=self.parent_view)
+                    
+                    await interaction.followup.send(f"🎉 **Trade Successful!** The {self.trade_data[7]} has been transferred to your PC.")
+
+                except Exception as e:
+                    await db.rollback()
+                    print(f"GTS Swap Transaction Error: {e}")
+                    await interaction.followup.send("❌ A database error occurred during the transfer.")
+
+        except Exception as outer_e:
+            print(f"GTS Modal Validation Error: {outer_e}")
+            await interaction.followup.send("❌ A critical error occurred while validating your GTS trade.")
+            
+class GTSSearchPaginator(discord.ui.View):
+    # 🚨 ADDED: preselected_instance=None
+    def __init__(self, user, results, db_file, preselected_instance=None):
+        super().__init__(timeout=180)
         self.user = user
-        self.inventory_data = inventory_data
-        self.catalog = catalog
-        
-        # UI Settings
-        self.items_per_page = 5
-        self.total_pages = math.ceil(len(inventory_data) / self.items_per_page)
-        self.current_page = 1
-        
+        self.results = results
+        self.db_file = db_file
+        self.preselected_instance = preselected_instance # 🚨 Assigned here!
+        self.current_page = 0
+        self.max_pages = len(results)
         self.update_buttons()
 
     def update_buttons(self):
+        self.children[0].disabled = self.current_page == 0 
+        self.children[1].disabled = self.current_page >= self.max_pages - 1 
+
+    def create_embed(self):
+        row = self.results[self.current_page]
+        gts_id, dep_owner, msg, req_sp, req_min, req_max, req_gen, p_name, p_lvl, p_gen, p_shiny, p_abil, hp, atk, defn, spatk, spdef, spd = row
+        
+        iv_total = hp + atk + defn + spatk + spdef + spd
+        iv_pct = int((iv_total / 186.0) * 100)
+        shiny_icon = "✨" if p_shiny else ""
+        gender_icon = "♂️" if p_gen == "M" else "♀️" if p_gen == "F" else "⚧️"
+        
+        req_lvl_str = f"{req_min}-{req_max}" if req_min != req_max else f"{req_min}"
+
+        embed = discord.Embed(
+            title=f"GTS Entry: {shiny_icon} {p_name} {gender_icon} (Lvl {p_lvl})",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="🧬 Biological Data", value=f"**Ability:** {p_abil}\n**IV Potential:** {iv_pct}%", inline=True)
+        embed.add_field(name="📝 Trainer Message", value=f"*{msg}*", inline=False)
+        
+        embed.add_field(
+            name="⚠️ Requirements for Trade", 
+            value=f"**Species:** {req_sp}\n**Level:** {req_lvl_str}\n**Gender:** {req_gen}", 
+            inline=False
+        )
+        
+        embed.set_footer(text=f"Result {self.current_page + 1} of {self.max_pages} | GTS ID: {gts_id}")
+        return embed
+
+    @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.secondary, row=0)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user: return
+        self.current_page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.secondary, row=0)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user: return
+        self.current_page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="🤝 Fulfill Trade", style=discord.ButtonStyle.success, row=1)
+    async def fulfill_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user: 
+            return await interaction.response.send_message("Not your search session!", ephemeral=True)
+            
+        current_trade = self.results[self.current_page]
+        
+        # PATH A: General Search (Needs Box Number via Modal)
+        if not getattr(self, 'preselected_instance', None):
+            return await interaction.response.send_modal(GTSFulfillModal(current_trade, self.db_file, self))
+            
+        # PATH B: Wanted Search (1-Click Execution!)
+        await interaction.response.defer()
+        user_id = str(interaction.user.id)
+        gts_id, target_user_id = current_trade[0], current_trade[1]
+        
+        async with aiosqlite.connect(self.db_file) as db:
+            await db.execute("BEGIN TRANSACTION")
+            try:
+                async with db.execute("SELECT instance_id FROM gts_deposits WHERE gts_id = ?", (gts_id,)) as cursor:
+                    gts_instance_row = await cursor.fetchone()
+                
+                if not gts_instance_row:
+                    await db.rollback()
+                    return await interaction.followup.send("❌ Error: This GTS listing no longer exists. Someone may have beaten you to it!")
+                
+                gts_instance_id = gts_instance_row[0]
+
+                # Atomic Swap!
+                await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (target_user_id, self.preselected_instance))
+                await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (user_id, gts_instance_id))
+                
+                await db.execute("DELETE FROM gts_deposits WHERE gts_id = ?", (gts_id,))
+                await db.commit()
+
+                # UI Update
+                for child in self.children: child.disabled = True
+                await interaction.message.edit(view=self)
+                await interaction.followup.send(f"🎉 **Trade Successful!** The {current_trade[7]} has been transferred to your PC.")
+                
+            except Exception as e:
+                await db.rollback()
+                print(f"GTS 1-Click Swap Error: {e}")
+                await interaction.followup.send("❌ A database error occurred during the transfer.")
+
+class GTSSearchModal(discord.ui.Modal, title="GTS Network Search"):
+    wanted_species = discord.ui.TextInput(
+        label="Specimen Wanted",
+        placeholder="e.g., Eevee",
+        min_length=2,
+        max_length=20
+    )
+    wanted_gender = discord.ui.TextInput(
+        label="Gender (M / F / Any)",
+        default="Any",
+        max_length=3
+    )
+    wanted_level = discord.ui.TextInput(
+        label="Level Range (e.g., 1-100 or 50)",
+        default="1-100",
+        max_length=7
+    )
+    shiny_only = discord.ui.TextInput(
+        label="Shiny Only? (Y/N)",
+        default="N",
+        max_length=1
+    )
+
+    def __init__(self, db_file):
+        super().__init__()
+        self.db_file = db_file
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # 1. Parse the Inputs
+        species = self.wanted_species.value.strip().capitalize()
+        gender = self.wanted_gender.value.strip().upper()
+        if gender not in ["M", "F"]: gender = "ANY"
+        
+        is_shiny = 1 if self.shiny_only.value.strip().upper() == "Y" else 0
+
+        try:
+            if "-" in self.wanted_level.value:
+                min_lvl, max_lvl = map(int, self.wanted_level.value.split("-"))
+            else:
+                min_lvl = max_lvl = int(self.wanted_level.value)
+        except ValueError:
+            return await interaction.response.send_message("⚠️ Invalid level format.", ephemeral=True)
+
+        await interaction.response.defer()
+
+        # 2. Query the Database for Matches
+        query = """
+            SELECT 
+                g.gts_id, g.user_id, g.message, g.req_species, g.req_min_level, g.req_max_level, g.req_gender,
+                s.name, cp.level, cp.gender, cp.is_shiny, cp.ability, cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed
+            FROM gts_deposits g
+            JOIN caught_pokemon cp ON g.instance_id = cp.instance_id
+            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+            WHERE LOWER(g.dep_species) = LOWER(?) 
+            AND cp.level BETWEEN ? AND ?
+            AND (? = 'ANY' OR cp.gender = ?)
+            AND (? = 0 OR cp.is_shiny = 1)
+            AND g.user_id != ? -- Don't show the user their own deposits!
+            ORDER BY g.deposit_time ASC
+        """
+        params = (species, min_lvl, max_lvl, gender, gender, is_shiny, str(interaction.user.id))
+
+        async with aiosqlite.connect(self.db_file) as db:
+            async with db.execute(query, params) as cursor:
+                results = await cursor.fetchall()
+
+        if not results:
+            return await interaction.followup.send("📭 No specimens on the GTS match your exact search criteria right now.")
+
+        # 3. Launch the Paginator
+        view = GTSSearchPaginator(interaction.user, results, self.db_file)
+        await interaction.followup.send(embed=view.create_embed(), view=view)
+
+class GTSDepositModal(discord.ui.Modal, title="Global Trade Station Deposit"):
+    req_species = discord.ui.TextInput(
+        label="Species you want to receive",
+        placeholder="e.g., Bulbasaur",
+        min_length=2,
+        max_length=20
+    )
+    req_level = discord.ui.TextInput(
+        label="Desired Level Range",
+        placeholder="e.g., 1-100 or 50",
+        default="1-100",
+        max_length=7
+    )
+    req_shiny = discord.ui.TextInput(
+        label="Must be Shiny? (Y/N)",
+        placeholder="Y or N",
+        default="N",
+        max_length=1
+    )
+    req_gender = discord.ui.TextInput(
+        label="Desired Gender (M / F / Any)",
+        placeholder="M, F, or Any",
+        default="Any",
+        max_length=3
+    )
+    message = discord.ui.TextInput(
+        label="Trade Message",
+        style=discord.TextStyle.paragraph,
+        placeholder="Please trade with me. Thanks in advance!",
+        default="Please trade with me. Thanks in advance!",
+        required=False,
+        max_length=100
+    )
+
+    def __init__(self, specimen_data, db_file):
+        super().__init__()
+        self.specimen = specimen_data # Dictionary containing name, level, gender, instance_id
+        self.db_file = db_file
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        
+        # 1. Parse Level Range
+        try:
+            if "-" in self.req_level.value:
+                min_lvl, max_lvl = map(int, self.req_level.value.split("-"))
+            else:
+                min_lvl = max_lvl = int(self.req_level.value)
+        except ValueError:
+            return await interaction.response.send_message("⚠️ Invalid level format. Use `1-100` or a specific number.", ephemeral=True)
+
+        # 2. Parse Gender
+        req_gender_val = self.req_gender.value.strip().upper()
+        if req_gender_val not in ["M", "F", "ANY"]:
+            req_gender_val = "ANY"
+
+        # 3. Parse Shiny Requirement (Y/N to 1/0)
+        req_shiny_val = 1 if self.req_shiny.value.strip().upper() == "Y" else 0
+
+        req_species_val = self.req_species.value.strip().capitalize()
+        gts_id = str(uuid.uuid4())[:8]
+
+        # 4. Defer response while we hit the database
+        await interaction.response.defer(ephemeral=True)
+
+        async with aiosqlite.connect(self.db_file) as db:
+            # CHECK LIMITS FIRST
+            async with db.execute("SELECT COUNT(*) FROM gts_deposits WHERE user_id = ?", (user_id,)) as cursor:
+                count = await cursor.fetchone()
+                if count[0] >= 3:
+                    return await interaction.followup.send("🛑 You have reached the maximum of 3 active GTS deposits.")
+
+            # 5. Insert into GTS (Including req_is_shiny!)
+            await db.execute("""
+                INSERT INTO gts_deposits 
+                (gts_id, user_id, instance_id, dep_species, dep_level, dep_gender, req_species, req_min_level, req_max_level, req_gender, req_is_shiny, message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (gts_id, user_id, self.specimen['instance_id'], self.specimen['name'].capitalize(), self.specimen['level'], self.specimen['gender'], 
+                  req_species_val, min_lvl, max_lvl, req_gender_val, req_shiny_val, self.message.value))
+            
+            await db.commit()
+
+        # 6. Trigger the Matching Engine in the background
+        await interaction.followup.send(f"✅ **{self.specimen['name'].capitalize()}** successfully uploaded to the GTS network!\n*Searching for compatible exchange partners...*")
+        
+        await process_gts_match(interaction.client, self.db_file, gts_id)
+
+async def process_gts_match(bot, db_file, new_gts_id):
+    """Checks a newly deposited GTS record against existing records to find a two-way match."""
+    
+    async with aiosqlite.connect(db_file) as db:
+        # 1. Fetch exactly the columns we need to bypass any ALTER TABLE ordering issues
+        query_fetch = """
+            SELECT gts_id, user_id, instance_id, dep_species, dep_level, dep_gender, 
+                   req_species, req_min_level, req_max_level, req_gender, req_is_shiny
+            FROM gts_deposits WHERE gts_id = ?
+        """
+        async with db.execute(query_fetch, (new_gts_id,)) as cursor:
+            new_dep = await cursor.fetchone()
+            
+        if not new_dep: return 
+        
+        # Safely unpack exactly 11 variables
+        n_id, n_user, n_instance, n_dep_species, n_dep_lvl, n_dep_gen, n_req_species, n_req_min, n_req_max, n_req_gen, n_req_shiny = new_dep
+
+        # We also need to know if the Pokémon WE just deposited is shiny to satisfy THEIR requests!
+        async with db.execute("SELECT is_shiny FROM caught_pokemon WHERE instance_id = ?", (n_instance,)) as cursor:
+            cp_row = await cursor.fetchone()
+            n_dep_shiny = cp_row[0] if cp_row else 0
+
+        # 2. Search for a Reverse Match!
+        query_match = """
+            SELECT g.gts_id, g.user_id, g.instance_id 
+            FROM gts_deposits g
+            JOIN caught_pokemon cp ON g.instance_id = cp.instance_id
+            WHERE g.user_id != ? 
+            
+            AND LOWER(g.dep_species) = LOWER(?) 
+            AND g.dep_level BETWEEN ? AND ? 
+            AND (? = 'ANY' OR g.dep_gender = ?)
+            AND (? = 0 OR cp.is_shiny = 1)
+            
+            AND LOWER(g.req_species) = LOWER(?)
+            AND ? BETWEEN g.req_min_level AND g.req_max_level
+            AND (g.req_gender = 'ANY' OR g.req_gender = ?)
+            AND (COALESCE(g.req_is_shiny, 0) = 0 OR ? = 1)
+            
+            ORDER BY g.deposit_time ASC LIMIT 1
+        """
+        
+        params = (
+            n_user, 
+            n_req_species, n_req_min, n_req_max, n_req_gen, n_req_gen, n_req_shiny, 
+            n_dep_species, n_dep_lvl, n_dep_gen, n_dep_shiny 
+        )
+        
+        async with db.execute(query_match, params) as cursor:
+            match = await cursor.fetchone()
+            
+        if match:
+            # WE FOUND A MATCH! EXECUTE THE TRADE.
+            match_gts_id, match_user_id, match_instance = match
+            
+            await db.execute("BEGIN TRANSACTION")
+            try:
+                # Swap Ownership
+                await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (match_user_id, n_instance))
+                await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (n_user, match_instance))
+                
+                # Remove both from the GTS
+                await db.execute("DELETE FROM gts_deposits WHERE gts_id IN (?, ?)", (new_gts_id, match_gts_id))
+                
+                # Active Partner Safety Sweep
+                await db.execute("""
+                    UPDATE users SET active_partner = NULL 
+                    WHERE (user_id = ? AND active_partner = ?) 
+                       OR (user_id = ? AND active_partner = ?)
+                """, (n_user, n_instance, match_user_id, match_instance))
+                
+                # 🚨 INLINE THE ALERTS DIRECTLY INTO THE TRANSACTION!
+                alert_1 = f"🤝 **GTS Update:** Your deposited **{n_dep_species}** was successfully traded for a **{n_req_species}**! It is now in your PC."
+                alert_2 = f"🤝 **GTS Update:** Your deposited **{n_req_species}** was successfully traded for a **{n_dep_species}**! It is now in your PC."
+                
+                await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (n_user, alert_1))
+                await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (match_user_id, alert_2))
+                
+                # Commit everything (Trades + Alerts) all at once!
+                await db.commit()
+                
+            except Exception as e:
+                await db.rollback()
+                print(f"GTS Atomic Trade Error: {e}")
+
+
+class BackpackPaginator(discord.ui.View):
+    def __init__(self, user, inventory_data, catalog):
+        super().__init__(timeout=120)
+        self.user = user
+        self.raw_inventory = inventory_data
+        self.catalog = catalog
+        
+        # State
+        self.current_category = "all"
+        self.filtered_inventory = self.raw_inventory
+        self.items_per_page = 5
+        self.current_page = 1
+        self.total_pages = self._calculate_pages()
+        
+        # Add the dropdown UI
+        self.select_menu = discord.ui.Select(
+            placeholder="Filter field pack...",
+            options=CATEGORY_OPTIONS,
+            custom_id="bp_category_select",
+            row=0 # Keep dropdown on top row
+        )
+        self.select_menu.callback = self.select_callback
+        self.add_item(self.select_menu)
+        
+        self.update_buttons()
+
+    def _calculate_pages(self):
+        return max(1, math.ceil(len(self.filtered_inventory) / self.items_per_page))
+
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user != self.user:
+            return await interaction.response.send_message("❌ This is not your field pack!", ephemeral=True)
+            
+        self.current_category = self.select_menu.values[0]
+        
+        # Re-filter the inventory based on the selected category
+        if self.current_category == "all":
+            self.filtered_inventory = self.raw_inventory
+        else:
+            self.filtered_inventory = []
+            for item_name, qty in self.raw_inventory:
+                clean_key = item_name.lower().strip()
+                cat_data = self.catalog.get(clean_key, {})
+                if cat_data.get("category") == self.current_category:
+                    self.filtered_inventory.append((item_name, qty))
+                    
+        # Reset to page 1 and recalculate pages
+        self.current_page = 1
+        self.total_pages = self._calculate_pages()
+        self.update_buttons()
+        
+        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+
+    def update_buttons(self):
         """Disables navigation buttons if at the start or end of the catalog."""
-        self.children[0].disabled = self.current_page <= 1
-        self.children[1].disabled = self.current_page >= self.total_pages
+        # Find the specific buttons by matching their custom_ids or checking type
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                if child.custom_id == "bp_prev":
+                    child.disabled = self.current_page <= 1
+                elif child.custom_id == "bp_next":
+                    child.disabled = self.current_page >= self.total_pages
 
     def generate_embed(self):
-        """Slices the inventory list and builds the UI for the current page."""
+        """Slices the filtered list and builds the UI."""
         embed = discord.Embed(
             title=f"🎒 {self.user.name}'s Field Equipment", 
             color=discord.Color.orange(),
             description=f"**Page {self.current_page} of {self.total_pages}**"
         )
         
-        # Calculate the slice indices (e.g., Page 1: 0 to 5, Page 2: 5 to 10)
         start_idx = (self.current_page - 1) * self.items_per_page
         end_idx = start_idx + self.items_per_page
-        page_items = self.inventory_data[start_idx:end_idx]
+        page_items = self.filtered_inventory[start_idx:end_idx]
         
-        for raw_item_name, quantity in page_items:
-            # 1. DATA SANITIZATION
-            clean_key = raw_item_name.lower().replace(" ", "").replace("-", "")
+        if not page_items:
+            embed.description += "\n\n*No items found in this section of your pack.*"
+            return embed
             
-            # 2. Safe Dictionary Lookup
+        for raw_item_name, quantity in page_items:
+            clean_key = clean_key = raw_item_name.lower().strip()
             item_data = self.catalog.get(clean_key)
             
             if item_data:
@@ -51,19 +537,19 @@ class BackpackPaginator(discord.ui.View):
                 emoji = item_data.get('emoji', '📦')
                 desc = item_data.get('desc', '*No description available.*')
             else:
-                display_name = raw_item_name.title()
+                display_name = raw_item_name.title().replace('-', ' ')
                 emoji = "📦"
                 desc = "*Archived/Unknown Anomaly*"
                 
             embed.add_field(
                 name=f"{emoji} {display_name}", 
-                value=f"**Quantity:** {quantity}\n{desc}", 
+                value=f"**Quantity:** {quantity}\n*{desc}*", 
                 inline=False
             )
             
         return embed
 
-    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.primary, custom_id="bp_prev")
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.primary, custom_id="bp_prev", row=1)
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
             return await interaction.response.send_message("❌ This is not your field pack!", ephemeral=True)
@@ -72,7 +558,7 @@ class BackpackPaginator(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
-    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, custom_id="bp_next")
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, custom_id="bp_next", row=1)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.user:
             return await interaction.response.send_message("❌ This is not your field pack!", ephemeral=True)
@@ -81,6 +567,50 @@ class BackpackPaginator(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
+class MarketView(discord.ui.View):
+    def __init__(self, catalog):
+        super().__init__(timeout=120)
+        self.catalog = catalog
+        self.current_category = "all"
+        
+        # Add the dropdown dynamically
+        self.select_menu = discord.ui.Select(
+            placeholder="Select an equipment category...",
+            options=CATEGORY_OPTIONS,
+            custom_id="market_category_select"
+        )
+        self.select_menu.callback = self.select_callback
+        self.add_item(self.select_menu)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        # Update the state based on what they clicked
+        self.current_category = self.select_menu.values[0]
+        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+
+    def generate_embed(self):
+        embed = discord.Embed(title="🛒 Ecological Supply Market", color=discord.Color.green())
+        embed.description = "Use `!buy [quantity] [item_name]` to requisition supplies."
+        
+        has_items = False
+        for item_key, data in self.catalog.items():
+            if data.get("purchasable") == False:
+                continue
+            # Filter logic
+            if self.current_category != "all" and data.get("category") != self.current_category:
+                continue
+                
+            has_items = True
+            embed.add_field(
+                name=f"{data['emoji']} {data['name']} (🪙 {data['price']})", 
+                value=data['desc'], 
+                inline=False
+            )
+            
+        if not has_items:
+            embed.description += "\n\n*No items available in this category.*"
+            
+        return embed
+    
 class MarketPaginator(discord.ui.View):
     def __init__(self, ctx, listings):
         super().__init__(timeout=180)
@@ -105,7 +635,7 @@ class MarketPaginator(discord.ui.View):
         chunk = self.listings[start:end]
 
         if not chunk:
-            embed.description = "The market is currently empty. Use `!gts sell` to list an asset!"
+            embed.description = "The market is currently empty. Use `!global market sell` to list an asset!"
         else:
             for item in chunk:
                 shiny_icon = "🌟" if item['is_shiny'] else "🌿"
@@ -117,13 +647,13 @@ class MarketPaginator(discord.ui.View):
                     inline=False
                 )
 
-        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Use !gts buy [Listing ID]")
+        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Use !global market buy [Listing ID]")
         return embed
 
     @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
-            return await interaction.response.send_message("Please run your own `!gts view` command to browse.", ephemeral=True)
+            return await interaction.response.send_message("Please run your own `!global market view` command to browse.", ephemeral=True)
             
         self.current_page -= 1
         self.update_buttons()
@@ -132,7 +662,7 @@ class MarketPaginator(discord.ui.View):
     @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
-            return await interaction.response.send_message("Please run your own `!gts view` command to browse.", ephemeral=True)
+            return await interaction.response.send_message("Please run your own `!global market view` command to browse.", ephemeral=True)
             
         self.current_page += 1
         self.update_buttons()
@@ -152,14 +682,15 @@ class Economy(commands.Cog):
 
         # 3. Define the supply lines
         standard_items = [
-            ("greatball", 25), 
-            ("potion", 20), 
+            ("greatball", 100), 
+            ("potion", 100), 
             ("purifier", 50)
         ]
         
         exclusive_items = [
-            ("ultraball", 75), ("full-restore", 100), 
-            ("rare-candy", 500), ("masterball", 5000)
+            ("ultraball", 200), 
+            ("full-restore", 100), 
+            ("rare-candy", 500)
         ]
 
         # 4. Generate today's inventory
@@ -183,7 +714,7 @@ class Economy(commands.Cog):
         return shop_inventory
 
         
-    @commands.command(name="shop", aliases=["daily"])
+    @commands.command(name="dshop", aliases=["daily"])
     @checks.has_started()
     async def view_shop(self, ctx):
         """Views the revolving daily supply drop."""
@@ -203,81 +734,291 @@ class Economy(commands.Cog):
         embed.set_footer(text="Use !buy [item_name] [quantity] to purchase.")
         await ctx.send(embed=embed)
     
-    # This creates the base command group. If they just type !gts, it shows them the help menu.
     @commands.group(name="gts", invoke_without_command=True)
+    async def gts_base(self, ctx):
+        """Base command for the Global Trade Station."""
+        embed = discord.Embed(
+            title="🌐 Global Trade Station (GTS)",
+            description="Welcome to the biological exchange network. Here you can offer specimens in exchange for specific requests from other researchers globally.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="📥 Deposit", value="`!gts deposit <BoxNum>`\nUpload a specimen to the network.", inline=False)
+        embed.add_field(name="📋 Active Listings", value="`!gts active`\nView your currently deposited specimens.", inline=False)
+        embed.add_field(name="📤 Withdraw", value="`!gts remove <GTS_ID>`\nPull a specimen out of the network.", inline=False)
+        embed.add_field(name="📤 Wanted", value="`!gts wanted <box number>`\nPulls all the criteria matching pokemon for the specific box number pokemon.", inline=False)
+        await ctx.send(embed=embed)
+
+    @gts_base.command(name="deposit", aliases=["add"])
     @checks.has_started()
     @checks.is_authorized()
-    async def global_trade_station(self, ctx):
+    @checks.is_not_in_combat()
+    async def gts_deposit(self, ctx, box_num: int):
+        """Deposits a specimen into the GTS."""
+        if box_num < 1:
+            return await ctx.send("⚠️ Please provide a valid Box number greater than 0.")
+
+        user_id = str(ctx.author.id)
+
+        # 1. Fetch the Pokémon using the CTE logic (Notice the new GTS lock check!)
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("""
+                WITH NumberedPC AS (
+                    SELECT 
+                        cp.instance_id, 
+                        cp.level, 
+                        cp.gender,
+                        s.name,
+                        ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ? 
+                      AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                      AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits) -- 🚨 The GTS Lock!
+                )
+                SELECT name, level, gender, instance_id 
+                FROM NumberedPC 
+                WHERE box_number = ?
+            """, (user_id, box_num)) as cursor:
+                pokemon = await cursor.fetchone()
+
+        if not pokemon:
+            return await ctx.send(f"⚠️ Could not find a valid specimen at Box `#{box_num}`. It may be deployed, already in the GTS, or it doesn't exist.")
+
+        specimen_data = {
+            "name": pokemon[0],
+            "level": pokemon[1],
+            "gender": pokemon[2],
+            "instance_id": pokemon[3]
+        }
+
+        # 2. Trigger the Modal!
+        # Note: Modals MUST be sent in response to an interaction. 
+        # Since this is a text command (!gts), we need to send a button first to open the modal, 
+        # OR if you are migrating to hybrid/slash commands, use interaction.response.send_modal.
+        
+        # Here is the Button View approach for a standard text command:
+        view = discord.ui.View(timeout=60)
+        
+        async def modal_callback(interaction: discord.Interaction):
+            if interaction.user != ctx.author:
+                return await interaction.response.send_message("This isn't your deposit!", ephemeral=True)
+            await interaction.response.send_modal(GTSDepositModal(specimen_data, DB_FILE))
+            
+        btn = discord.ui.Button(label="Open GTS Terminal", style=discord.ButtonStyle.success)
+        btn.callback = modal_callback
+        view.add_item(btn)
+        
+        await ctx.send(f"📡 Terminal ready for **{specimen_data['name'].capitalize()}** (Lvl {specimen_data['level']}). Click below to set your exchange requirements.", view=view)
+
+    @gts_base.command(name="active", aliases=["status", "list"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def gts_active(self, ctx):
+        """Shows the user's active GTS deposits."""
+        user_id = str(ctx.author.id)
+        
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("""
+                SELECT gts_id, dep_species, dep_level, req_species, req_min_level, req_max_level, deposit_time
+                FROM gts_deposits 
+                WHERE user_id = ?
+                ORDER BY deposit_time DESC
+            """, (user_id,)) as cursor:
+                deposits = await cursor.fetchall()
+                
+        if not deposits:
+            return await ctx.send("📭 You currently have no specimens uploaded to the GTS network.")
+            
+        embed = discord.Embed(title="🌐 Your Active GTS Listings", color=discord.Color.blue())
+        
+        for d in deposits:
+            gts_id, dep_sp, dep_lvl, req_sp, req_min, req_max, dep_time = d
+            lvl_req = f"Lvl {req_min}-{req_max}" if req_min != req_max else f"Lvl {req_min}"
+            
+            embed.add_field(
+                name=f"ID: `{gts_id}`", 
+                value=f"**Offered:** {dep_sp} (Lvl {dep_lvl})\n**Seeking:** {req_sp} ({lvl_req})", 
+                inline=False
+            )
+            
+        embed.set_footer(text=f"{len(deposits)}/3 Active Slots Used")
+        await ctx.send(embed=embed)
+
+    @gts_base.command(name="remove", aliases=["withdraw", "cancel"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def gts_remove(self, ctx, gts_id: str):
+        """Removes a specimen from the GTS and returns it to the user's PC."""
+        user_id = str(ctx.author.id)
+        clean_id = gts_id.strip()
+        
+        async with aiosqlite.connect(DB_FILE) as db:
+            # Check if it exists and belongs to them
+            async with db.execute("SELECT dep_species FROM gts_deposits WHERE gts_id = ? AND user_id = ?", (clean_id, user_id)) as cursor:
+                record = await cursor.fetchone()
+                
+            if not record:
+                return await ctx.send(f"⚠️ Could not find an active deposit with ID `{clean_id}`. It may have already been traded!")
+                
+            # Delete it
+            await db.execute("DELETE FROM gts_deposits WHERE gts_id = ? AND user_id = ?", (clean_id, user_id))
+            await db.commit()
+            
+        await ctx.send(f"✅ Successfully canceled the exchange. **{record[0]}** has been returned to your local PC.")
+
+    @gts_base.command(name="wanted")
+    @checks.has_started()
+    @checks.is_authorized()
+    @checks.is_not_in_combat()
+    async def gts_wanted(self, ctx, box_num: int):
+        """Finds GTS listings looking for a specific specimen you own."""
+        if box_num < 1:
+            return await ctx.send("⚠️ Please provide a valid Box number.")
+
+        user_id = str(ctx.author.id)
+        
+        try:
+            # 1. Fetch your offered Pokémon
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute("""
+                    WITH NumberedPC AS (
+                        SELECT instance_id, level, gender, is_shiny, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                        FROM caught_pokemon cp
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                        WHERE cp.user_id = ? AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments) AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                    )
+                    SELECT name, level, gender, is_shiny, instance_id FROM NumberedPC WHERE box_number = ?
+                """, (user_id, box_num)) as cursor:
+                    offered_poke = await cursor.fetchone()
+
+            if not offered_poke:
+                return await ctx.send(f"⚠️ Could not find a valid specimen at Box `#{box_num}`.")
+
+            off_name, off_lvl, off_gen, off_shiny, off_instance = offered_poke
+
+            # 2. The Reverse-Lookup Query
+            query = """
+            SELECT 
+                g.gts_id, g.user_id, g.message, g.req_species, g.req_min_level, g.req_max_level, g.req_gender,
+                s.name, cp.level, cp.gender, cp.is_shiny, cp.ability, cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed
+            FROM gts_deposits g
+            JOIN caught_pokemon cp ON g.instance_id = cp.instance_id
+            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+            WHERE LOWER(g.req_species) = LOWER(?)
+            AND ? BETWEEN g.req_min_level AND g.req_max_level
+            AND (g.req_gender = 'ANY' OR g.req_gender = ?)
+            AND (COALESCE(g.req_is_shiny, 0) = 0 OR ? = 1)
+            AND g.user_id != ?
+            ORDER BY g.deposit_time ASC
+            """
+            params = (off_name, off_lvl, off_gen, off_shiny, user_id)
+
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute(query, params) as cursor:
+                    results = await cursor.fetchall()
+
+            if not results:
+                return await ctx.send(f"📭 Nobody on the GTS is currently looking for a Level {off_lvl} {off_name} right now.")
+
+            # 3. Launch the Paginator
+            view = GTSSearchPaginator(ctx.author, results, DB_FILE, preselected_instance=off_instance)
+            await ctx.send(f"🔍 Found **{len(results)}** trainers looking for your {off_name}!", embed=view.create_embed(), view=view)
+
+        except Exception as e:
+            print(f"GTS Wanted Error: {e}")
+            await ctx.send("❌ A critical database error occurred while searching the GTS.")
+
+    @gts_base.command(name="search", aliases=["find"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def gts_search(self, ctx):
+        """Search the GTS network for specific Pokémon."""
+        view = discord.ui.View(timeout=60)
+        
+        async def modal_callback(interaction: discord.Interaction):
+            if interaction.user != ctx.author:
+                return await interaction.response.send_message("This isn't your terminal!", ephemeral=True)
+            # Make sure your bot's DB_FILE variable is passed correctly here!
+            await interaction.response.send_modal(GTSSearchModal(DB_FILE))
+            
+        btn = discord.ui.Button(label="Open Search Terminal", style=discord.ButtonStyle.primary)
+        btn.callback = modal_callback
+        view.add_item(btn)
+        
+        await ctx.send("📡 GTS Search Terminal ready. Click below to enter your search criteria.", view=view)
+
+    # This creates the base command group. If they just type !global market, it shows them the help menu.
+    @commands.group(name="global market", invoke_without_command=True)
+    @checks.has_started()
+    @checks.is_authorized()
+    async def global_market(self, ctx):
         """Base command for the Global Trade Station."""
         embed = discord.Embed(title="🌐 Global Transfer Station", color=discord.Color.blue())
         embed.description = (
-            "`!gts sell [Tag ID] [Price]` - List a specimen on the market.\n"
-            "`!gts view` - Browse available assets.\n"
-            "`!gts buy [Listing ID]` - Procure a specimen."
+            "`!global market sell [Tag ID] [Price]` - List a specimen on the market.\n"
+            "`!global market view` - Browse available assets.\n"
+            "`!global market buy [Listing ID]` - Procure a specimen."
         )
         await ctx.send(embed=embed)
 
-    @global_trade_station.command(name="sell")
+    @global_market.command(name="sell")
     @checks.has_started()
     @checks.is_authorized()
-    async def gts_sell(self, ctx, tag_id: str, price: int):
+    async def global_market_sell(self, ctx, tag_id: str, price: int):
         """Lists a specimen on the global market for 48 hours."""
         user_id = str(ctx.author.id)
         
         if price <= 0:
             return await ctx.send("⚠️ You must request a conservation grant of at least 1 Eco-Token.")
-            
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
         try:
-            # 1. Verify Ownership & Retrieve Specimen Data (Box Number or UUID)
-            if tag_id.isdigit() and len(tag_id) <= 6:
-                cursor.execute("""
-                    WITH Roster AS (
-                        SELECT cp.instance_id, s.name, cp.level, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 1. Verify Ownership & Retrieve Specimen Data (Box Number or UUID)
+                if tag_id.isdigit() and len(tag_id) <= 6:
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, s.name, cp.level, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp
+                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        ) SELECT instance_id, name, level FROM Roster WHERE box_number = ?
+                    """, (user_id, int(tag_id))) as cursor:
+                        pokemon_data = await cursor.fetchone()
+                else:
+                    async with db.execute("""
+                        SELECT cp.instance_id, s.name, cp.level 
                         FROM caught_pokemon cp
                         JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                    ) SELECT instance_id, name, level FROM Roster WHERE box_number = ?
-                """, (user_id, int(tag_id)))
-            else:
-                cursor.execute("""
-                    SELECT cp.instance_id, s.name, cp.level 
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                """, (f"{tag_id}%", user_id))
-            
-            pokemon_data = cursor.fetchone()
-            
-            if not pokemon_data:
-                conn.close()
-                return await ctx.send("❌ Could not locate that specimen in your survey notebook.")
+                        WHERE cp.instance_id LIKE ? AND cp.user_id = ?
+                    """, (f"{tag_id}%", user_id)) as cursor:
+                        pokemon_data = await cursor.fetchone()
                 
-            actual_tag, name, level = pokemon_data
-            
-            # 2. Security Check: Prevent selling active party members
-            cursor.execute("SELECT slot FROM user_party WHERE instance_id = ?", (actual_tag,))
-            if cursor.fetchone():
-                conn.close()
-                return await ctx.send("⚠️ You cannot transfer a specimen that is currently assigned to your active field roster! Remove it from your party first.")
+                if not pokemon_data:
+                    return await ctx.send("❌ Could not locate that specimen in your survey notebook.")
+                    
+                actual_tag, name, level = pokemon_data
                 
-            # 3. Security Check: Prevent duplicate listings
-            cursor.execute("SELECT listing_id FROM global_market WHERE instance_id = ?", (actual_tag,))
-            if cursor.fetchone():
-                conn.close()
-                return await ctx.send("⚠️ This specimen is already listed on the open market!")
+                # 2. Security Check: Prevent selling active party members
+                async with db.execute("SELECT slot FROM user_party WHERE instance_id = ?", (actual_tag,)) as cursor:
+                    if await cursor.fetchone():
+                        return await ctx.send("⚠️ You cannot transfer a specimen that is currently assigned to your active field roster! Remove it from your party first.")
+                        
+                # 3. Security Check: Prevent duplicate listings
+                async with db.execute("SELECT listing_id FROM global_market WHERE instance_id = ?", (actual_tag,)) as cursor:
+                    if await cursor.fetchone():
+                        return await ctx.send("⚠️ This specimen is already listed on the open market!")
+                    
+                # 4. Process the Listing (Generate a 48-hour expiration timestamp)
+                expiration_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=48)
                 
-            # 4. Process the Listing (Generate a 48-hour expiration timestamp)
-            expiration_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=48)
-            
-            cursor.execute("""
-                INSERT INTO global_market (seller_id, instance_id, price, expires_at)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, actual_tag, price, expiration_date.strftime('%Y-%m-%d %H:%M:%S')))
-            
-            conn.commit()
+                await db.execute("""
+                    INSERT INTO global_market (seller_id, instance_id, price, expires_at)
+                    VALUES (?, ?, ?, ?)
+                """, (user_id, actual_tag, price, expiration_date.strftime('%Y-%m-%d %H:%M:%S')))
+                
+                await db.commit()
             
             # 5. Confirmation UI
             embed = discord.Embed(title="🌐 Global Transfer Authorized", color=discord.Color.gold())
@@ -289,35 +1030,30 @@ class Economy(commands.Cog):
             await ctx.send(embed=embed)
             
         except Exception as e:
-            print(f"GTS Sell Error: {e}")
+            print(f"Global Market Sell Error: {e}")
             await ctx.send("❌ A database error occurred while processing the transfer.")
-        finally:
-            conn.close()
 
-    @global_trade_station.command(name="view", aliases=["browse", "market"])
+    @global_market.command(name="view", aliases=["browse", "market"])
     @checks.has_started()
     @checks.is_authorized()
-    async def gts_view(self, ctx):
+    async def global_market_view(self, ctx):
         """Browses all active listings on the Global Trade Station."""
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # 1. GARBAGE COLLECTION: Delete expired listings automatically!
-            cursor.execute("DELETE FROM global_market WHERE expires_at < CURRENT_TIMESTAMP")
-            conn.commit()
-            
-            # 2. Fetch all active listings, joining the biological data AND fetching instance_id
-            cursor.execute("""
-                SELECT gm.listing_id, gm.price, gm.seller_id,
-                       s.name, cp.level, cp.is_shiny, gm.instance_id
-                FROM global_market gm
-                JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                ORDER BY gm.listed_at DESC
-            """)
-            
-            rows = cursor.fetchall()
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 1. GARBAGE COLLECTION: Delete expired listings automatically!
+                await db.execute("DELETE FROM global_market WHERE expires_at < CURRENT_TIMESTAMP")
+                await db.commit()
+                
+                # 2. Fetch all active listings, joining the biological data AND fetching instance_id
+                async with db.execute("""
+                    SELECT gm.listing_id, gm.price, gm.seller_id,
+                        s.name, cp.level, cp.is_shiny, gm.instance_id
+                    FROM global_market gm
+                    JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    ORDER BY gm.listed_at DESC
+                """) as cursor:
+                    rows = await cursor.fetchall()
             
             # 3. Package the data for the UI
             market_data = []
@@ -337,33 +1073,30 @@ class Economy(commands.Cog):
             await ctx.send(embed=view.create_embed(), view=view)
             
         except Exception as e:
-            print(f"GTS View Error: {e}")
+            print(f"Global Market View Error: {e}")
             await ctx.send("❌ A database error occurred while accessing the market network.")
-        finally:
-            conn.close()
 
-    @global_trade_station.command(name="inspect", aliases=["info", "view_listing"])
+    @global_market.command(name="inspect", aliases=["info", "view_listing"])
     @checks.has_started()
     @checks.is_authorized()
-    async def gts_inspect(self, ctx, listing_id: int):
+    async def global_market_info(self, ctx, listing_id: int):
         """Runs a complete genetic and tactical assay on a specific market listing."""
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         
         try:
-            # 1. The Deep Dive Query (Now pulling the gmax_factor)
-            cursor.execute("""
-                SELECT gm.price, gm.seller_id, gm.expires_at,
-                       cp.pokedex_id, s.name, cp.level, cp.nature, cp.is_shiny, cp.ability,
-                       cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                       cp.gmax_factor
-                FROM global_market gm
-                JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE gm.listing_id = ?
-            """, (listing_id,))
-            
-            data = cursor.fetchone()
+            async with aiosqlite.connect(DB_FILE) as db:
+
+                # 1. The Deep Dive Query (Now pulling the gmax_factor)
+                async with db.execute("""
+                    SELECT gm.price, gm.seller_id, gm.expires_at,
+                        cp.pokedex_id, s.name, cp.level, cp.nature, cp.is_shiny, cp.ability,
+                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                        cp.gmax_factor
+                    FROM global_market gm
+                    JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE gm.listing_id = ?
+                """, (listing_id,)) as cursor:
+                    data = await cursor.fetchone()
             
             if not data:
                 return await ctx.send(f"❌ Listing `#{listing_id}` does not exist or has already expired.")
@@ -380,10 +1113,29 @@ class Economy(commands.Cog):
             dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
             unix_timestamp = int(dt_obj.timestamp())
             
-            # 4. Construct the Image URL
-            base_url = "https://raw.githubusercontent.com/Dre-J/pokebotsprites/refs/heads/master/sprites/pokemon/other/official-artwork"
-            img_url = f"{base_url}/shiny/{p_id}.png" if is_shiny else f"{base_url}/{p_id}.png"
+            # ==========================================
+            # 4. LOCAL ASSET LOADING
+            # ==========================================
+            # Construct the safe OS path to your sprites
+            base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
             
+            if is_shiny:
+                file_path = os.path.join(base_path, "shiny", f"{p_id}.png")
+                safe_filename = f"{p_id}_shiny.png"
+            else:
+                file_path = os.path.join(base_path, f"{p_id}.png")
+                safe_filename = f"{p_id}.png"
+                
+            # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
+            if not os.path.exists(file_path):
+                # You can point this to a default "missingno" or placeholder sprite if you have one
+                print(f"⚠️ WARNING: Missing sprite for ID {p_id} at {file_path}")
+                sprite_file = None
+            else:
+                # Package the image as a discord File object
+                sprite_file = discord.File(file_path, filename=safe_filename)
+                
+            # ==========================================
             # 5. Build the UI
             shiny_icon = "🌟" if is_shiny else "🌿"
             gmax_marker = " 🌀 **(G-Max Capable)**" if gmax_factor else ""
@@ -410,93 +1162,102 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
 ```"""
             embed.add_field(name=f"🧬 Genetic Potential ({iv_percentage}%)", value=iv_block, inline=False)
             
-            # Display the actual asset
-            embed.set_image(url=img_url)
-            embed.set_footer(text=f"Use !gts buy {listing_id} to authorize this transfer.")
+            # Mount the local image to the embed
+            if sprite_file:
+                embed.set_image(url=f"attachment://{safe_filename}")
+                
+            embed.set_footer(text=f"Use !global market buy {listing_id} to authorize this transfer.")
             
-            await ctx.send(embed=embed)
+            # Send the message, passing BOTH the embed and the file object!
+            if sprite_file:
+                await ctx.send(embed=embed, file=sprite_file)
+            else:
+                await ctx.send(embed=embed)
             
         except Exception as e:
-            print(f"GTS Inspect Error: {e}")
+            print(f"Global Market Inspect Error: {e}")
             await ctx.send("A database error occurred while running the genetic assay.")
-        finally:
-            if conn:
-                conn.close()
     
-    @global_trade_station.command(name="buy", aliases=["procure", "purchase"])
+    @global_market.command(name="buy", aliases=["procure", "purchase"])
     @checks.is_not_in_combat()
     @checks.has_started()
     @checks.is_not_in_trade()
     @checks.is_authorized()
-    async def gts_buy(self, ctx, listing_id: int):
+    async def global_market_buy(self, ctx, listing_id: int):
         """Procures a specimen from the global market."""
         buyer_id = str(ctx.author.id)
-  
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
+
         try:
-            # 1. Fetch and Verify the Listing
-            cursor.execute("""
-                SELECT seller_id, instance_id, price 
-                FROM global_market 
-                WHERE listing_id = ? AND expires_at >= CURRENT_TIMESTAMP
-            """, (listing_id,))
-            listing = cursor.fetchone()
-            
-            if not listing:
-                conn.close()
-                return await ctx.send(f"❌ Listing `#{listing_id}` does not exist or has expired.")
+            # 🚨 AIOSQLITE UPDATE: Open the connection
+            async with aiosqlite.connect(DB_FILE) as db:
                 
-            seller_id, instance_id, price = listing
-            
-            if buyer_id == seller_id:
-                conn.close()
-                return await ctx.send("⚠️ You cannot procure your own asset! (We will build a `!gts cancel` command to retrieve these).")
+                # 1. Fetch and Verify the Listing
+                async with db.execute("""
+                    SELECT seller_id, instance_id, price 
+                    FROM global_market 
+                    WHERE listing_id = ? AND expires_at >= CURRENT_TIMESTAMP
+                """, (listing_id,)) as cursor:
+                    listing = await cursor.fetchone()
                 
-            # 2. Check the Buyer's Funding
-            cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (buyer_id,))
-            buyer_data = cursor.fetchone()
-            buyer_balance = buyer_data[0] if buyer_data else 0
-            
-            if buyer_balance < price:
-                conn.close()
-                return await ctx.send(f"🪙 Grant denied. You need **{price:,}** Eco-Tokens to procure this asset (Current Balance: {buyer_balance:,}).")
+                if not listing:
+                    return await ctx.send(f"❌ Listing `#{listing_id}` does not exist or has expired.")
+                    
+                seller_id, instance_id, price = listing
                 
-            # ==========================================
-            # 3. EXECUTE THE ATOMIC TRANSACTION
-            # ==========================================
-            # Explicitly start the transaction!
-            cursor.execute("BEGIN TRANSACTION")
-            
-            # A. Deduct funds from the buyer
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (price, buyer_id))
-            
-            # B. Transfer funds to the seller (Using UPSERT in case they don't have a wallet yet)
-            cursor.execute("""
-                INSERT INTO users (user_id, eco_tokens) 
-                VALUES (?, ?) 
-                ON CONFLICT(user_id) DO UPDATE SET eco_tokens = eco_tokens + ?
-            """, (seller_id, price, price))
-            
-            # C. Reassign biological ownership
-            cursor.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (buyer_id, instance_id))
-            
-            # D. Destroy the market listing
-            cursor.execute("DELETE FROM global_market WHERE listing_id = ?", (listing_id,))
-            
-            # E. Fetch species name for the receipt
-            cursor.execute("""
-                SELECT s.name FROM caught_pokemon cp 
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id 
-                WHERE cp.instance_id = ?
-            """, (instance_id,))
-            species_name = cursor.fetchone()[0]
-            
-            # COMMIT locks in all 5 steps permanently!
-            conn.commit()
-            
-            # 4. Generate the Transaction Receipt
+                if buyer_id == seller_id:
+                    return await ctx.send("⚠️ You cannot procure your own asset!")
+                    
+                # 2. Check the Buyer's Funding
+                async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (buyer_id,)) as cursor:
+                    buyer_data = await cursor.fetchone()
+                    
+                buyer_balance = buyer_data[0] if buyer_data else 0
+                
+                if buyer_balance < price:
+                    return await ctx.send(f"🪙 Grant denied. You need **{price:,}** Eco-Tokens to procure this asset (Current Balance: {buyer_balance:,}).")
+                    
+                # ==========================================
+                # 3. EXECUTE THE ATOMIC TRANSACTION
+                # ==========================================
+                # Explicitly start the transaction!
+                await db.execute("BEGIN TRANSACTION")
+                
+                try:
+                    # A. Deduct funds from the buyer
+                    await db.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (price, buyer_id))
+                    
+                    # B. Transfer funds to the seller (Using UPSERT in case they don't have a wallet yet)
+                    await db.execute("""
+                        INSERT INTO users (user_id, eco_tokens) 
+                        VALUES (?, ?) 
+                        ON CONFLICT(user_id) DO UPDATE SET eco_tokens = eco_tokens + ?
+                    """, (seller_id, price, price))
+                    
+                    # C. Reassign biological ownership
+                    await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (buyer_id, instance_id))
+                    
+                    # D. Destroy the market listing
+                    await db.execute("DELETE FROM global_market WHERE listing_id = ?", (listing_id,))
+                    
+                    # E. Fetch species name for the receipt
+                    async with db.execute("""
+                        SELECT s.name FROM caught_pokemon cp 
+                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id 
+                        WHERE cp.instance_id = ?
+                    """, (instance_id,)) as cursor:
+                        species_name = (await cursor.fetchone())[0]
+                    
+                    # COMMIT locks in all 5 steps permanently!
+                    await db.commit()
+                    
+                except Exception as inner_e:
+                    # CRITICAL SAFETY NET: Undo the entire transaction if it crashed midway!
+                    if db.in_transaction:
+                        await db.rollback() 
+                    # Raise the error up to the outer try/except block so it triggers the Discord failure message
+                    raise inner_e 
+
+            # 4. Generate the Transaction Receipt (Safely outside the DB block)
             embed = discord.Embed(title="🤝 Procurement Successful!", color=discord.Color.green())
             embed.description = f"**{ctx.author.name}** successfully secured the **{species_name.capitalize()}**!"
             embed.add_field(name="Conservation Grant Paid", value=f"🪙 {price:,} Tokens", inline=True)
@@ -506,53 +1267,47 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             await ctx.send(embed=embed)
             
         except Exception as e:
-            # CRITICAL SAFETY NET: Undo the entire transaction if it crashed midway!
-            if conn.in_transaction:
-                conn.rollback() 
-            print(f"GTS Buy Error: {e}")
+            print(f"Global Market Buy Error: {e}")
             await ctx.send("❌ A critical database error occurred. The transaction has been securely aborted and no tokens were lost.")
-        finally:
-            conn.close()
+            
 
-    @global_trade_station.command(name="cancel", aliases=["remove", "delist", "retrieve"])
-    async def gts_cancel(self, ctx, listing_id: int):
+    @global_market.command(name="cancel", aliases=["remove", "delist", "retrieve"])
+    async def global_market_cancel(self, ctx, listing_id: int):
         """Removes your own specimen from the global market."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # 1. Security Check: Verify existence and ownership
-            cursor.execute("""
-                SELECT seller_id, instance_id 
-                FROM global_market 
-                WHERE listing_id = ?
-            """, (listing_id,))
-            
-            listing = cursor.fetchone()
-            
-            if not listing:
-                return await ctx.send(f"❌ Listing `#{listing_id}` does not exist. It may have already expired or been purchased.")
-                
-            seller_id, instance_id = listing
-            
-            if seller_id != user_id:
-                return await ctx.send("⚠️ Security Alert: You can only delist your own ecological assets!")
-                
-            # 2. Fetch the species name for the UI before we delete the record
-            cursor.execute("""
-                SELECT s.name 
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.instance_id = ?
-            """, (instance_id,))
-            species_data = cursor.fetchone()
-            species_name = species_data[0] if species_data else "Unknown Specimen"
+            async with aiosqlite.connect(DB_FILE) as db:
 
-            # 3. Destroy the Escrow Record
-            cursor.execute("DELETE FROM global_market WHERE listing_id = ?", (listing_id,))
-            conn.commit()
+                # 1. Security Check: Verify existence and ownership
+                async with db.execute("""
+                    SELECT seller_id, instance_id 
+                    FROM global_market 
+                    WHERE listing_id = ?
+                """, (listing_id,)) as cursor:
+                    listing = await cursor.fetchone()
+                
+                if not listing:
+                    return await ctx.send(f"❌ Listing `#{listing_id}` does not exist. It may have already expired or been purchased.")
+                    
+                seller_id, instance_id = listing
+                
+                if seller_id != user_id:
+                    return await ctx.send("⚠️ Security Alert: You can only delist your own ecological assets!")
+                    
+                # 2. Fetch the species name for the UI before we delete the record
+                async with db.execute("""
+                    SELECT s.name 
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.instance_id = ?
+                """, (instance_id,)) as cursor:
+                    species_data = await cursor.fetchone()
+                species_name = species_data[0] if species_data else "Unknown Specimen"
+
+                # 3. Destroy the Escrow Record
+                await db.execute("DELETE FROM global_market WHERE listing_id = ?", (listing_id,))
+                await db.commit()
             
             # 4. Confirmation UI
             embed = discord.Embed(title="📥 Asset Retrieved", color=discord.Color.dark_gray())
@@ -562,10 +1317,8 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             await ctx.send(embed=embed)
             
         except Exception as e:
-            print(f"GTS Cancel Error: {e}")
+            print(f"Global Market Cancel Error: {e}")
             await ctx.send("A database error occurred while trying to retrieve your asset.")
-        finally:
-            conn.close()
 
     @commands.command(name="equip")
     @checks.has_started()
@@ -576,83 +1329,91 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
         user_id = str(ctx.author.id)
         formatted_item = item_name.lower().replace(" ", "-") 
 
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
         try:
-            # 1. START ATOMIC TRANSACTION
-            cursor.execute("BEGIN TRANSACTION")
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 1. START ATOMIC TRANSACTION
+                await db.execute("BEGIN TRANSACTION")
 
-            # 2. Verify Specimen Ownership (Box Number or UUID)
-            if instance_id.isdigit() and len(instance_id) <= 6:
-                cursor.execute("""
-                    WITH Roster AS (
-                        SELECT cp.instance_id, s.name, cp.held_item, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                    ) SELECT instance_id, name, held_item FROM Roster WHERE box_number = ?
-                """, (user_id, int(instance_id)))
-            else:
-                cursor.execute("""
-                    SELECT cp.instance_id, s.name, cp.held_item 
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                """, (f"{instance_id}%", user_id))
-            
-            specimen = cursor.fetchone()
-            
-            if not specimen:
-                conn.rollback()
-                return await ctx.send("❌ Specimen not found. Ensure you are using the correct Box Number or Tag ID.")
-                
-            full_instance_id, raw_specimen_name, current_held_item = specimen
-            specimen_name = raw_specimen_name.capitalize()
+                try:
+                    # 2. Verify Specimen Ownership (Box Number or UUID)
+                    if instance_id.isdigit() and len(instance_id) <= 6:
+                        async with db.execute("""
+                            WITH Roster AS (
+                                SELECT cp.instance_id, s.name, cp.held_item, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                                FROM caught_pokemon cp
+                                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                                WHERE cp.user_id = ?
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                            ) SELECT instance_id, name, held_item FROM Roster WHERE box_number = ?
+                        """, (user_id, int(instance_id))) as cursor:
+                            specimen = await cursor.fetchone()
+                    else:
+                        async with db.execute("""
+                            SELECT cp.instance_id, s.name, cp.held_item 
+                            FROM caught_pokemon cp
+                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.instance_id LIKE ? AND cp.user_id = ?
+                        """, (f"{instance_id}%", user_id)) as cursor:
+                            specimen = await cursor.fetchone()
+                    
+                    if not specimen:
+                        await db.rollback()
+                        return await ctx.send("❌ Specimen not found. Ensure you are using the correct Box Number or Tag ID.")
+                        
+                    full_instance_id, raw_specimen_name, current_held_item = specimen
+                    specimen_name = raw_specimen_name.capitalize()
 
-            # 3. UNEQUIP LOGIC (If they type "!equip [ID] none")
-            if formatted_item in ["none", "unequip"]:
-                if current_held_item == "none" or not current_held_item:
-                    conn.rollback()
-                    return await ctx.send(f"⚠️ **{specimen_name}** is not currently holding any equipment.")
-                
-                cursor.execute("""
-                    INSERT INTO user_inventory (user_id, item_name, quantity) 
-                    VALUES (?, ?, 1) 
-                    ON CONFLICT(user_id, item_name) 
-                    DO UPDATE SET quantity = quantity + 1
-                """, (user_id, current_held_item))
-                
-                cursor.execute("UPDATE caught_pokemon SET held_item = 'none' WHERE instance_id = ?", (full_instance_id,))
-                conn.commit()
-                
-                return await ctx.send(f"🎒 You detached the `{current_held_item.replace('-', ' ').title()}` from **{specimen_name}** and returned it to your pack.")
+                    # 3. UNEQUIP LOGIC (If they type "!equip [ID] none")
+                    if formatted_item in ["none", "unequip"]:
+                        if current_held_item == "none" or not current_held_item:
+                            await db.rollback()
+                            return await ctx.send(f"⚠️ **{specimen_name}** is not currently holding any equipment.")
+                        
+                        await db.execute("""
+                            INSERT INTO user_inventory (user_id, item_name, quantity) 
+                            VALUES (?, ?, 1) 
+                            ON CONFLICT(user_id, item_name) 
+                            DO UPDATE SET quantity = quantity + 1
+                        """, (user_id, current_held_item))
+                        
+                        await db.execute("UPDATE caught_pokemon SET held_item = 'none' WHERE instance_id = ?", (full_instance_id,))
+                        await db.commit()
+                        
+                        return await ctx.send(f"🎒 You detached the `{current_held_item.replace('-', ' ').title()}` from **{specimen_name}** and returned it to your pack.")
 
-            # 4. Verify Inventory Ownership for the New Item
-            cursor.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
-            inv_data = cursor.fetchone()
-            
-            if not inv_data or inv_data[0] < 1:
-                conn.rollback()
-                return await ctx.send(f"⚠️ **Logistics Error:** You do not have any `{formatted_item.replace('-', ' ').title()}` in your field backpack.")
+                    # 4. Verify Inventory Ownership for the New Item
+                    async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item)) as cursor:
+                        inv_data = await cursor.fetchone()
+                    
+                    if not inv_data or inv_data[0] < 1:
+                        await db.rollback()
+                        return await ctx.send(f"⚠️ **Logistics Error:** You do not have any `{formatted_item.replace('-', ' ').title()}` in your field backpack.")
 
-            # 5. EXECUTE THE ATOMIC SWAP
-            cursor.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
-            
-            if current_held_item and current_held_item != 'none':
-                cursor.execute("""
-                    INSERT INTO user_inventory (user_id, item_name, quantity) 
-                    VALUES (?, ?, 1) 
-                    ON CONFLICT(user_id, item_name) 
-                    DO UPDATE SET quantity = quantity + 1
-                """, (user_id, current_held_item))
-                swap_msg = f"\n*The previously held `{current_held_item.replace('-', ' ').title()}` was returned to your pack.*"
-            else:
-                swap_msg = ""
+                    # 5. EXECUTE THE ATOMIC SWAP
+                    await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
+                    
+                    if current_held_item and current_held_item != 'none':
+                        await db.execute("""
+                            INSERT INTO user_inventory (user_id, item_name, quantity) 
+                            VALUES (?, ?, 1) 
+                            ON CONFLICT(user_id, item_name) 
+                            DO UPDATE SET quantity = quantity + 1
+                        """, (user_id, current_held_item))
+                        swap_msg = f"\n*The previously held `{current_held_item.replace('-', ' ').title()}` was returned to your pack.*"
+                    else:
+                        swap_msg = ""
 
-            cursor.execute("UPDATE caught_pokemon SET held_item = ? WHERE instance_id = ?", (formatted_item, full_instance_id))
-            conn.commit()
+                    await db.execute("UPDATE caught_pokemon SET held_item = ? WHERE instance_id = ?", (formatted_item, full_instance_id))
+                    await db.commit()
+                    
+                except Exception as inner_e:
+                    # 🚨 CRITICAL RECOVERY: Catch inner transaction failures
+                    if db.in_transaction:  
+                        await db.rollback()
+                    raise inner_e # Push the error to the outer block to send the Discord message
 
+            # 6. RENDER THE UI
             embed = discord.Embed(title="🎒 Tactical Equipment Assigned", color=discord.Color.green())
             embed.description = f"**{ctx.author.name}** equipped `{formatted_item.replace('-', ' ').title()}` to **{specimen_name}**!{swap_msg}"
             embed.set_footer(text=f"Tag ID: {full_instance_id[:8]}")
@@ -660,12 +1421,8 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             await ctx.send(embed=embed)
 
         except Exception as e:
-            if conn.in_transaction:  
-                conn.rollback()
             print(f"Equip Error: {e}")
             await ctx.send("❌ A database error occurred while assigning the equipment. No items were lost.")
-        finally:
-            conn.close()
 
     @commands.command(name="unequip", aliases=["remove_item", "detach"])
     @checks.has_started()
@@ -676,55 +1433,61 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
         """Safely removes tactical gear from a specimen and returns it to the backpack."""
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
         try:
-            # 1. RETRIEVE THE SPECIMEN & HELD ITEM (Box Number or UUID)
-            if instance_id.isdigit() and len(instance_id) <= 6:
-                cursor.execute("""
-                    WITH Roster AS (
-                        SELECT cp.instance_id, s.name, cp.held_item, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 1. RETRIEVE THE SPECIMEN & HELD ITEM (Box Number or UUID)
+                if instance_id.isdigit() and len(instance_id) <= 6:
+                    async with db.execute("""
+                        WITH Roster AS (
+                            SELECT cp.instance_id, s.name, cp.held_item, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                            FROM caught_pokemon cp
+                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                            WHERE cp.user_id = ?
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                        ) SELECT instance_id, name, held_item FROM Roster WHERE box_number = ?
+                    """, (user_id, int(instance_id))) as cursor:
+                        specimen = await cursor.fetchone()
+                else:
+                    async with db.execute("""
+                        SELECT cp.instance_id, s.name, cp.held_item 
                         FROM caught_pokemon cp
                         JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                    ) SELECT instance_id, name, held_item FROM Roster WHERE box_number = ?
-                """, (user_id, int(instance_id)))
-            else:
-                cursor.execute("""
-                    SELECT cp.instance_id, s.name, cp.held_item 
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                """, (f"{instance_id}%", user_id))
-            
-            specimen = cursor.fetchone()
-            
-            if not specimen:
-                return await ctx.send("❌ Specimen not found. Ensure you are using the correct Box Number or Tag ID.")
+                        WHERE cp.instance_id LIKE ? AND cp.user_id = ?
+                    """, (f"{instance_id}%", user_id)) as cursor:
+                        specimen = await cursor.fetchone()
+                
+                if not specimen:
+                    return await ctx.send("❌ Specimen not found. Ensure you are using the correct Box Number or Tag ID.")
 
-            full_instance_id, raw_name, held_item = specimen
-            specimen_name = raw_name.capitalize()
+                full_instance_id, raw_name, held_item = specimen
+                specimen_name = raw_name.capitalize()
 
-            # 2. CHECK IF IT ACTUALLY HAS AN ITEM
-            if not held_item or held_item == 'none':
-                return await ctx.send(f"⚠️ **{specimen_name}** is not currently equipped with any tactical gear.")
+                # 2. CHECK IF IT ACTUALLY HAS AN ITEM
+                if not held_item or held_item == 'none':
+                    return await ctx.send(f"⚠️ **{specimen_name}** is not currently equipped with any tactical gear.")
 
-            # 3. ATOMIC TRANSACTION
-            cursor.execute("BEGIN TRANSACTION")
+                # 3. ATOMIC TRANSACTION
+                await db.execute("BEGIN TRANSACTION")
+                try:
+                    # A. Push the item safely back into the user's inventory
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity) 
+                        VALUES (?, ?, 1) 
+                        ON CONFLICT(user_id, item_name) 
+                        DO UPDATE SET quantity = quantity + 1
+                    """, (user_id, held_item))
 
-            # A. Push the item safely back into the user's inventory
-            cursor.execute("""
-                INSERT INTO user_inventory (user_id, item_name, quantity) 
-                VALUES (?, ?, 1) 
-                ON CONFLICT(user_id, item_name) 
-                DO UPDATE SET quantity = quantity + 1
-            """, (user_id, held_item))
+                    # B. Wipe the held item slot on the specimen
+                    await db.execute("UPDATE caught_pokemon SET held_item = 'none' WHERE instance_id = ?", (full_instance_id,))
 
-            # B. Wipe the held item slot on the specimen
-            cursor.execute("UPDATE caught_pokemon SET held_item = 'none' WHERE instance_id = ?", (full_instance_id,))
-
-            conn.commit()
+                    await db.commit()
+                    
+                except Exception as inner_e:
+                    # 🚨 CRITICAL RECOVERY
+                    if db.in_transaction:
+                        await db.rollback()
+                    raise inner_e
 
             # 4. UI OUTPUT
             embed = discord.Embed(title="🎒 Equipment Recovered", color=discord.Color.green())
@@ -734,38 +1497,17 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             await ctx.send(embed=embed)
             
         except Exception as e:
-            if conn.in_transaction:
-                conn.rollback()
             print(f"Unequip Error: {e}")
             await ctx.send("❌ A critical database error occurred while recovering the equipment. No items were lost.")
-        finally:
-            conn.close()
 
-    @commands.command(name="market", aliases=["store"])
+    @commands.command(name="market", aliases=["shop"])
     @checks.has_started()
     @checks.is_authorized()
     async def view_market(self, ctx):
         """Displays available field equipment for purchase."""
-        embed = discord.Embed(title="🛒 Ecological Supply Market", color=discord.Color.green())
-        embed.description = "Use `!buy [quantity] [item_name]` to requisition supplies."
-        
-        print("embed made")
-        for item_key, data in EQUIPMENT_CATALOG.items():
-            # Explicitly grab the exact keys from the dictionary
-            name = data['name']
-            price = data['price']
-            desc = data['desc']
-            emoji = data['emoji']
-            
-            embed.add_field(
-                name=f"{emoji} {name} (🪙 {price})", 
-                value=desc, 
-                inline=False
-            )
-
-        #print("sending embed")
-        await ctx.send(embed=embed)
-        #print("embed sent")
+        view = MarketView(EQUIPMENT_CATALOG)
+        embed = view.generate_embed()
+        await ctx.send(embed=embed, view=view)
 
     @commands.command(name="tmshop", aliases=["tms"])
     @checks.has_started()
@@ -807,6 +1549,97 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
         
         await ctx.send(embed=embed)
 
+    @commands.command(name="sell")
+    @checks.has_started()
+    @checks.is_authorized()
+    @checks.is_not_in_trade()
+    async def exchange_item(self, ctx, quantity: int, *, item_name: str):
+        """Exchange valuable materials or surplus items for Eco-Tokens."""
+        if quantity < 1:
+            return await ctx.send("⚠️ You must exchange at least one item.")
+
+        user_id = str(ctx.author.id)
+        
+        # 1. Strip all non-alphanumeric characters for a foolproof search
+        search_term = ''.join(e for e in item_name.lower() if e.isalnum())
+
+        db_item_name = None
+        exchange_value = 0
+        item_display_name = None
+        emoji = '📦'
+
+        # 2. Identify the item in the catalog
+        for cat_key, cat_data in EQUIPMENT_CATALOG.items():
+            if ''.join(e for e in cat_key.lower() if e.isalnum()) == search_term:
+                db_item_name = cat_key
+                
+                # Check for a specific 'sell_price', otherwise default to 50% of the buy price
+                exchange_value = cat_data.get('sell_price', cat_data.get('price', 0) // 2)
+                item_display_name = cat_data['name']
+                emoji = cat_data.get('emoji', '📦')
+                break
+
+        if not db_item_name:
+            return await ctx.send("❌ That item does not exist in the database.")
+
+        if exchange_value <= 0:
+            return await ctx.send(f"⚠️ **{item_display_name}** has no exchange value on the market.")
+
+        total_payout = exchange_value * quantity
+
+        try:
+            # 🚨 AIOSQLITE UPDATE: Safely handle the connection
+            async with aiosqlite.connect(DB_FILE) as db:
+                await db.execute("BEGIN TRANSACTION")
+
+                try:
+                    # 3. Check User Inventory
+                    async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, db_item_name)) as cursor:
+                        inv_data = await cursor.fetchone()
+
+                    current_qty = inv_data[0] if inv_data else 0
+
+                    if current_qty < quantity:
+                        await db.rollback()
+                        return await ctx.send(f"⚠️ Insufficient materials! You only have **{current_qty}x {item_display_name}**.")
+
+                    # 4. Deduct the item(s) from inventory
+                    await db.execute("""
+                        UPDATE user_inventory SET quantity = quantity - ? 
+                        WHERE user_id = ? AND item_name = ?
+                    """, (quantity, user_id, db_item_name))
+                    
+                    # Keep the database clean by wiping zero-quantity rows
+                    await db.execute("DELETE FROM user_inventory WHERE quantity <= 0")
+
+                    # 5. Add the Eco-Tokens
+                    await db.execute("""
+                        UPDATE users SET eco_tokens = eco_tokens + ? 
+                        WHERE user_id = ?
+                    """, (total_payout, user_id))
+
+                    # Fetch the newly updated balance for the receipt
+                    async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                        new_balance_data = await cursor.fetchone()
+                    new_balance = new_balance_data[0]
+
+                    # 6. Lock the transaction
+                    await db.commit()
+
+                except Exception as inner_e:
+                    if db.in_transaction:
+                        await db.rollback()
+                    raise inner_e 
+
+            # 7. Render UI Output
+            embed = discord.Embed(title="♻️ Material Exchange Successful", color=discord.Color.green())
+            embed.description = f"Exchanged **{quantity}x {item_display_name}** {emoji} for **{total_payout:,}** Eco-Tokens.\nNew Balance: **{new_balance:,}**"
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            print(f"Transaction Error in !exchange: {e}")
+            await ctx.send("❌ A critical database error occurred. The exchange has been aborted and your inventory is safe.")
+
     @commands.command(name="buy", aliases=["purchase"])
     @checks.has_started()
     @checks.is_authorized()
@@ -819,118 +1652,149 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
         if quantity < 1:
             return await ctx.send("⚠️ You must purchase at least one item.")
 
-        # Format 1: Standard Equipment (e.g., "Great Ball" -> "greatball")
-        formatted_equip = item_name.lower().replace(" ", "").replace("-", "")
+        # Strip all non-alphanumeric characters for a foolproof search (e.g. "Rare Candy" -> "rarecandy")
+        search_term = ''.join(e for e in item_name.lower() if e.isalnum())
         
-        # Format 2: TMs (e.g., "Ice Beam" -> "ice-beam")
-        formatted_tm = item_name.lower().replace(" ", "-")
-        
-        # --- THE SMART ROUTER ---
         is_tm = False
-        if formatted_equip in EQUIPMENT_CATALOG:
-            item_data = EQUIPMENT_CATALOG[formatted_equip]
-            item_display_name = item_data['name']
-            unit_cost = item_data['price']
-            emoji = item_data.get('emoji', '📦')
-            db_item_name = formatted_equip
-        elif formatted_tm in TM_SHOP:
-            # Parse the flat dictionary and generate the UI variables dynamically!
-            item_display_name = f"TM {formatted_tm.replace('-', ' ').title()}"
-            unit_cost = TM_SHOP[formatted_tm]
-            emoji = '💿'
-            db_item_name = formatted_tm
-            is_tm = True
-        else:
-            return await ctx.send("❌ That item or TM is not available in the supply market.")
+        db_item_name = None
+        unit_cost = None
+        item_display_name = None
+        emoji = '📦'
 
-        print("Did this pass sucessfully?")
+        # ==========================================
+        # THE SMART ROUTER
+        # ==========================================
         
-        total_cost = unit_cost * quantity
-        user_id = str(ctx.author.id)
+        # 1. PRIORITY: Check the Daily Shop for discounts or exclusive items
+        daily_shop = self.get_daily_shop()
+        for daily_item in daily_shop:
+            if ''.join(e for e in daily_item['name'].lower() if e.isalnum()) == search_term:
+                db_item_name = daily_item['name']
+                unit_cost = daily_item['price']
+                
+                # Grab the rich metadata from the catalog if it exists
+                cat_data = EQUIPMENT_CATALOG.get(db_item_name, {})
+                item_display_name = cat_data.get('name', db_item_name.replace('-', ' ').title())
+                emoji = cat_data.get('emoji', '📦')
+                break
 
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        # 2. Check the General Catalog if it wasn't in today's supply drop
+        if not db_item_name:
+            for cat_key, cat_data in EQUIPMENT_CATALOG.items():
+                if ''.join(e for e in cat_key.lower() if e.isalnum()) == search_term:
+                    # Enforce the 'purchasable: False' rule for Key Items/Berries
+                    if cat_data.get('purchasable', True) is False:
+                        return await ctx.send("❌ That item cannot be purchased directly from the standard market.")
+                    
+                    db_item_name = cat_key
+                    unit_cost = cat_data['price']
+                    item_display_name = cat_data['name']
+                    emoji = cat_data.get('emoji', '📦')
+                    break
+
+        # 3. Check the TM Shop
+        if not db_item_name:
+            formatted_tm = item_name.lower().replace(" ", "-")
+            # Assuming TM_SHOP is accessible here
+            if formatted_tm in TM_SHOP:
+                db_item_name = formatted_tm
+                unit_cost = TM_SHOP[formatted_tm]
+                item_display_name = f"TM {formatted_tm.replace('-', ' ').title()}"
+                emoji = '💿'
+                is_tm = True
+
+        if not db_item_name:
+            return await ctx.send("❌ That item or TM is not available in the supply market.")
+            
+        # ==========================================
+
+        total_cost = unit_cost * quantity
 
         try:
-            # 1. START ATOMIC TRANSACTION
-            cursor.execute("BEGIN TRANSACTION")
+            # 🚨 AIOSQLITE UPDATE: Safely handle the connection
+            async with aiosqlite.connect(DB_FILE) as db:
+                # 1. START ATOMIC TRANSACTION
+                await db.execute("BEGIN TRANSACTION")
 
-            # 2. Check User Funds
-            cursor.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,))
-            user_data = cursor.fetchone()
-            
-            # If the user doesn't exist in the DB yet, treat their balance as 0
-            current_balance = user_data[0] if user_data else 0
-            
-            if current_balance < total_cost:
-                await ctx.send(f"⚠️ Insufficient funds! You need **{total_cost}** Eco-Tokens, but you only have **{current_balance}**.")
-                conn.rollback() # Abort transaction
-                return
+                # Nested try-block so we can catch mid-transaction errors and rollback!
+                try:
+                    # 2. Check User Funds
+                    async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                        user_data = await cursor.fetchone()
+                    
+                    # If the user doesn't exist in the DB yet, treat their balance as 0
+                    current_balance = user_data[0] if user_data else 0
+                    
+                    if current_balance < total_cost:
+                        # We must rollback before returning!
+                        await db.rollback()
+                        return await ctx.send(f"⚠️ Insufficient funds! You need **{total_cost:,}** Eco-Tokens, but you only have **{current_balance:,}**.")
 
-            # 3. Deduct Funds
-            cursor.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (total_cost, user_id))
+                    # 3. Deduct Funds
+                    await db.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (total_cost, user_id))
 
-            # ==========================================
-            # 4. DYNAMIC INVENTORY ROUTING
-            # ==========================================
-            if is_tm:
-                # Route to the TM Ledger!
-                cursor.execute("""
-                    INSERT INTO user_tms (user_id, tm_name, quantity) 
-                    VALUES (?, ?, ?) 
-                    ON CONFLICT(user_id, tm_name) 
-                    DO UPDATE SET quantity = quantity + ?
-                """, (user_id, db_item_name, quantity, quantity))
-                print("Executed succesfully")
-            else:
-                # Route to the Standard Backpack Ledger!
-                cursor.execute("""
-                    INSERT INTO user_inventory (user_id, item_name, quantity) 
-                    VALUES (?, ?, ?) 
-                    ON CONFLICT(user_id, item_name) 
-                    DO UPDATE SET quantity = quantity + ?
-                """, (user_id, db_item_name, quantity, quantity))
-            # ==========================================
+                    # ==========================================
+                    # 4. DYNAMIC INVENTORY ROUTING
+                    # ==========================================
+                    if is_tm:
+                        # Route to the TM Ledger!
+                        await db.execute("""
+                            INSERT INTO user_tms (user_id, tm_name, quantity) 
+                            VALUES (?, ?, ?) 
+                            ON CONFLICT(user_id, tm_name) 
+                            DO UPDATE SET quantity = quantity + ?
+                        """, (user_id, db_item_name, quantity, quantity))
+                        print("DEBUG: TM Purchase executed successfully.")
+                    else:
+                        # Route to the Standard Backpack Ledger!
+                        await db.execute("""
+                            INSERT INTO user_inventory (user_id, item_name, quantity) 
+                            VALUES (?, ?, ?) 
+                            ON CONFLICT(user_id, item_name) 
+                            DO UPDATE SET quantity = quantity + ?
+                        """, (user_id, db_item_name, quantity, quantity))
+                        print("DEBUG: Item Purchase executed successfully.")
+                    # ==========================================
 
-            # 5. COMMIT TRANSACTION (Lock the changes in permanently)
-            conn.commit()
-            
+                    # 5. COMMIT TRANSACTION (Lock the changes in permanently)
+                    await db.commit()
+
+                except Exception as inner_e:
+                    # 6. ROLLBACK ON ERROR (If the database crashes, refund the money automatically)
+                    if db.in_transaction:
+                        await db.rollback()
+                    raise inner_e # Push the error out to the main handler
+
+            # 7. Render UI (safely outside the DB block)
             embed = discord.Embed(title="✅ Requisition Successful!", color=discord.Color.blue())
-            embed.description = f"Purchased **{quantity}x {item_display_name}** {emoji} for **{total_cost}** Eco-Tokens.\nNew Balance: **{current_balance - total_cost}**"
+            embed.description = f"Purchased **{quantity}x {item_display_name}** {emoji} for **{total_cost:,}** Eco-Tokens.\nNew Balance: **{current_balance - total_cost:,}**"
             await ctx.send(embed=embed)
 
         except Exception as e:
-            # 6. ROLLBACK ON ERROR (If the database crashes, refund the money automatically)
-            conn.rollback()
-            await ctx.send("❌ A critical database error occurred. The transaction has been aborted and no funds were deducted.")
             print(f"Transaction Error in !buy: {e}")
-            
-        finally:
-            conn.close()
-                
+            await ctx.send("❌ A critical database error occurred. The transaction has been aborted and no funds were deducted.")
+
     @commands.command(name="backpack", aliases=["gear", "items"])
     @checks.has_started()
     @checks.is_authorized()
     async def backpack(self, ctx):
         user_id = str(ctx.author.id)
         
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # Fetch everything where quantity > 0
-        cursor.execute("SELECT item_name, quantity FROM user_inventory WHERE user_id = ? AND quantity > 0", (user_id,))
-        inventory = cursor.fetchall()
-        conn.close()
-        
-        if not inventory:
-            return await ctx.send("🎒 Your field backpack is completely empty! Visit the `!market` to stock up on gear.")
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute("SELECT item_name, quantity FROM user_inventory WHERE user_id = ? AND quantity > 0", (user_id,)) as cursor:
+                    inventory = await cursor.fetchall()
+
+            if not inventory:
+                return await ctx.send("🎒 Your field backpack is completely empty! Visit the `!market` to stock up on gear.")
+                
+            view = BackpackPaginator(ctx.author, inventory, EQUIPMENT_CATALOG)
+            initial_embed = view.generate_embed()
+            await ctx.send(embed=initial_embed, view=view)
             
-        # Instantiate the UI, passing in the user, the raw database rows, and your constant dictionary
-        # Make sure EQUIPMENT_CATALOG is accessible from where this command lives!
-        view = BackpackPaginator(ctx.author, inventory, EQUIPMENT_CATALOG)
-        
-        # Generate the first page and send it with the View attached
-        initial_embed = view.generate_embed()
-        await ctx.send(embed=initial_embed, view=view)
+        except Exception as e:
+            print(f"Backpack Query Error: {e}")
+            await ctx.send("❌ An error occurred while retrieving your inventory data.")
+            
 async def setup(bot):
     await bot.add_cog(Economy(bot))

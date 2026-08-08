@@ -1,6 +1,6 @@
 import json
 import os
-
+import discord
 # ==========================================
 # THE BOTANICAL DATABASE (Consumables)
 # ==========================================
@@ -18,6 +18,207 @@ else:
     print("⚠️ WARNING: consumables.json not found! Botanical interactions will be disabled.")
 
 DB_FILE = "ecosystem.db"
+
+FIELD_MISSIONS = {
+    # ==========================================
+    # EXPERIENCE MISSIONS (Type Bonus = +20% XP)
+    # ==========================================
+    "volcanic": {
+        "category": "exp",
+        "name": "Volcanic Magma Sampling",
+        "desc": "Assist geologists near active vents.",
+        "preferred_type": "fire",
+        "base_xp_hr": 200,
+        "item_pool": ["fire-stone", "nugget", "rare-candy"]
+    },
+    "reef": {
+        "category": "exp",
+        "name": "Coral Reef Restoration",
+        "desc": "Clear debris from fragile underwater ecosystems.",
+        "preferred_type": "water",
+        "base_xp_hr": 200,
+        "item_pool": ["water-stone", "nugget", "dive-ball", "rare-candy"]
+    },
+    "canopy": {
+        "category": "exp",
+        "name": "Canopy Seed Dispersal",
+        "desc": "Help plant seeds in the upper rainforest levels.",
+        "preferred_type": "grass",
+        "base_xp_hr": 200,
+        "item_pool": ["leaf-stone", "nugget", "rare-candy"]
+    },
+    "power": {
+        "category": "exp",
+        "name": "Grid Maintenance",
+        "desc": "Absorb excess energy from the local power plant.",
+        "preferred_type": "electric",
+        "base_xp_hr": 200,
+        "item_pool": ["thunder-stone", "nugget", "rare-candy"]
+    },
+    "mountain": {
+        "category": "exp",
+        "name": "Peak Surveying",
+        "desc": "Map out high-altitude nesting grounds.",
+        "preferred_type": "flying",
+        "base_xp_hr": 200,
+        "item_pool": ["sharp-beak", "nugget", "rare-candy"]
+    },
+    "quarry": {
+        "category": "exp",
+        "name": "Mineral Extraction",
+        "desc": "Help excavate rare ores from the deep quarry.",
+        "preferred_type": "rock",
+        "base_xp_hr": 200,
+        "item_pool": ["hard-stone", "nugget", "rare-candy"]
+    },
+    "tundra": {
+        "category": "exp",
+        "name": "Glacier Monitoring",
+        "desc": "Track the movement of ancient ice shelves.",
+        "preferred_type": "ice",
+        "base_xp_hr": 200,
+        "item_pool": ["never-melt-ice", "nugget", "rare-candy"]
+    },
+    "dojo": {
+        "category": "exp",
+        "name": "Tactical Sparring",
+        "desc": "Train with local martial arts experts.",
+        "preferred_type": "fighting",
+        "base_xp_hr": 200,
+        "item_pool": ["black-belt", "nugget", "rare-candy"]
+    },
+    "swamp": {
+        "category": "exp",
+        "name": "Toxin Filtration",
+        "desc": "Neutralize hazardous waste in the wetlands.",
+        "preferred_type": "poison",
+        "base_xp_hr": 200,
+        "item_pool": ["poison-barb", "nugget", "rare-candy"]
+    },
+    "agriculture": {
+        "category": "exp",
+        "name": "Community Farming",
+        "desc": "Assist local farmers in plowing and harvesting fields safely.",
+        "preferred_type": "normal",
+        "base_xp_hr": 200,
+        "item_pool": ["silk-scarf", "nugget", "rare-candy"]
+    },
+    "canyon": {
+        "category": "exp",
+        "name": "Erosion Control",
+        "desc": "Fortify riverbanks and stabilize shifting soils in arid regions.",
+        "preferred_type": "ground",
+        "base_xp_hr": 200,
+        "item_pool": ["soft-sand", "nugget", "rare-candy"]
+    },
+    "botanical": {
+        "category": "exp",
+        "name": "Floral Pollination",
+        "desc": "Cross-pollinate rare flora and manage invasive pests in the gardens.",
+        "preferred_type": "bug",
+        "base_xp_hr": 200,
+        "item_pool": ["silver-powder", "nugget", "net-ball", "rare-candy"]
+    },
+    "ruins": {
+        "category": "exp",
+        "name": "Ancestral Groundskeeping",
+        "desc": "Clear overgrown vines and appease restless spirits in the old cemetery.",
+        "preferred_type": "ghost",
+        "base_xp_hr": 200,
+        "item_pool": ["spell-tag", "nugget", "rare-candy"]
+    },
+    "industrial": {
+        "category": "exp",
+        "name": "Scrap Recycling",
+        "desc": "Compact and process metallic debris from abandoned industrial zones.",
+        "preferred_type": "steel",
+        "base_xp_hr": 200,
+        "item_pool": ["metal-coat", "nugget", "rare-candy"]
+    },
+    "leyline": {
+        "category": "exp",
+        "name": "Resonance Mapping",
+        "desc": "Meditate to locate and map invisible energy pathways across the region.",
+        "preferred_type": "psychic",
+        "base_xp_hr": 200,
+        "item_pool": ["twisted-spoon", "nugget", "rare-candy"]
+    },
+    "shrine": {
+        "category": "exp",
+        "name": "Monument Restoration",
+        "desc": "Protect and restore ancient shrines dedicated to legendary figures.",
+        "preferred_type": "dragon",
+        "base_xp_hr": 200,
+        "item_pool": ["dragon-fang", "nugget", "rare-candy"]
+    },
+    "patrol": {
+        "category": "exp",
+        "name": "Nocturnal Scouting",
+        "desc": "Patrol the city limits at night to deter poachers and rogue elements.",
+        "preferred_type": "dark",
+        "base_xp_hr": 200,
+        "item_pool": ["black-glasses", "nugget", "dusk-ball", "rare-candy"]
+    },
+    "glade": {
+        "category": "exp",
+        "name": "Aura Purification",
+        "desc": "Cleanse lingering negative energy and restore the mystical glade.",
+        "preferred_type": "fairy",
+        "base_xp_hr": 200,
+        "item_pool": ["moon-stone", "nugget", "rare-candy"]
+    },
+    # ==========================================
+    # EV TRAINING MISSIONS (0 XP, +4 EVs per hour)
+    # ==========================================
+    "hp": {
+        "category": "ev",
+        "name": "Endurance Drills",
+        "desc": "Intensive stamina training.",
+        "target_ev": "ev_hp",
+        "ev_hr": 4,
+        "item_pool": ["hp-up", "oran-berry"]
+    },
+    "attack": {
+        "category": "ev",
+        "name": "Target Practice",
+        "desc": "Focus on physical striking power.",
+        "target_ev": "ev_attack",
+        "ev_hr": 4,
+        "item_pool": ["protein", "muscle-band"]
+    },
+    "defense": {
+        "category": "ev",
+        "name": "Impact Resistance",
+        "desc": "Withstand heavy physical blows.",
+        "target_ev": "ev_defense",
+        "ev_hr": 4,
+        "item_pool": ["iron", "hard-stone"]
+    },
+    "spatk": {
+        "category": "ev",
+        "name": "Elemental Tuning",
+        "desc": "Enhance special attack output.",
+        "target_ev": "ev_sp_atk",
+        "ev_hr": 4,
+        "item_pool": ["calcium", "wise-glasses"]
+    },
+    "spdef": {
+        "category": "ev",
+        "name": "Barrier Weaving",
+        "desc": "Practice deflecting elemental energy.",
+        "target_ev": "ev_sp_def",
+        "ev_hr": 4,
+        "item_pool": ["zinc", "light-clay"]
+    },
+    "speed": {
+        "category": "ev",
+        "name": "Agility Course",
+        "desc": "High-speed reflex training.",
+        "target_ev": "ev_speed",
+        "ev_hr": 4,
+        "item_pool": ["carbos", "quick-claw"]
+    }
+}
 
 TYPE_CHART = {
     'normal': {'rock': 0.5, 'ghost': 0.0, 'steel': 0.5},
@@ -59,11 +260,109 @@ NATURE_MULTIPLIERS = {
 NATURES = ["Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish", "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful", "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky"]
 
 EQUIPMENT_CATALOG = {
-    "greatball": {"name": "Great Ball", "price": 10, "desc": "1.5x Capture Rate", "emoji": "🔵"},
-    "ultraball": {"name": "Ultra Ball", "price": 25, "desc": "2.0x Capture Rate", "emoji": "🟡"},
-    "purifier":  {"name": "Purifier", "price": 50, "desc": "Instantly removes pollution from a server", "emoji": "🫧"},
-    "potion":    {"name": "Potion", "price": 100, "desc": "Restore 20 health points in battle", "emoji": "🧪"}
+    # CAPTURE GEAR
+    "greatball": {"name": "Great Ball", "price": 100, "desc": "2.5x Capture Rate", "emoji": "🔵", "category": "capture"},
+    "ultraball": {"name": "Ultra Ball", "price": 250, "desc": "4.0x Capture Rate", "emoji": "🟡", "category": "capture"},
+    "dive-ball": {"name": "Dive Ball", "price": 0, "desc": "2.0x Capture Rate for Water Types", "emoji": "🔵", "category": "capture", "purchasable": False},
+    "friend-ball": {"name": "Friend Ball", "price": 0, "desc": "Increases the base happiness of a caught pokemon", "emoji": "🔵", "category": "capture", "purchasable": False},
+    "masterball": {"name": "Master Ball", "price": 0, "desc": "100% Capture Rate", "emoji": "🟣", "category": "capture", "purchasable": False},
+    
+    # Key Items
+    "dynamax-band":  {"name": "Dynamax Band", "price": 0, "desc": "Allows a pokemon to dynamax or gigantamax.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
+    "mega-bracelet":  {"name": "Mega Bracelet", "price": 0, "desc": "Unlocks Mega Evolution to be used in battles.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
+    "z-ring":  {"name": "Z Ring", "price": 0, "desc": "Allows a pokemon to use Z moves with a Z-crystal in battle.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
+    "encrypted-field-notes":  {"name": "Encrypted Field Notes", "price": 0, "desc": "Scan with `!analyze notes` to get a field directive.", "emoji": "📝", "category": "keyitems", "purchasable": False},
+    "wishing-fragment":  {"name": "Wishing Fragment", "price": 0, "desc": "Exchange with `!refine` to make a Dynamax Band.", "emoji": "📝", "category": "keyitems", "purchasable": False},
+    "nugget":  {"name": "Nugget", "price": 0, "desc": "Exchange for Eco-Tokens", "emoji": "💵", "category": "keyitems", "purchasable": False, "sell_price": 5000},
+    "memory-spore":  {"name": "Memory Spore", "price": 0, "desc": "Allows a pokemon to learn a tutor move.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
+    
+    # Form Items
+    "reveal-glass":  {"name": "Reveal Glass", "price": 0, "desc": "Allows the weather trio to switch between forms.", "emoji": "🧬", "category": "formitems", "purchasable": False},
+    "dna-splicers":  {"name": "DNA Splicers", "price": 0, "desc": "Allows Kyurem to fuse with Reshiram or Zekrom.", "emoji": "🧬", "category": "formitems", "purchasable": False},
+    
+    # Evolution Items
+    "water-stone":    {"name": "Water Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, blue and glistens.", "emoji": "💎", "category": "evoitems"},
+    "leaf-stone":    {"name": "Leaf Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is green and mossy.", "emoji": "💎", "category": "evoitems"},
+    "fire-stone":    {"name": "Fire Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, orange and glistens.", "emoji": "💎", "category": "evoitems"},
+    "rare-candy":    {"name": "Rare Candy", "price": 10000, "desc": "A sweet treat that increases a pokemon's level by 1.", "emoji": "🍬", "category": "evoitems"},
+
+    # GENERAL FIELD SUPPLIES
+    "purifier":  {"name": "Purifier", "price": 50, "desc": "Instantly removes pollution from a server", "emoji": "🫧", "category": "general"},
+    
+    # MEDICINE & BATTLE
+    "potion":    {"name": "Potion", "price": 100, "desc": "Restore 20 HP in battle", "emoji": "🧪", "category": "medicine"},
+    "revive":    {"name": "Revive", "price": 250, "desc": "Revive a fainted specimen", "emoji": "💠", "category": "medicine"},
+    
+    # VITAMINS
+    "protein":   {"name": "Protein", "price": 500, "desc": "+10 Attack EVs", "emoji": "💪", "category": "vitamin"},
+    "carbos":    {"name": "Carbos", "price": 500, "desc": "+10 Speed EVs", "emoji": "👟", "category": "vitamin"},
+
+    # BERRIES
+    "oran-berry":   {"name": "Oran Berry", "price": 0, "desc": "Restores 10 HP. Can be eaten or held.", "emoji": "🫐", "category": "berry", "purchasable": False},
+    "sitrus-berry": {"name": "Sitrus Berry", "price": 0, "desc": "Restores 25% of max HP.", "emoji": "🍋", "category": "berry", "purchasable": False},
+    "cheri-berry":  {"name": "Cheri Berry", "price": 0, "desc": "Cures paralysis.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "chesto-berry": {"name": "Chesto Berry", "price": 0, "desc": "Cures sleep.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "pecha-berry":  {"name": "Pecha Berry", "price": 0, "desc": "Cures poison.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "rawst-berry":  {"name": "Rawst Berry", "price": 0, "desc": "Cures burn.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "aspear-berry": {"name": "Aspear Berry", "price": 0, "desc": "Cures freeze and other status conditions.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "leppa-berry":  {"name": "Leppa Berry", "price": 0, "desc": "Restores 10 PP.", "emoji": "🌸", "category": "berry", "purchasable": False},
+    "persim-berry": {"name": "Persim Berry", "price": 0, "desc": "Cures confusion.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "lum-berry":    {"name": "Lum Berry", "price": 0, "desc": "Cures status conditions.", "emoji": "🌿", "category": "berry", "purchasable": False},
+    "figy-berry":   {"name": "Figy Berry", "price": 0, "desc": "Restores HP, but may cause confusion.", "emoji": "🍈", "category": "berry", "purchasable": False},
+    "wiki-berry":   {"name": "Wiki Berry", "price": 0, "desc": "Restores HP, but may cause confusion.", "emoji": "🍈", "category": "berry", "purchasable": False},
+    "mago-berry":   {"name": "Mago Berry", "price": 0, "desc": "Restores HP, but may cause confusion.", "emoji": "🍈", "category": "berry", "purchasable": False},
+    "aguav-berry":  {"name": "Aguav Berry", "price": 0, "desc": "Restores HP, but may cause confusion.", "emoji": "🍈", "category": "berry", "purchasable": False},
+    "iapapa-berry": {"name": "Iapapa Berry", "price": 0, "desc": "Restores HP, but may cause confusion.", "emoji": "🍈", "category": "berry", "purchasable": False},
+    "occa-berry":   {"name": "Occa Berry", "price": 0, "desc": "Reduces damage from super-effective Fire-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "passho-berry": {"name": "Passho Berry", "price": 0, "desc": "Reduces damage from super-effective Water-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "wacan-berry":  {"name": "Wacan Berry", "price": 0, "desc": "Reduces damage from super-effective Electric-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "rindo-berry":  {"name": "Rindo Berry", "price": 0, "desc": "Reduces damage from super-effective Grass-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "yache-berry":  {"name": "Yache Berry", "price": 0, "desc": "Reduces damage from super-effective Ice-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "chople-berry": {"name": "Chople Berry", "price": 0, "desc": "Reduces damage from super-effective Fighting-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "kebia-berry":  {"name": "Kebia Berry", "price": 0, "desc": "Reduces damage from super-effective Poison-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "shuca-berry":  {"name": "Shuca Berry", "price": 0, "desc": "Reduces damage from super-effective Ground-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "coba-berry":   {"name": "Coba Berry", "price": 0, "desc": "Reduces damage from super-effective Flying-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "payapa-berry": {"name": "Payapa Berry", "price": 0, "desc": "Reduces damage from super-effective Psychic-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "tanga-berry":  {"name": "Tanga Berry", "price": 0, "desc": "Reduces damage from super-effective Bug-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "charti-berry": {"name": "Charti Berry", "price": 0, "desc": "Reduces damage from super-effective Rock-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "kasib-berry":  {"name": "Kasib Berry", "price": 0, "desc": "Reduces damage from super-effective Ghost-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "haban-berry":  {"name": "Haban Berry", "price": 0, "desc": "Reduces damage from super-effective Dragon-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "colbur-berry": {"name": "Colbur Berry", "price": 0, "desc": "Reduces damage from super-effective Dark-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "babiri-berry": {"name": "Babiri Berry", "price": 0, "desc": "Reduces damage from super-effective Steel-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "chilan-berry": {"name": "Chilan Berry", "price": 0, "desc": "Reduces damage from Normal-type attacks.", "emoji": "🛡️", "category": "berry", "purchasable": False},
+    "liechi-berry": {"name": "Liechi Berry", "price": 0, "desc": "Raises Attack when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "ganlon-berry": {"name": "Ganlon Berry", "price": 0, "desc": "Raises Defense when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "salac-berry":  {"name": "Salac Berry", "price": 0, "desc": "Raises Speed when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "petaya-berry": {"name": "Petaya Berry", "price": 0, "desc": "Raises Sp. Atk when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "apicot-berry": {"name": "Apicot Berry", "price": 0, "desc": "Raises Sp. Def when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "lansat-berry": {"name": "Lansat Berry", "price": 0, "desc": "Raises critical-hit ratio when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "starf-berry":  {"name": "Starf Berry", "price": 0, "desc": "Sharply raises a random stat when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "micle-berry":  {"name": "Micle Berry", "price": 0, "desc": "Raises accuracy when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    "custap-berry": {"name": "Custap Berry", "price": 0, "desc": "Allows a move to go first when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
+    
+    # 💎 Z-CRYSTALS
+    "firium-z":     {"name": "Firium Z", "price": 0, "desc": "Upgrades Fire-type moves into Inferno Overdrive.", "emoji": "🔥", "category": "zcrystal", "purchasable": False},
+    "waterium-z":   {"name": "Waterium Z", "price": 0, "desc": "Upgrades Water-type moves into Hydro Vortex.", "emoji": "💧", "category": "zcrystal", "purchasable": False},
+    
+    # 🧬 MEGA STONES
+    "charizardite-x":{"name": "Charizardite X", "price": 0, "desc": "Allows Charizard to Mega Evolve.", "emoji": "🖤", "category": "megastone", "purchasable": False},
+    "venusaurite":  {"name": "Venusaurite", "price": 0, "desc": "Allows Venusaur to Mega Evolve.", "emoji": "🌸", "category": "megastone", "purchasable": False}
 }
+
+# Define the categories for the dropdowns
+CATEGORY_OPTIONS = [
+    discord.SelectOption(label="All Items", value="all", emoji="🎒"),
+    discord.SelectOption(label="Capture Gear", value="capture", emoji="🔴"),
+    discord.SelectOption(label="General Supplies", value="general", emoji="🫧"),
+    discord.SelectOption(label="Medicine", value="medicine", emoji="🧪"),
+    discord.SelectOption(label="Vitamins", value="vitamin", emoji="💊"),
+    discord.SelectOption(label="Berries", value="berry", emoji="🫐"),
+    discord.SelectOption(label="Z-Crystals", value="zcrystal", emoji="💎"),
+    discord.SelectOption(label="Mega Stones", value="megastone", emoji="🧬"),
+    discord.SelectOption(label="Key Items", value="keyitems", emoji="🔑"),
+    discord.SelectOption(label="Evolution Items", value="evoitems", emoji="🧬"),
+    discord.SelectOption(label="Form Items", value="formitems", emoji="🧬")
+]
 # The Research Shop Catalog
 TM_SHOP = {
     'protect': 500,

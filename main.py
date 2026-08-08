@@ -2,10 +2,10 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
-
+from dotenv import load_dotenv
 
 # Basic Setup
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -47,19 +47,13 @@ async def load_cog(ctx, extension: str):
     except Exception as e:
         await ctx.send(f"⚠️ Error loading `{extension}`: ```py\n{e}\n```")
 
-# --- Token Setup ---
-# Read the token securely from the text file
-def get_token():
-    if not os.path.exists("token.txt"):
-        print("Error: token.txt file not found!")
-        exit()
-    with open("token.txt", "r") as file:
-        return file.read().strip()
+load_dotenv() #Loads Hidden variables from .env file
+TOKEN = os.getenv('DISC_TOKEN')
 # Boot Execution
 async def main():
     async with bot:
         await load_extensions()
-        await bot.start(get_token())
+        await bot.start(TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())

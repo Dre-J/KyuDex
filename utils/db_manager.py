@@ -30,11 +30,10 @@ def get_specimen_data(instance_id: str):
     conn.close()
     return result
 
-def check_evolution_trigger(pokedex_id, level, happiness, time_of_day):
+async def check_evolution_trigger(db,pokedex_id, level, happiness, time_of_day):
     """The central rulebook for biological metamorphosis."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+
+    async with db.execute("""
         SELECT er.evolved_species_id, s.name 
         FROM evolution_rules er
         JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
@@ -44,7 +43,7 @@ def check_evolution_trigger(pokedex_id, level, happiness, time_of_day):
         AND (er.min_happiness IS NULL OR er.min_happiness <= ?)
         AND (er.time_of_day IS NULL OR er.time_of_day = '' OR er.time_of_day = ?)
         ORDER BY er.min_happiness DESC, er.min_level DESC LIMIT 1
-    """, (pokedex_id, level, happiness, time_of_day))
-    result = cursor.fetchone()
-    conn.close()
+    """, (pokedex_id, level, happiness, time_of_day)) as cursor:
+        result = await cursor.fetchone()
+    
     return result
