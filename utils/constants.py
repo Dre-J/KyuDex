@@ -19,6 +19,33 @@ else:
 
 DB_FILE = "ecosystem.db"
 
+# ==========================================
+# SPECIMEN MASS INDEX (Weight-based moves)
+# ==========================================
+# Heavy Slam, Heat Crash, Grass Knot and Low Kick all scale off body mass. We cache the
+# whole table once at boot instead of threading a weight column through every combatant
+# builder - and because we look up by pokedex_id, Mega and G-Max forms automatically
+# report their own transformed mass mid-battle.
+# The database stores hectograms (PokeAPI's native unit), so we convert to kilograms here.
+SPECIES_WEIGHTS = {}
+_DEFAULT_WEIGHT_KG = 50.0
+
+try:
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(DB_FILE) as _conn:
+        SPECIES_WEIGHTS = {
+            row[0]: (row[1] / 10.0)
+            for row in _conn.execute("SELECT pokedex_id, weight FROM base_pokemon_species")
+            if row[1]
+        }
+    print(f"⚖️ Indexed body mass for {len(SPECIES_WEIGHTS)} species.")
+except Exception as e:
+    print(f"⚠️ WARNING: Could not index species weights ({e}). Weight-based moves will use a default mass.")
+
+def get_species_weight(pokemon):
+    """Body mass in kilograms, falling back to a neutral default for unknown species."""
+    return SPECIES_WEIGHTS.get(pokemon.get('pokedex_id'), _DEFAULT_WEIGHT_KG)
+
 FIELD_MISSIONS = {
     # ==========================================
     # EXPERIENCE MISSIONS (Type Bonus = +20% XP)
