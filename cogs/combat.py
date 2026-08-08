@@ -7,7 +7,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1120,7 +1120,12 @@ class PvPMoveMenu(discord.ui.View):
                         
                 # --- 3. STANDARD MOVES ---
                 else:
-                    label_str = f"{move['name'].replace('-', ' ').title()} ({move['pp']}/{move['max_pp']})"
+                    # Show live power for HP-scaled moves so the player can see Flail spike
+                    # as they get worn down, or Water Spout fall off. Blank for everything else.
+                    opp_active = self.state['p2_team'][self.state['p2_active_index']] if is_p1 else self.state['p1_team'][self.state['p1_active_index']]
+                    power_hint = format_power_hint(move['name'], self.active_poke, opp_active)
+
+                    label_str = f"{move['name'].replace('-', ' ').title()} ({move['pp']}/{move['max_pp']}){power_hint}"
                     override_name = None
 
                     if is_recharging:
@@ -1458,7 +1463,7 @@ class MoveReplacementView(discord.ui.View):
                 
                 # 1. DOUBLE-CHECK INVENTORY (In case they spent it while the menu was open)
                 async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (self.user_id,)) as cursor:
-                    funds_row = cursor.fetchone()[0]
+                    funds_row = await cursor.fetchone()
                     funds = funds_row[0] if funds_row else 0
                 
                 async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'memory-spore'", (self.user_id,)) as cursor:
@@ -1602,7 +1607,12 @@ class DetailedMovepoolPaginator(discord.ui.View):
         # Build a detailed field for every single move in the chunk
         for move in chunk:
             dmg_icon = "💥" if move['class'] == 'physical' else "☄️" if move['class'] == 'special' else "🛡️"
-            pwr_display = move['power'] if move['power'] and move['power'] > 0 else "-"
+            # HP-scaled moves store 0 (or a misleading flat 150), so show their real band
+            scaled_band = describe_power_range(move['name'])
+            if scaled_band:
+                pwr_display = scaled_band
+            else:
+                pwr_display = move['power'] if move['power'] and move['power'] > 0 else "-"
             acc_display = f"{move['accuracy']}%" if move['accuracy'] else "-"
             
             desc = f"**Type:** {move['type'].capitalize()} | {dmg_icon} **{move['class'].capitalize()}**\n"
@@ -2386,8 +2396,9 @@ class BattleDashboard(discord.ui.View):
                         custom_id = f"locked_{i}"
                         disabled_flag = is_disabled # 🚨 Mapped!
                 else:
-                    # Standard UI
-                    btn_label = f"{move_name.replace('-', ' ').title()} ({curr_pp}/{max_pp})"
+                    # Standard UI - HP-scaled moves append their live power (blank otherwise)
+                    power_hint = format_power_hint(move_name, p_active, n_active)
+                    btn_label = f"{move_name.replace('-', ' ').title()} ({curr_pp}/{max_pp}){power_hint}"
                     btn_style = discord.ButtonStyle.primary if curr_pp > 0 else discord.ButtonStyle.secondary
                     custom_id = f"move_{i}_{move_name}"
                     disabled_flag = is_disabled # 🚨 Mapped!
@@ -3096,9 +3107,16 @@ class BattleDashboard(discord.ui.View):
                                     
                                     if m_data:
                                         m_type, m_power, m_class, m_heal, m_target = m_data
-                                        m_power = m_power or 0 
+                                        m_power = m_power or 0
                                         m_heal = m_heal or 0
-                                        
+
+                                        # HP-scaled moves store the wrong power (0, or a flat 150 for
+                                        # Eruption). Recompute it for this exact matchup so the AI stops
+                                        # firing a full-strength Water Spout at 10% HP.
+                                        scaled_power = resolve_dynamic_power(m['name'], n_active, p_active)
+                                        if scaled_power is not None:
+                                            m_power = scaled_power
+
                                         score = 10.0 # Base minimum score
                                         
                                         # 1. DAMAGE CALCULATION & THE EXECUTIONER
@@ -3117,8 +3135,27 @@ class BattleDashboard(discord.ui.View):
                                             # The Executioner: Massive bonus if this move is highly likely to KO
                                             # (We use a rough estimate here to avoid running the full physics engine on every bench move)
                                             if estimated_damage >= (p_active['current_hp'] * 0.8):
-                                                score += 10000.0 
-                                                
+                                                score += 10000.0
+
+                                        # 1b. FORMULA-BYPASS MOVES
+                                        # Set damage, level damage, HP-fraction cuts, Endeavor and the
+                                        # OHKO family all carry 0 power in the database, so the block
+                                        # above skips them. We score them on the HP they actually remove.
+                                        elif m['name'] in FORMULA_BYPASS_MOVES:
+                                            payload = estimate_bypass_payload(m['name'], m_type, n_active, p_active)
+
+                                            if payload <= 0:
+                                                # Immune, out-levelled, or otherwise guaranteed to fail
+                                                score -= 10000.0
+                                            else:
+                                                score += payload
+
+                                                if payload >= p_active['current_hp']:
+                                                    score += 10000.0 # It secures the KO!
+                                                elif m['name'] == 'final-gambit':
+                                                    # Suiciding without landing the kill is a pure loss
+                                                    score -= 5000.0
+
                                         # 2. STATUS & UTILITY SCORING
                                         if m_class == 'status':
                                             
@@ -3241,8 +3278,10 @@ class BattleDashboard(discord.ui.View):
                     try:
                         # Absolute Type-Safety Casting
                         # The 'or 0' intercepts the None, and int() guarantees a mathematical integer!
-                        p_prio = int(p_move_stats.get('priority') or 0)
-                        n_prio = int(n_move_stats.get('priority') or 0)
+                        # Terrain can shift a bracket (Grassy Glide on Grassy Terrain)
+                        active_terrain = state.get('terrain', {'type': 'none'})['type']
+                        p_prio = get_effective_priority(p_move_stats.get('name'), p_move_stats.get('priority'), p_active, active_terrain)
+                        n_prio = get_effective_priority(n_move_stats.get('name'), n_move_stats.get('priority'), n_active, active_terrain)
                         
                         # 1. Compare Move Priority Brackets First
                         if p_prio > n_prio:
@@ -3363,8 +3402,14 @@ class BattleDashboard(discord.ui.View):
 
                     if volatiles.get('flinch'):
                         combat_log += f"🚫 **{attacker['name'].capitalize()}** flinched and couldn't move!\n"
-                        volatiles.pop('flinch', None) 
+                        volatiles.pop('flinch', None)
                         can_attack = False
+
+                    # 🚨 STOMPING TANTRUM MEMORY
+                    # Being unable to act at all - paralysis, sleep, freeze, flinch, or a
+                    # confusion self-hit - counts as the move having failed.
+                    if not can_attack:
+                        attacker['last_move_failed'] = True
 
                     if can_attack:
                         # Prevent double-printing if Max Guard or Status Z-Moves already announced themselves in Phase 1
@@ -3505,7 +3550,10 @@ class BattleDashboard(discord.ui.View):
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:
                                 combat_log += "💨 The attack missed!\n"
-                                
+
+                                # 🚨 STOMPING TANTRUM MEMORY: a whiff counts as a failure
+                                attacker['last_move_failed'] = True
+
                                 # 🚨 CRASH DAMAGE (Miss)
                                 if raw_move_name in ['jump-kick', 'high-jump-kick']:
                                     crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
@@ -3516,6 +3564,11 @@ class BattleDashboard(discord.ui.View):
                                 if 'rampage' in attacker.get('volatile_statuses', {}):
                                     del attacker['volatile_statuses']['rampage']
                                 continue
+
+                        # 🚨 LAST RESPECTS TALLY: refresh the attacker's casualty count so the
+                        # physics engine can price the move without needing team access.
+                        own_team = state['player_team'] if is_player else state['npc_team']
+                        attacker['fainted_allies'] = sum(1 for p in own_team if p['current_hp'] <= 0)
 
                         print(f"DEBUG 3: {attacker['name']} passed status checks. Calling physics engine...")
                         dmg, msg, inf_status, stat_chgs, heal_amt = calculate_damage(
@@ -3563,6 +3616,18 @@ class BattleDashboard(discord.ui.View):
                         if dmg > 0:
                             defender['last_damage_taken'] = dmg
                             defender['last_damage_class'] = move_stats.get('class', 'physical')
+
+                            # 🚨 RAGE FIST TALLY: counts individual strikes (a 5-hit move advances
+                            # it by 5) and rides on the specimen, so it survives switching.
+                            defender['times_hit'] = defender.get('times_hit', 0) + defender.get('last_hit_count', 1)
+
+                        # 🚨 STOMPING TANTRUM MEMORY
+                        # A damaging move that connected for nothing (immunity, Protect, a
+                        # failed condition) counts as a failure; anything else resets the flag.
+                        if move_stats.get('class') != 'status' and dmg <= 0:
+                            attacker['last_move_failed'] = True
+                        else:
+                            attacker['last_move_failed'] = False
 
                         if msg: combat_log += f"*{msg}*\n"
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
@@ -3989,16 +4054,36 @@ class BattleDashboard(discord.ui.View):
                                 
                             if m_data:
                                 m_type, m_power, m_class, m_heal, m_target = m_data
-                                m_power = m_power or 0 
+                                m_power = m_power or 0
+
+                                # Recompute dynamic power for HP-scaled moves
+                                scaled_power = resolve_dynamic_power(m['name'], n_active, p_active)
+                                if scaled_power is not None:
+                                    m_power = scaled_power
+
                                 score = 10.0
-                                
+
                                 if m_class != 'status' and m_power > 0:
                                     mult = 1.0
                                     for p_type in p_active.get('types', []):
                                         mult *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
                                     if m_type in n_active.get('types', []): mult *= 1.5
                                     score += (m_power * mult)
-                                    
+
+                                # Formula-bypass moves carry 0 power, so score them by real HP removed
+                                elif m['name'] in FORMULA_BYPASS_MOVES:
+                                    payload = estimate_bypass_payload(m['name'], m_type, n_active, p_active)
+
+                                    if payload <= 0:
+                                        score -= 10000.0
+                                    else:
+                                        score += payload
+
+                                        if payload >= p_active['current_hp']:
+                                            score += 10000.0
+                                        elif m['name'] == 'final-gambit':
+                                            score -= 5000.0
+
                                 if score > highest_score:
                                     highest_score = score
                                     best_moves = [m]
@@ -5316,8 +5401,8 @@ class Combat(commands.Cog):
                             JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
                             WHERE up.user_id = ?
                             ORDER BY up.slot ASC
-                        """, (uid,)) as cursors:
-                            rows = await cursor.fetchall()
+                        """, (uid,)) as roster_cursor:
+                            rows = await roster_cursor.fetchall()
                         print(f"DEBUG: Found {len(rows)} assigned specimens in user_party table.")
                         
                         player_team = []
@@ -5712,16 +5797,21 @@ class Combat(commands.Cog):
             if p1_is_swapping: p1_active['volatile_statuses']['is_switching'] = True
             if p2_is_swapping: p2_active['volatile_statuses']['is_switching'] = True
 
-            def get_action_priority(commit, opp_swapping):
-                if commit['type'] == 'swap': 
-                    return 6 
+            def get_action_priority(commit, opp_swapping, mover):
+                if commit['type'] == 'swap':
+                    return 6
                 if commit['type'] == 'attack':
-                    base_prio = commit['data'].get('priority', 0)
-                    
                     # Pursuit intercepts the swap by jumping to Priority 7!
                     if commit['data']['name'].lower() == 'pursuit' and opp_swapping:
-                        return 7 
-                    return base_prio
+                        return 7
+
+                    # Terrain can shift a bracket (Grassy Glide on Grassy Terrain)
+                    return get_effective_priority(
+                        commit['data'].get('name'),
+                        commit['data'].get('priority', 0),
+                        mover,
+                        state.get('terrain', {'type': 'none'})['type']
+                    )
                 return 0
             
             # KINETIC SPEED CHECK (PvP)
@@ -5751,8 +5841,8 @@ class Combat(commands.Cog):
                     
                 return int(final_spd) # Ensure we return a clean integer!
 
-            p1_prio = get_action_priority(c1, p2_is_swapping)
-            p2_prio = get_action_priority(c2, p1_is_swapping)
+            p1_prio = get_action_priority(c1, p2_is_swapping, p1_active)
+            p2_prio = get_action_priority(c2, p1_is_swapping, p2_active)
 
             # Fetch Tailwind Statuses
             p1_has_tailwind = state.get('p1_hazards', {}).get('tailwind', 0) > 0
@@ -5936,6 +6026,9 @@ class Combat(commands.Cog):
 
                     # If the attacker is stunned by ANY of the above, skip the attack phase!
                     if not can_attack:
+                        # 🚨 STOMPING TANTRUM MEMORY: being unable to act at all - paralysis,
+                        # sleep, freeze, flinch, or a confusion self-hit - is a failed move.
+                        attacker['last_move_failed'] = True
                         continue
                         
                     # Deduct the PP using the base_name!
@@ -6132,16 +6225,24 @@ class Combat(commands.Cog):
                             if random.uniform(0, 100) > final_acc:
                                 combat_log += "💨 The attack missed!\n"
 
+                                # 🚨 STOMPING TANTRUM MEMORY: a whiff counts as a failure
+                                attacker['last_move_failed'] = True
+
                                 # 🚨 CRASH DAMAGE (Miss)
                                 if raw_move_name in ['jump-kick', 'high-jump-kick']:
                                     crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
                                     attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
                                     combat_log += f"💥 {attacker['name'].capitalize()} kept going and crashed! (-{crash_dmg} HP)\n"
-                                
+
                                 # If a Rampage move misses, the rampage is disrupted!
                                 if 'rampage' in attacker.get('volatile_statuses', {}):
                                     del attacker['volatile_statuses']['rampage']
                                 continue
+
+                    # 🚨 LAST RESPECTS TALLY: refresh the attacker's casualty count so the
+                    # physics engine can price the move without needing team access.
+                    own_team = state[f"{player_tag}_team"]
+                    attacker['fainted_allies'] = sum(1 for p in own_team if p['current_hp'] <= 0)
 
                     print(f"DEBUG: Firing Physics Engine. Attacker: {attacker['name']} | Defender: {defender['name']} | Move Data: {move}")
                     dmg, msg, status, stat_changes, heal = calculate_damage(
@@ -6189,6 +6290,18 @@ class Combat(commands.Cog):
                     if dmg > 0:
                         defender['last_damage_taken'] = dmg
                         defender['last_damage_class'] = move.get('class', 'physical')
+
+                        # 🚨 RAGE FIST TALLY: counts individual strikes, and rides on the
+                        # specimen across switches
+                        defender['times_hit'] = defender.get('times_hit', 0) + defender.get('last_hit_count', 1)
+
+                    # 🚨 STOMPING TANTRUM MEMORY
+                    # A damaging move that connected for nothing (immunity, Protect, a
+                    # failed condition) counts as a failure; anything else resets the flag.
+                    if move.get('class') != 'status' and dmg <= 0:
+                        attacker['last_move_failed'] = True
+                    else:
+                        attacker['last_move_failed'] = False
                     # ==========================================
 
                     if heal > 0:

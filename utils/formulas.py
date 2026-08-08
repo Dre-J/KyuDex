@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, get_species_weight
 from datetime import datetime, timezone
 
 
@@ -219,6 +219,461 @@ def is_grounded(pokemon, gravity_active=False):
     
     return True
 
+# ==========================================
+# 🚨 SET-DAMAGE ANOMALIES (Formula Bypass)
+# ==========================================
+# These moves ignore the standard kinetic formula entirely. Attack, Defense, stat
+# stages, STAB, criticals, weather, and type effectiveness never scale the payload.
+# A 0x type matchup is still a hard immunity, which is enforced in calculate_damage.
+FIXED_DAMAGE_MOVES = ['dragon-rage', 'sonic-boom', 'psywave', 'final-gambit']
+
+# Instant-faint moves. These roll their own accuracy inside calculate_damage.
+OHKO_MOVES = ['fissure', 'horn-drill', 'guillotine', 'sheer-cold']
+
+# Every move that skips the standard damage formula. None of them bypass a 0x
+# elemental matchup, so calculate_damage gates the whole family on one immunity check:
+# Ghost blanks Seismic Toss / Super Fang / Endeavor / Horn Drill / Guillotine,
+# Normal blanks Night Shade, and Flying blanks Fissure.
+FORMULA_BYPASS_MOVES = FIXED_DAMAGE_MOVES + OHKO_MOVES + [
+    'endeavor', 'seismic-toss', 'night-shade',
+    'super-fang', 'natures-madness', 'ruination'
+]
+
+def get_fixed_damage(move_name, attacker):
+    """
+    Returns the raw HP payload for a set-damage move, or None if the move isn't one.
+    The caller is responsible for the immunity check and for Final Gambit's self-KO.
+    """
+    if move_name == 'dragon-rage':
+        return 40
+
+    if move_name == 'sonic-boom':
+        return 20
+
+    if move_name == 'psywave':
+        # 50% to 150% of the user's level, floored, but never less than 1 HP
+        level = attacker.get('level', 50)
+        return max(1, math.floor(level * random.randint(50, 150) / 100))
+
+    if move_name == 'final-gambit':
+        # The user donates its entire remaining life force as damage
+        return attacker.get('current_hp', 0)
+
+    return None
+
+def estimate_fixed_damage(move_name, attacker):
+    """
+    Average-case payload used by the NPC AI for move scoring. Identical to
+    get_fixed_damage but with the RNG resolved to its mean so the AI stays stable.
+    """
+    if move_name == 'psywave':
+        return attacker.get('level', 50) # The 50-150% roll averages out to 100%
+    return get_fixed_damage(move_name, attacker) or 0
+
+# ==========================================
+# 🚨 HP-SCALED POWER MOVES
+# ==========================================
+# Unlike the bypass family above, these run through the *standard* damage formula.
+# Only their base power is dynamic, so STAB, type effectiveness, criticals, stat
+# stages and items all still apply on top of whatever power we return here.
+HP_SCALED_MOVES = ['flail', 'reversal', 'eruption', 'water-spout', 'wring-out', 'crush-grip']
+
+def get_hp_scaled_power(move_name, attacker, defender):
+    """
+    Computes base power from a live HP ratio, or returns None if the move doesn't scale.
+    Flail/Reversal and Eruption/Water Spout read the USER's HP; Wring Out and Crush
+    Grip read the TARGET's. Power is always evaluated at the moment of execution, so
+    chip damage taken earlier in the same turn already counts.
+    """
+    if move_name in ['flail', 'reversal']:
+        # The franchise uses a 48ths bracket table rather than a smooth curve:
+        #   ratio (48ths)   HP %        power
+        #   0 - 1           <  4.17%    200
+        #   2 - 4           < 10.42%    150
+        #   5 - 9           < 20.83%    100
+        #   10 - 16         < 35.42%     80
+        #   17 - 32         < 68.75%     40
+        #   33 - 48         rest         20
+        ratio = math.floor(48 * attacker.get('current_hp', 0) / max(1, attacker.get('max_hp', 1)))
+
+        if ratio <= 1:  return 200
+        if ratio <= 4:  return 150
+        if ratio <= 9:  return 100
+        if ratio <= 16: return 80
+        if ratio <= 32: return 40
+        return 20
+
+    if move_name in ['eruption', 'water-spout']:
+        # Linear falloff from 150 at full health. Weakest possible hit is still 1 power.
+        return max(1, math.floor(150 * attacker.get('current_hp', 0) / max(1, attacker.get('max_hp', 1))))
+
+    if move_name in ['wring-out', 'crush-grip']:
+        # Linear scale off the TARGET's remaining health, peaking at 120 on a full-HP target
+        return max(1, math.floor(120 * defender.get('current_hp', 0) / max(1, defender.get('max_hp', 1))))
+
+    return None
+
+# ==========================================
+# 🚨 STAT-RATIO SCALED POWER MOVES
+# ==========================================
+# Same contract as the HP-scaled family: these run through the standard damage formula
+# and only their base power is dynamic. Body Press is listed separately because it
+# doesn't alter power at all - it swaps which stat the formula reads.
+STAT_SCALED_MOVES = [
+    'gyro-ball', 'electro-ball',            # relative Speed
+    'heavy-slam', 'heat-crash',             # relative body mass
+    'grass-knot', 'low-kick',               # target body mass
+    'punishment',                           # target's stat boosts
+    'stored-power', 'power-trip',           # user's stat boosts
+    'hex',                                  # target's status condition
+    'revenge',                              # user was struck first this turn
+    'stomping-tantrum',                     # user's previous move failed
+    'rage-fist',                            # hits the user has absorbed
+    'last-respects',                        # allies already lost
+]
+
+def _effective_speed(pokemon):
+    """Speed after stat-stage modifiers, floored at 1 so it's always a safe divisor."""
+    raw = pokemon.get('stats', {}).get('speed', 50)
+    stage = pokemon.get('stat_stages', {}).get('speed', 0)
+
+    if stage > 0:
+        raw = int(raw * ((2.0 + stage) / 2.0))
+    elif stage < 0:
+        raw = int(raw * (2.0 / (2.0 + abs(stage))))
+
+    return max(1, raw)
+
+def _positive_stage_total(pokemon):
+    """Sum of every raised stat stage. Drops are ignored - only boosts add power."""
+    return sum(v for v in (pokemon.get('stat_stages') or {}).values() if v > 0)
+
+def get_stat_scaled_power(move_name, attacker, defender):
+    """
+    Computes base power from a live stat/mass/counter ratio, or None if it doesn't scale.
+    Every value is read at execution time, so boosts and chip damage from earlier in the
+    same turn are already reflected.
+    """
+    # --- RELATIVE VELOCITY ---
+    if move_name == 'gyro-ball':
+        # Rewards being *slower*. Caps at 150 when the target massively outspeeds you.
+        return min(150, max(1, math.floor(25 * _effective_speed(defender) / _effective_speed(attacker)) + 1))
+
+    if move_name == 'electro-ball':
+        # The inverse of Gyro Ball - rewards outspeeding the target
+        ratio = _effective_speed(defender) / _effective_speed(attacker)
+        if ratio <= 0.25:   return 150
+        if ratio <= 1 / 3:  return 120
+        if ratio <= 0.5:    return 80
+        if ratio < 1:       return 60
+        return 40
+
+    # --- RELATIVE BODY MASS ---
+    if move_name in ['heavy-slam', 'heat-crash']:
+        ratio = get_species_weight(attacker) / max(0.1, get_species_weight(defender))
+        if ratio >= 5: return 120
+        if ratio >= 4: return 100
+        if ratio >= 3: return 80
+        if ratio >= 2: return 60
+        return 40
+
+    if move_name in ['grass-knot', 'low-kick']:
+        # Purely the target's mass - a heavy target is easier to trip
+        weight = get_species_weight(defender)
+        if weight < 10:  return 20
+        if weight < 25:  return 40
+        if weight < 50:  return 60
+        if weight < 100: return 80
+        if weight < 200: return 100
+        return 120
+
+    # --- STAT STAGE ACCUMULATORS ---
+    if move_name == 'punishment':
+        # Punishes the target for setting up. 60 base, +20 per boost, hard cap 200.
+        return min(200, 60 + 20 * _positive_stage_total(defender))
+
+    if move_name in ['stored-power', 'power-trip']:
+        # Rewards the user for setting up. 20 base, +20 per boost.
+        return min(860, 20 + 20 * _positive_stage_total(attacker))
+
+    # --- CONDITIONAL DOUBLERS ---
+    if move_name == 'hex':
+        status = defender.get('status_condition') or {}
+        return 130 if status.get('name') else 65
+
+    if move_name == 'revenge':
+        # Doubles if the target already struck the user earlier in this same turn.
+        # last_damage_taken is written on hit and wiped at end of turn, so its mere
+        # presence means "was hit before moving".
+        return 120 if attacker.get('last_damage_taken', 0) > 0 else 60
+
+    if move_name == 'stomping-tantrum':
+        return 150 if attacker.get('last_move_failed') else 75
+
+    # --- PERSISTENT COUNTERS ---
+    if move_name == 'rage-fist':
+        # +50 per hit absorbed, capped at 350. The counter rides on the specimen, so it
+        # survives switching out and back in.
+        return min(350, 50 + 50 * attacker.get('times_hit', 0))
+
+    if move_name == 'last-respects':
+        # +50 for every teammate already lost. The engines refresh this before each hit.
+        return min(5050, 50 + 50 * attacker.get('fainted_allies', 0))
+
+    return None
+
+def resolve_dynamic_power(move_name, attacker, defender):
+    """
+    Single entry point for every move whose base power is computed rather than stored.
+    Returns None for ordinary moves so callers can fall back to the database value.
+    """
+    scaled = get_hp_scaled_power(move_name, attacker, defender)
+    if scaled is not None:
+        return scaled
+
+    return get_stat_scaled_power(move_name, attacker, defender)
+
+# ==========================================
+# 🚨 TERRAIN-KEYED MOVES
+# ==========================================
+# Move-specific terrain bonuses, separate from the generic "terrain boosts its own type"
+# rule. Both stack: Expanding Force is Psychic-type, so on Psychic Terrain it collects the
+# generic 1.3x *and* its own 1.5x. All of these require the user to be grounded.
+TERRAIN_POWER_MOVES = {
+    'misty-explosion': ('misty', 1.5),
+    'psyblade':        ('electric', 1.5),
+    'expanding-force': ('psychic', 1.5),
+}
+
+# Terrain effects that shift the priority bracket rather than power
+TERRAIN_PRIORITY_MOVES = {
+    'grassy-glide': ('grassy', 1),
+}
+
+# Solar Beam and Solar Blade are dimmed by anything that blocks out the sun
+SOLAR_MOVES = ['solar-beam', 'solar-blade']
+SOLAR_DIMMING_WEATHER = ['rain', 'heavy-rain', 'sandstorm', 'hail', 'snow']
+
+# Wrings extra damage out of a super-effective hit (5461/4096 in the games)
+SUPER_EFFECTIVE_BONUS_MOVES = ['collision-course', 'electro-drift']
+
+def get_effective_priority(move_name, base_priority, attacker, terrain='none'):
+    """
+    The priority bracket a move actually moves in, after terrain effects. Grassy Glide
+    jumps a bracket on Grassy Terrain, but only while the user is touching the ground.
+    """
+    priority = int(base_priority or 0)
+
+    shift = TERRAIN_PRIORITY_MOVES.get((move_name or '').lower().replace(' ', '-'))
+    if shift and terrain == shift[0] and is_grounded(attacker):
+        priority += shift[1]
+
+    return priority
+
+# ==========================================
+# 🚨 OFFENSIVE / DEFENSIVE STAT OVERRIDES
+# ==========================================
+# Psyshock, Psystrike and Secret Sword are Special moves that strike the target's
+# *physical* Defense. Photon Geyser and Shell Side Arm choose their category at runtime
+# from live stats. Body Press swings with the user's own Defense.
+PHYSICAL_DEFENSE_MOVES = ['psyshock', 'psystrike', 'secret-sword']
+ADAPTIVE_CATEGORY_MOVES = ['photon-geyser', 'shell-side-arm']
+STAT_OVERRIDE_MOVES = PHYSICAL_DEFENSE_MOVES + ADAPTIVE_CATEGORY_MOVES + ['body-press']
+
+def apply_stat_stage(raw_stat, stage):
+    """Standard stage multiplier, shared by offensive and defensive stats."""
+    if stage > 0:
+        return int(raw_stat * ((2.0 + stage) / 2.0))
+    if stage < 0:
+        return int(raw_stat * (2.0 / (2.0 + abs(stage))))
+    return raw_stat
+
+def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False):
+    """
+    Decides which Attack and Defense stats the damage formula reads, applies stat stages,
+    Wonder Room and Assault Vest, and reports the category the move resolves as.
+
+    Returns (attack_stat, defense_stat, effective_class). The returned class drives the
+    burn penalty and screen selection, so a Photon Geyser that resolves physical is
+    halved by a burn and blocked by Reflect rather than Light Screen.
+    """
+    a_stages = attacker.get('stat_stages') or {}
+    d_stages = defender.get('stat_stages') or {}
+
+    phys_atk = apply_stat_stage(attacker.get('stats', {}).get('attack', 50), a_stages.get('attack', 0))
+    spec_atk = apply_stat_stage(attacker.get('stats', {}).get('sp_atk', 50), a_stages.get('sp_atk', 0))
+    phys_def = apply_stat_stage(defender.get('stats', {}).get('defense', 50), d_stages.get('defense', 0))
+    spec_def = apply_stat_stage(defender.get('stats', {}).get('sp_def', 50), d_stages.get('sp_def', 0))
+
+    # Assault Vest reinforces the Sp. Def stat itself, so it follows that stat rather than
+    # the move - a Psyshock aimed at physical Defense correctly ignores the vest.
+    if (defender.get('held_item') or "").lower().replace(' ', '-') == 'assault-vest':
+        spec_def = math.floor(spec_def * 1.5)
+
+    # 🚨 WONDER ROOM swaps which of the target's two walls is standing where
+    if wonder_room:
+        phys_def, spec_def = spec_def, phys_def
+
+    # --- BODY PRESS: swings with the user's own Defense ---
+    if move_name == 'body-press':
+        body_press_atk = apply_stat_stage(attacker.get('stats', {}).get('defense', 50), a_stages.get('defense', 0))
+        return body_press_atk, phys_def, 'physical'
+
+    # --- PSYSHOCK FAMILY: special attack aimed at the physical wall ---
+    if move_name in PHYSICAL_DEFENSE_MOVES:
+        return spec_atk, phys_def, 'special'
+
+    # --- PHOTON GEYSER: turns physical when the user's Attack is the higher stat ---
+    if move_name == 'photon-geyser':
+        if phys_atk > spec_atk:
+            return phys_atk, phys_def, 'physical'
+        return spec_atk, spec_def, 'special'
+
+    # --- SHELL SIDE ARM: takes whichever split would actually hurt more ---
+    if move_name == 'shell-side-arm':
+        # Level and power are identical either way, so comparing full damage reduces to
+        # comparing the two attack/defense ratios. Ties resolve as special.
+        if (phys_atk / max(1, phys_def)) > (spec_atk / max(1, spec_def)):
+            return phys_atk, phys_def, 'physical'
+        return spec_atk, spec_def, 'special'
+
+    # --- Everything else follows its stored category ---
+    if move_class == 'physical':
+        return phys_atk, phys_def, 'physical'
+
+    return spec_atk, spec_def, 'special'
+
+def format_power_hint(move_name, attacker, defender):
+    """
+    Short ' ⚡NNN' suffix showing an HP-scaled move's power *right now*, for battle
+    buttons. Returns '' for every other move so callers can append it unconditionally.
+    """
+    power = resolve_dynamic_power(move_name, attacker, defender)
+    return f" ⚡{power}" if power is not None else ""
+
+def describe_power_range(move_name):
+    """
+    Static description of an HP-scaled move's power band, for menus that list moves
+    outside of battle where there's no live HP to read. Returns None if it doesn't scale.
+    """
+    if move_name in ['flail', 'reversal']:
+        return "20-200 (↑ as your HP drops)"
+    if move_name in ['eruption', 'water-spout']:
+        return "1-150 (↑ with your HP)"
+    if move_name in ['wring-out', 'crush-grip']:
+        return "1-120 (↑ with target's HP)"
+
+    # --- Stat-ratio family ---
+    if move_name == 'gyro-ball':
+        return "1-150 (↑ the slower you are)"
+    if move_name == 'electro-ball':
+        return "40-150 (↑ the faster you are)"
+    if move_name in ['heavy-slam', 'heat-crash']:
+        return "40-120 (↑ if you outweigh the target)"
+    if move_name in ['grass-knot', 'low-kick']:
+        return "20-120 (↑ with target's weight)"
+    if move_name == 'punishment':
+        return "60-200 (↑ per target stat boost)"
+    if move_name in ['stored-power', 'power-trip']:
+        return "20+ (↑ 20 per stat boost)"
+    if move_name == 'hex':
+        return "65 / 130 vs a statused target"
+    if move_name == 'revenge':
+        return "60 / 120 if struck first"
+    if move_name == 'stomping-tantrum':
+        return "75 / 150 after a failed move"
+    if move_name == 'rage-fist':
+        return "50-350 (↑ 50 per hit taken)"
+    if move_name == 'last-respects':
+        return "50+ (↑ 50 per ally lost)"
+    if move_name == 'body-press':
+        return "80 (attacks with your Defense)"
+
+    return None
+
+def estimate_bypass_payload(move_name, move_type, attacker, defender):
+    """
+    Expected HP payload of any formula-bypass move, used for NPC move scoring.
+    Returns 0 whenever the move would fail outright against this target, so the
+    caller can simply treat 0 as "never pick this". RNG and accuracy are both
+    resolved to their mean so the AI's ranking stays stable from turn to turn.
+    """
+    if move_name not in FORMULA_BYPASS_MOVES:
+        return 0
+
+    # A 0x elemental matchup blanks every move in this family
+    multiplier = 1.0
+    for def_type in (defender.get('types') or []):
+        multiplier *= TYPE_CHART.get(move_type, {}).get(def_type, 1.0)
+    if multiplier == 0.0:
+        return 0
+
+    def_hp = defender.get('current_hp', 0)
+
+    if move_name in FIXED_DAMAGE_MOVES:
+        return estimate_fixed_damage(move_name, attacker)
+
+    if move_name in ['seismic-toss', 'night-shade']:
+        return attacker.get('level', 50)
+
+    if move_name in ['super-fang', 'natures-madness', 'ruination']:
+        return max(1, math.floor(def_hp / 2))
+
+    if move_name == 'endeavor':
+        # Only worth a turn when the user is the more wounded of the two
+        return max(0, def_hp - attacker.get('current_hp', 0))
+
+    if move_name in OHKO_MOVES:
+        atk_lvl = attacker.get('level', 50)
+        def_lvl = defender.get('level', 50)
+        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+        def_ability = (defender.get('ability') or '').lower().replace(' ', '-')
+
+        # Conditions the engine rejects outright, so the turn would be wasted
+        if atk_lvl < def_lvl:
+            return 0
+        if def_ability == 'sturdy':
+            return 0
+        if move_name == 'sheer-cold' and 'ice' in (defender.get('types') or []):
+            return 0
+
+        base_acc = 30 + (atk_lvl - def_lvl)
+        if move_name == 'sheer-cold' and 'ice' not in (attacker.get('types') or []):
+            base_acc = 20 + (atk_lvl - def_lvl)
+        if atk_ability == 'no-guard' or def_ability == 'no-guard':
+            base_acc = 100
+
+        # Weigh the guaranteed faint against the odds of whiffing the turn entirely,
+        # so a 30% coin-flip never outranks a reliable attack that does real damage.
+        accuracy = max(0, min(100, base_acc))
+        return math.floor(def_hp * (accuracy / 100.0))
+
+    return 0
+
+def apply_survival_floor(defender, damage):
+    """
+    Focus Sash, Sturdy, and Endure clamp any otherwise-lethal hit so the specimen
+    survives on exactly 1 HP. Returns (final_damage, message_fragment).
+    """
+    if damage < defender.get('current_hp', 0):
+        return damage, ""
+
+    def_item = (defender.get('held_item') or "").lower().replace(' ', '-')
+    def_ability = (defender.get('ability') or "").lower().replace(' ', '-')
+    at_full_health = defender['current_hp'] == defender.get('max_hp', 100)
+
+    if def_item == 'focus-sash' and at_full_health:
+        defender['held_item'] = 'none' # The sash disintegrates on use!
+        return defender['current_hp'] - 1, " It hung on using its Focus Sash!"
+
+    if def_ability == 'sturdy' and at_full_health:
+        return defender['current_hp'] - 1, " It endured the hit using Sturdy!"
+
+    if defender.get('volatile_statuses', {}).get('endure'):
+        return defender['current_hp'] - 1, " It endured the hit!"
+
+    return damage, ""
+
 def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False):
     """
     Acts as the central physics and biology engine for field combat.
@@ -254,6 +709,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         attacker['volatile_statuses'] = {}
     if 'volatile_statuses' not in defender:
         defender['volatile_statuses'] = {}
+
+    # 🚨 STRIKE COUNTER for this single execution. The engines read it to advance Rage
+    # Fist, which counts individual strikes rather than moves. Defaults to one hit and is
+    # overwritten by the multi-strike loop; reset here so an early return can't leak a
+    # stale count from the previous attack.
+    defender['last_hit_count'] = 1
 
     # ==========================================
     # 1. CONTAINMENT FIELD DEPLOYMENT & DECAY
@@ -451,26 +912,60 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # 🚨 FIXED DAMAGE & HP ANOMALIES
     # ==========================================
+    # These moves ignore Attack/Defense, STAB, criticals and effectiveness, but a 0x
+    # elemental matchup is still an absolute wall. One guard covers the whole family.
+    if move_name in FORMULA_BYPASS_MOVES and type_multiplier == 0.0:
+        return 0, "It had no effect!", 'none', [], 0
+
     if move_name == 'endeavor':
         if defender['current_hp'] > attacker['current_hp']:
+            # Drags the target down to the user's HP, so it can never land a KO
             fixed_damage = defender['current_hp'] - attacker['current_hp']
             return fixed_damage, "It savagely cut down the target's HP!", 'none', [], 0
         return 0, "But it failed!", 'none', [], 0
-        
+
     if move_name in ['seismic-toss', 'night-shade']:
         # These moves always deal damage exactly equal to the user's level
-        return attacker.get('level', 50), "", 'none', [], 0
-        
+        fixed_damage, survival_msg = apply_survival_floor(defender, attacker.get('level', 50))
+        return fixed_damage, survival_msg.strip(), 'none', [], 0
+
     if move_name in ['super-fang', 'natures-madness', 'ruination']:
         # These moves instantly halve the defender's current HP!
         fixed_damage = max(1, math.floor(defender['current_hp'] / 2))
-        return fixed_damage, "", 'none', [], 0
-    
+        fixed_damage, survival_msg = apply_survival_floor(defender, fixed_damage)
+        return fixed_damage, survival_msg.strip(), 'none', [], 0
+
+    # ==========================================
+    # 🚨 SET-DAMAGE ANOMALIES (Dragon Rage, Sonic Boom, Psywave, Final Gambit)
+    # ==========================================
+    if move_name in FIXED_DAMAGE_MOVES:
+        fixed_damage = get_fixed_damage(move_name, attacker)
+
+        if move_name == 'final-gambit':
+            # Nothing left to donate means the move simply fizzles
+            if fixed_damage <= 0:
+                return 0, "But it failed!", 'none', [], 0
+            # The user pays its full remaining HP the instant the attack connects.
+            # We zero it here rather than in the Phase 4 self-KO hook because this
+            # branch returns early and never reaches it.
+            attacker['current_hp'] = 0
+
+        fixed_damage, survival_msg = apply_survival_floor(defender, fixed_damage)
+
+        flavor_text = {
+            'dragon-rage': "💢 A pulse of pure draconic rage slammed into the target!",
+            'sonic-boom': "💥 A compressed shockwave of air struck the target!",
+            'psywave': "🌀 An erratic wave of psychic energy washed over the target!",
+            'final-gambit': f"💀 {attacker['name'].capitalize()} sacrificed itself, hurling its entire life force at the target!"
+        }[move_name]
+
+        return fixed_damage, (flavor_text + survival_msg).strip(), 'none', [], 0
+
     # ==========================================
     # ==========================================
     # 🚨 ONE-HIT KO ANOMALIES
     # ==========================================
-    if move_name in ['fissure', 'horn-drill', 'guillotine', 'sheer-cold']:
+    if move_name in OHKO_MOVES:
         atk_lvl = attacker.get('level', 50)
         def_lvl = defender.get('level', 50)
         
@@ -498,38 +993,52 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             return 0, "The attack missed!", 'none', [], 0
             
         # 4. The Lethal Payload
-        # We return exactly the defender's current HP to guarantee a faint!
-        return defender['current_hp'], "It's a One-Hit KO!", 'none', [], 0
+        # We return exactly the defender's current HP to guarantee a faint, unless a
+        # Focus Sash or Endure clamps it. (Sturdy already returned outright above.)
+        lethal_damage, survival_msg = apply_survival_floor(defender, defender['current_hp'])
+
+        if survival_msg:
+            return lethal_damage, survival_msg.strip(), 'none', [], 0
+
+        return lethal_damage, "It's a One-Hit KO!", 'none', [], 0
     
     # PHASE 1: KINETIC & SPECIAL DAMAGE (The Multi-Strike Engine)
     # ==========================================
-    if move.get('class') != 'status' and move.get('power', 0) > 0:
+    # Resolved before the gate below: Flail, Gyro Ball, Grass Knot, Punishment and
+    # friends are all stored as 0 power in the database, so without this they'd be
+    # filtered out as non-damaging and silently deal nothing.
+    dynamic_power = resolve_dynamic_power(move_name, attacker, defender)
+
+    if move.get('class') != 'status' and (move.get('power', 0) > 0 or dynamic_power):
         level = attacker.get('level', 50)
         
-        def apply_stage(raw_stat, stage):
-            if stage > 0: return int(raw_stat * ((2.0 + stage) / 2.0))
-            if stage < 0: return int(raw_stat * (2.0 / (2.0 + abs(stage))))
-            return raw_stat
-            
-        atk_stage = attacker.get('stat_stages', {}).get('attack', 0)
-        def_stage = defender.get('stat_stages', {}).get('defense', 0)
-        spa_stage = attacker.get('stat_stages', {}).get('sp_atk', 0)
-        spd_stage = defender.get('stat_stages', {}).get('sp_def', 0)
-        
-        if move.get('class') == 'physical':
-            a = apply_stage(attacker.get('stats', {}).get('attack', 50), atk_stage)
-            d = apply_stage(defender.get('stats', {}).get('defense', 50), def_stage)
+        # ==========================================
+        # 🚨 STAT SELECTION
+        # ==========================================
+        # One resolver decides which Attack and Defense stats this move reads, applying
+        # stat stages, Wonder Room and Assault Vest. `effective_class` is what the move
+        # actually resolved as, which can differ from its stored category for Photon
+        # Geyser and Shell Side Arm.
+        a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room)
+
+        # Choice items reinforce the offensive stat the move ended up swinging with
+        if effective_class == 'physical':
             if attacker_item == 'choice-band': a = math.floor(a * 1.5)
-        else: 
-            a = apply_stage(attacker.get('stats', {}).get('sp_atk', 50), spa_stage)
-            d = apply_stage(defender.get('stats', {}).get('sp_def', 50), spd_stage)
+        else:
             if attacker_item == 'choice-specs': a = math.floor(a * 1.5)
-            if defender_item == 'assault-vest': d = math.floor(d * 1.5)
-            
+
+
         # 🚨 THE BATTLE BOND MUTATION
         move_power = move.get('power', 0)
         if move_name == 'water-shuriken' and atk_ability == 'battle-bond':
             move_power = 20
+
+        # 🚨 DYNAMIC POWER OVERRIDE
+        # Replaces the stored power outright. Some of these ship with a misleading fixed
+        # value (Eruption 150, Hex 65, Revenge 60), so the override is what actually makes
+        # them respond to the battle state.
+        if dynamic_power is not None:
+            move_power = dynamic_power
 
         # ==========================================
         # 🚨 CONDITIONAL POWER MULTIPLIERS
@@ -558,13 +1067,33 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif move_name == 'pursuit' and defender.get('volatile_statuses', {}).get('is_switching'):
             move_power *= 2
             
+        # 2b. Super-Effective Amplifiers (Collision Course / Electro Drift)
+        # These stack on top of the type multiplier, which is applied separately later.
+        if move_name in SUPER_EFFECTIVE_BONUS_MOVES and type_multiplier > 1.0:
+            move_power = math.floor(move_power * 5461 / 4096) # ~1.3333x
+            msg += " 💢 It capitalised on the weakness! "
+
+        # 2c. Solar Dimming
+        # Solar Beam skips its charge turn in sunlight (handled by the engines' two-turn
+        # table); here we only dim it when the sky is obscured.
+        if move_name in SOLAR_MOVES and weather in SOLAR_DIMMING_WEATHER:
+            move_power = math.floor(move_power * 0.5)
+            msg += " ☁️ The harsh conditions smothered the light! "
+
         # 3. Spatial Synergies (Terrains)
         if is_grounded(attacker):
             # Modern generation multiplier is 1.3x
             if terrain == 'electric' and move_type == 'electric': move_power *= 1.3
             elif terrain == 'grassy' and move_type == 'grass': move_power *= 1.3
             elif terrain == 'psychic' and move_type == 'psychic': move_power *= 1.3
-            
+
+            # Move-specific terrain synergies. Deliberately a separate check rather than
+            # another elif, so Expanding Force collects both this and the generic bonus.
+            terrain_boost = TERRAIN_POWER_MOVES.get(move_name)
+            if terrain_boost and terrain == terrain_boost[0]:
+                move_power *= terrain_boost[1]
+
+
         if is_grounded(defender):
             # Misty Terrain halves Dragon damage
             if terrain == 'misty' and move_type == 'dragon': move_power *= 0.5
@@ -581,22 +1110,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if move_name == 'knock-off' and is_removable:
             move_power = math.floor(move_power * 1.5)
         
-        # Fetch Defensive Stats
-        def_stat = defender['stats'].get('defense', 50)
-        sp_def_stat = defender['stats'].get('special-defense', 50) # Or 'sp_def' depending on your DB
-        
-        # 🚨 WONDER ROOM STAT SWAP
-        if wonder_room:
-            def_stat, sp_def_stat = sp_def_stat, def_stat
-
-        # Determine which stat to use based on Move Class
-        d = def_stat if move_class == 'physical' else sp_def_stat
+        # (Defensive stats were already resolved above - Wonder Room and Assault Vest
+        # included - so `d` is used directly here rather than being recomputed.)
 
         # 1. Calculate raw structural damage BEFORE random variance and multipliers
         base_damage_unmodified = (((2 * level / 5) + 2) * move_power * (a / max(1, d))) / 50 + 2
 
         # 🚨 BURN PENALTY (Physical moves deal half damage, unless it is Facade or Guts!)
-        if move_class == 'physical' and atk_status == 'burn' and move_name != 'facade' and atk_ability != 'guts':
+        if effective_class == 'physical' and atk_status == 'burn' and move_name != 'facade' and atk_ability != 'guts':
             base_damage_unmodified = math.floor(base_damage_unmodified * 0.5)
 
         # ==========================================
@@ -613,10 +1134,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         stab = 1.5 if move_type in (attacker.get('types') or []) else 1.0
 
         weather_mod = 1.0
-        if weather == 'sun':
-            if move_type == 'fire': weather_mod = 1.5
+        if weather in ['sun', 'extremely-harsh-sunlight']:
+            # 🚨 HYDRO STEAM: superheated water. Sunlight amplifies it by 50% instead of
+            # applying the usual Water-type penalty.
+            if move_name == 'hydro-steam':
+                weather_mod = 1.5
+            elif move_type == 'fire': weather_mod = 1.5
             elif move_type == 'water': weather_mod = 0.5
-        elif weather == 'rain':
+        elif weather in ['rain', 'heavy-rain']:
             if move_type == 'water': weather_mod = 1.5
             elif move_type == 'fire': weather_mod = 0.5
         
@@ -776,9 +1301,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 # 2. Damage Mitigation
                 # Screens are completely bypassed by Critical Hits and the Infiltrator ability!
                 elif not is_crit and atk_ability != 'infiltrator':
-                    if move.get('class') == 'physical' and (target_hazards.get('reflect', 0) > 0 or target_hazards.get('aurora-veil', 0) > 0):
+                    # Screens key off the category the move actually resolved as, so a
+                    # physical Photon Geyser is stopped by Reflect rather than Light Screen.
+                    if effective_class == 'physical' and (target_hazards.get('reflect', 0) > 0 or target_hazards.get('aurora-veil', 0) > 0):
                         hit_modifier *= 0.5
-                    elif move.get('class') == 'special' and (target_hazards.get('light-screen', 0) > 0 or target_hazards.get('aurora-veil', 0) > 0):
+                    elif effective_class == 'special' and (target_hazards.get('light-screen', 0) > 0 or target_hazards.get('aurora-veil', 0) > 0):
                         hit_modifier *= 0.5
             # ==========================================
             
@@ -813,6 +1340,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # 3. FINALIZE THE AGGREGATED DATA
         # ==========================================
         damage = total_damage
+
+        # Report how many strikes actually connected, so a 5-hit Bullet Seed advances
+        # Rage Fist by 5 rather than by 1.
+        defender['last_hit_count'] = max(1, hits_landed)
         
         if type_multiplier > 1.0: msg += "It's super effective! "
         elif type_multiplier > 0.0 and type_multiplier < 1.0: msg += "It's not very effective... "
