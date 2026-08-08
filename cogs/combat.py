@@ -479,6 +479,54 @@ TERRAIN_MESSAGES = {
     'psychic': "👁️ The battlefield got weird!"
 }
 
+# ==========================================
+# 🚨 PRIMAL LOCKOUT
+# ==========================================
+# Primal Reversion is these species' transformation, and it is mutually exclusive with
+# Dynamax/Gigantamax. Matched on the base species so the block holds whether or not they
+# are holding their orb and whether or not they have already reverted.
+PRIMAL_SPECIES = ['groudon', 'kyogre']
+
+def can_dynamax(pokemon):
+    """False for species whose transformation slot is taken by Primal Reversion."""
+    base_name = (pokemon.get('name') or '').lower().split('-')[0].strip()
+    return base_name not in PRIMAL_SPECIES
+
+
+async def check_for_evolution(db, user_id, specimen, combat_log):
+    """
+    Checks if a specimen has hit its genetic threshold for level-based evolution.
+
+    Module-level because both battle engines need it: the PvE dashboard is a View and
+    the PvP resolver lives on the Combat cog, so neither can reach a method defined on
+    the other. Returns (message, (new_pokedex_id, evolved_name)) or (None, None).
+    """
+    current_pokedex_id = specimen['pokedex_id']
+    current_level = specimen['level']
+    current_name = specimen['name']
+
+    # 1. Check the Metamorphosis Rulebook for level-based triggers
+    async with db.execute("""
+        SELECT er.evolved_species_id, s.name
+        FROM evolution_rules er
+        JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+        WHERE er.base_species_id = ?
+        AND er.trigger_name = 'level-up'
+        AND er.min_level <= ?
+    """, (current_pokedex_id, current_level)) as cursor:
+        evo_data = await cursor.fetchone()
+
+    # 2. If an evolution is found, return the prompt and the new species ID!
+    if evo_data:
+        new_pokedex_id, evolved_into_name = evo_data
+
+        # Store the base evolution message (This prompts the user, it doesn't confirm it)
+        evo_msg = f"🌟 **{current_name.capitalize()}** reached Level {current_level} and is reacting to the accumulated biomass! It looks ready to evolve into **{evolved_into_name.capitalize()}**!\n"
+
+        return evo_msg, (new_pokedex_id, evolved_into_name)
+
+    return None, None # No evolution occurred
+
 async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state, combat_log):
     """Executes passive biological traits for a SINGLE specimen entering the biome."""
 
@@ -988,8 +1036,8 @@ class PvPMoveMenu(discord.ui.View):
                     mega_forms = [f for f in available_forms if '-mega' in f[1]]
                     gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
 
-                    # 1. DYNAMAX / GIGANTAMAX
-                    if key_items.get('dynamax_band'):
+                    # 1. DYNAMAX / GIGANTAMAX (Primal species are locked out)
+                    if key_items.get('dynamax_band') and can_dynamax(self.active_poke):
                         has_gmax = self.active_poke.get('gmax_factor', False) or self.active_poke.get('gmax_factor', 0) == 1
                         
                         # Ensure they actually have a G-Max form in the database before labeling it Gigantamax
@@ -2051,33 +2099,11 @@ class BattleDashboard(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self, attachments=[])
 
     async def check_for_evolution(self, db, user_id, specimen, combat_log):
-        """Checks if a specimen has hit its genetic threshold for level-based evolution."""
-        current_pokedex_id = specimen['pokedex_id']
-        current_level = specimen['level']
-        current_name = specimen['name']
+        """Thin wrapper so existing PvE call sites keep working. See the module-level
+        implementation, which the PvP resolver on the Combat cog also uses."""
+        return await check_for_evolution(db, user_id, specimen, combat_log)
 
-        # 1. Check the Metamorphosis Rulebook for level-based triggers
-        async with db.execute("""
-            SELECT er.evolved_species_id, s.name 
-            FROM evolution_rules er
-            JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
-            WHERE er.base_species_id = ? 
-            AND er.trigger_name = 'level-up' 
-            AND er.min_level <= ?
-        """, (current_pokedex_id, current_level)) as cursor:
-            evo_data = await cursor.fetchone()
-        
-        # 2. If an evolution is found, return the prompt and the new species ID!
-        if evo_data:
-            new_pokedex_id, evolved_into_name = evo_data
-            
-            # Store the base evolution message (This prompts the user, it doesn't confirm it)
-            evo_msg = f"🌟 **{current_name.capitalize()}** reached Level {current_level} and is reacting to the accumulated biomass! It looks ready to evolve into **{evolved_into_name.capitalize()}**!\n"
-            
-            return evo_msg, (new_pokedex_id, evolved_into_name)
-            
-        return None, None # No evolution occurred
-    
+
     async def handle_transformation(self, interaction: discord.Interaction):
         if str(interaction.user.id) != self.user_id:
             return await interaction.response.send_message("⚠️ This is not your field expedition!", ephemeral=True)
@@ -2138,6 +2164,13 @@ class BattleDashboard(discord.ui.View):
                 'types': list(p_active.get('types', []))
             }
             
+            # 🚨 PRIMAL FIREWALL: reject a stale Dynamax/G-Max button server-side
+            if not can_dynamax(p_active) and (form_name == 'dynamax' or 'gmax' in str(form_name).lower()):
+                return await interaction.followup.send(
+                    f"⚠️ **{p_active['name'].capitalize()}** channels Primal energy and cannot Dynamax!",
+                    ephemeral=True
+                )
+
             # 2. APPLY THE ADAPTATION (Dynamax vs Mega/Gmax)
             if form_name == 'dynamax':
                 print("DEBUG: Applying generic Dynamax logic...")
@@ -2514,16 +2547,17 @@ class BattleDashboard(discord.ui.View):
                     self.add_item(btn)
                     gimmick_found = True
                 
-                # 2. GIGANTAMAX (Requires Dynamax Band)
-                if gmax_form and gmax_factor and key_items.get('dynamax_band'):
+                # 2. GIGANTAMAX (Requires Dynamax Band; Primal species are locked out)
+                if gmax_form and gmax_factor and key_items.get('dynamax_band') and can_dynamax(p_active):
                     form_id, form_name = gmax_form
                     btn = discord.ui.Button(label=f"🌪️ Gigantamax", style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
                     btn.callback = self.handle_transformation
                     self.add_item(btn)
                     gimmick_found = True
                     
-                # 3. GENERIC DYNAMAX (Requires Dynamax Band, only spawns if no other gimmick is ready)
-                if not gimmick_found and key_items.get('dynamax_band'):
+                # 3. GENERIC DYNAMAX (Requires Dynamax Band, only spawns if no other gimmick
+                # is ready; Primal species are locked out)
+                if not gimmick_found and key_items.get('dynamax_band') and can_dynamax(p_active):
                     btn = discord.ui.Button(label="🔴 Dynamax", style=discord.ButtonStyle.danger, custom_id="transform_0_dynamax", row=2)
                     btn.callback = self.handle_transformation
                     self.add_item(btn)
@@ -5647,7 +5681,12 @@ class Combat(commands.Cog):
                         if commit['type'] == 'attack' and commit.get('transform'):
                             form = commit['transform']
                             owner_name = state['p1'].display_name if pid == p1_id else state['p2'].display_name
-                            
+
+                            # 🚨 PRIMAL FIREWALL: reject a stale Dynamax commit server-side
+                            if form == 'dynamax' and not can_dynamax(active_poke):
+                                combat_log += f"⚠️ **{owner_name}'s** {active_poke['name'].capitalize()} channels Primal energy and cannot Dynamax!\n"
+                                continue
+
                             # 1. Create Biological Backup
                             adp_state['backup'] = {
                                 'name': active_poke['name'],
@@ -6939,15 +6978,17 @@ class Combat(commands.Cog):
                                             # Block 2: Check for Mutation
                                             else:
                                                 try:
-                                                    # Trigger the helper (passing db directly)
-                                                    evo_msg, target_species = await getattr(self, 'check_for_evolution', self.cog.check_for_evolution)(db, user_id, p, combat_log)
-                                                    
-                                                    if evo_msg: 
+                                                    # NOTE: this runs on the Combat cog itself, so there is no
+                                                    # `self.cog` here, and check_for_evolution is not a Combat
+                                                    # method either - it lives at module level for both engines.
+                                                    evo_msg, target_species = await check_for_evolution(db, user_id, p, combat_log)
+
+                                                    if evo_msg:
                                                         rewards_log += evo_msg
-                                                        
+
                                                     # Attach the confirmation view if a mutation is pending!
                                                     if target_species and post_battle_view is None:
-                                                        post_battle_view = EvolutionConfirmView(self.cog, user_id, p, target_species)
+                                                        post_battle_view = EvolutionConfirmView(self, user_id, p, target_species)
                                                 except Exception as e:
                                                     print(f"DEBUG: Evolution check failed in PvP: {e}")
 
