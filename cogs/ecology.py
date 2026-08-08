@@ -2533,7 +2533,7 @@ class Ecology(commands.Cog):
                 # 🌐 GLOBAL BROADCAST MECHANIC
                 # ==========================================
                 if is_legendary or is_mythical or is_shiny:
-                    OFFICIAL_BROADCAST_CHANNEL_ID = 1487606904321736764 #Kyu Official Server: 1487606904321736764 / Kyu Beta: 1491524019495895171
+                    OFFICIAL_BROADCAST_CHANNEL_ID = 1491524019495895171 #Kyu Official Server: 1487606904321736764 / Kyu Beta: 1491524019495895171
                     broadcast_channel = self.bot.get_channel(OFFICIAL_BROADCAST_CHANNEL_ID)
                     
                     if broadcast_channel:

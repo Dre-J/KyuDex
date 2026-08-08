@@ -1,5 +1,4 @@
 import discord
-import os
 import time
 import traceback
 from discord.ext import commands
@@ -11,8 +10,7 @@ from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, 
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
-from io import BytesIO
-from PIL import Image, ImageOps, ImageDraw, ImageFont
+from cogs import battle_render
 
 # The Ecological Gatekeepers
 WARDEN_ROSTER = {
@@ -491,6 +489,41 @@ def can_dynamax(pokemon):
     """False for species whose transformation slot is taken by Primal Reversion."""
     base_name = (pokemon.get('name') or '').lower().split('-')[0].strip()
     return base_name not in PRIMAL_SPECIES
+
+
+def normalize_gender(value):
+    """
+    Stored gender -> "M" / "F" / None.
+
+    caught_pokemon.gender holds the literal string "None" for genderless
+    species (and for rows captured before the column was populated), so an
+    empty result has to be folded back to a real None for the HUD.
+    """
+    if not value:
+        return None
+    value = str(value).strip().upper()
+    return value if value in ('M', 'F') else None
+
+
+async def fetch_gender_rate(db, pokedex_id):
+    """
+    Species gender_rate: eighths-female (0-8), or -1 for genderless.
+
+    Mirrors the roll ecology.py performs at capture time so NPCs, which have no
+    caught_pokemon row, still get a plausible gender.
+    """
+    async with db.execute(
+        "SELECT gender_rate FROM base_pokemon_species WHERE pokedex_id = ?", (pokedex_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row and row[0] is not None else 4
+
+
+def roll_gender(gender_rate, rng=random):
+    """Pick a gender from a species gender_rate. Returns None when genderless."""
+    if gender_rate is None or gender_rate == -1:
+        return None
+    return "F" if rng.uniform(0, 100) <= (gender_rate / 8.0) * 100 else "M"
 
 
 async def check_for_evolution(db, user_id, specimen, combat_log):
@@ -1821,7 +1854,12 @@ class SwapMenu(discord.ui.View):
                     p_status=new_active.get('status_condition'),
                     n_status=n_active.get('status_condition'),
                     p_hazards=state.get('player_hazards'),
-                    n_hazards=state.get('npc_hazards')
+                    n_hazards=state.get('npc_hazards'),
+                    p_name=new_active.get('name'), p_level=new_active.get('level'),
+                    p_gender=new_active.get('gender'), n_gender=n_active.get('gender'),
+                    n_name=n_active.get('name'), n_level=n_active.get('level'),
+                    p_aura=battle_render.aura_for(state.get('adaptation')),
+                    biome=state.get('warden_biome')
                 )
                 # Attach the newly generated image to the state so render_dashboard can use it!
                 self.main_battle_view.current_battle_file = battle_file
@@ -1848,7 +1886,12 @@ class SwapMenu(discord.ui.View):
                     p_status=new_active.get('status_condition'),
                     n_status=n_active.get('status_condition'),
                     p_hazards=state.get('player_hazards'),
-                    n_hazards=state.get('npc_hazards')
+                    n_hazards=state.get('npc_hazards'),
+                    p_name=new_active.get('name'), p_level=new_active.get('level'),
+                    p_gender=new_active.get('gender'), n_gender=n_active.get('gender'),
+                    n_name=n_active.get('name'), n_level=n_active.get('level'),
+                    p_aura=battle_render.aura_for(state.get('adaptation')),
+                    biome=state.get('warden_biome')
                 )
                 # Because process_turn_end generates its OWN image later in Phase 5, we actually 
                 # don't need to assign this to self.main_battle_view.current_battle_file right here.
@@ -2087,7 +2130,12 @@ class BattleDashboard(discord.ui.View):
             p_status=p_active.get('status_condition'),
             n_status=n_active.get('status_condition'),
             p_hazards=state.get('player_hazards'),
-            n_hazards=state.get('npc_hazards')
+            n_hazards=state.get('npc_hazards'),
+            p_name=p_active.get('name'), p_level=p_active.get('level'),
+            p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
+            n_name=n_active.get('name'), n_level=n_active.get('level'),
+            p_aura=battle_render.aura_for(state.get('adaptation')),
+            biome=state.get('warden_biome')
         )
         # ==========================================
         await self.refresh_buttons()
@@ -2292,7 +2340,12 @@ class BattleDashboard(discord.ui.View):
                 p_status=p_active.get('status_condition'),
                 n_status=n_active.get('status_condition'),
                 p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards')
+                n_hazards=state.get('npc_hazards'),
+                p_name=p_active.get('name'), p_level=p_active.get('level'),
+                p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
+                n_name=n_active.get('name'), n_level=n_active.get('level'),
+                p_aura=battle_render.aura_for(state.get('adaptation')),
+                biome=state.get('warden_biome')
             )
             
             # Dynamically grab the new randomized filename!
@@ -2572,160 +2625,60 @@ class BattleDashboard(discord.ui.View):
         # Edit the message to show the dropdown menu instead of the attack buttons!
         await interaction.response.edit_message(view=swap_view)
 
-    async def generate_battle_scene(self, player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_hp, 
-                                        player_shiny=False, npc_shiny=False, 
-                                        weather='none', p_status=None, n_status=None, 
-                                        p_hazards=None, n_hazards=None):
-            """Fetches high-res official artwork from LOCAL DISK and composites them onto a 2D battlefield canvas."""
-            
-            print(f"\n🚨 VISUAL ENGINE DIAGNOSTIC -> Player ID: {player_id} | NPC ID: {npc_id}")
-            
-            # ==========================================
-            # 1. LOCAL FILE ROUTING
-            # ==========================================
-            base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-            
-            p_path = os.path.join(base_path, "shiny", f"{player_id}.png") if player_shiny else os.path.join(base_path, f"{player_id}.png")
-            n_path = os.path.join(base_path, "shiny", f"{npc_id}.png") if npc_shiny else os.path.join(base_path, f"{npc_id}.png")
+    async def generate_battle_scene(self, player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_hp,
+                                    player_shiny=False, npc_shiny=False,
+                                    weather='none', p_status=None, n_status=None,
+                                    p_hazards=None, n_hazards=None,
+                                    p_name=None, p_level=None, n_name=None, n_level=None,
+                                    p_gender=None, n_gender=None,
+                                    p_aura=None, n_aura=None, biome=None):
+        """
+        Maps battle state onto the scene renderer in cogs/battle_render.py and
+        returns the result as a Discord attachment.
 
-            # Fallback bytes (A tiny placeholder image so the bot doesn't crash if a sprite is missing)
-            fallback_bytes = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDAT\x08\x99c\xf8\x0f\x04\x00\x09\xfb\x03\xfd\xe3U\xf2\x9c\x00\x00\x00\x00IEND\xaeB`\x82'
-            
-            try:
-                # Load Player Sprite
-                if os.path.exists(p_path):
-                    p_img = Image.open(p_path).convert("RGBA")
-                else:
-                    print(f"⚠️ Missing Local Sprite: {p_path}")
-                    p_img = Image.open(BytesIO(fallback_bytes)).convert("RGBA")
-                    
-                # Load NPC Sprite
-                if os.path.exists(n_path):
-                    n_img = Image.open(n_path).convert("RGBA")
-                else:
-                    print(f"⚠️ Missing Local Sprite: {n_path}")
-                    n_img = Image.open(BytesIO(fallback_bytes)).convert("RGBA")
-                    
-            except Exception as e:
-                print(f"PIL Image Loading Error: {e}")
-                # Ultimate failsafe: Just draw invisible boxes
-                p_img = Image.new('RGBA', (250, 250), (0, 0, 0, 0))
-                n_img = Image.new('RGBA', (250, 250), (0, 0, 0, 0))
+        Sprite loading and compositing cost ~200ms of pure CPU, which is long
+        enough to stall the gateway heartbeat, so the whole job is handed to a
+        worker thread. Returns None if rendering fails; every call site already
+        guards for that.
+        """
 
-            # Mirror the player sprite so it faces the opponent
-            p_img = ImageOps.mirror(p_img)
-            p_img = p_img.resize((180, 180), Image.Resampling.LANCZOS)
-            n_img = n_img.resize((180, 180), Image.Resampling.LANCZOS)
+        def _render():
+            player = battle_render.Combatant(
+                name=p_name or f"#{player_id}",
+                level=p_level,
+                hp=p_hp, max_hp=p_max_hp,
+                status=battle_render.normalize_status(p_status),
+                gender=p_gender,
+                sprite=battle_render.load_sprite(player_id, player_shiny),
+                aura=p_aura,
+                hazards=p_hazards or {},
+            )
+            opponent = battle_render.Combatant(
+                name=n_name or f"#{npc_id}",
+                level=n_level,
+                hp=n_hp, max_hp=n_max_hp,
+                status=battle_render.normalize_status(n_status),
+                gender=n_gender,
+                sprite=battle_render.load_sprite(npc_id, npc_shiny),
+                aura=n_aura,
+                hazards=n_hazards or {},
+            )
+            return battle_render.render_png(
+                player, opponent,
+                biome=battle_render.normalize_biome(biome),
+                weather=battle_render.normalize_weather(weather),
+            )
 
-            # ==========================================
-            # 2. PROCEDURAL HABITAT BACKGROUND
-            # ==========================================
-            # Sky Blue top half, Grass Green bottom half
-            bg = Image.new('RGBA', (600, 300), (135, 206, 235, 255)) 
-            bg_draw = ImageDraw.Draw(bg)
-            bg_draw.rectangle([0, 150, 600, 300], fill=(120, 200, 80, 255))
-            
-            # Moved NPC down from Y=20 to Y=60 so it clears the HUD
-            bg.paste(n_img, (380, 60), n_img)   
-            bg.paste(p_img, (70, 80), p_img)  
+        try:
+            buffer = await asyncio.to_thread(_render)
+        except Exception as e:
+            print(f"⚠️ Battle scene render failed: {e}")
+            traceback.print_exc()
+            return None
 
-            # ==========================================
-            # 3. TRANSLUCENT HUD OVERLAYS
-            # ==========================================
-            # Pillow requires a separate transparent layer to draw translucent shapes
-            overlay = Image.new('RGBA', bg.size, (0, 0, 0, 0))
-            overlay_draw = ImageDraw.Draw(overlay)
-            
-            # Player HUD Backdrop (Bottom Left)
-            overlay_draw.rounded_rectangle([85, 235, 265, 295], radius=10, fill=(20, 20, 20, 170))
-            
-            # NPC HUD Backdrop (Top Right)
-            overlay_draw.rounded_rectangle([385, 10, 565, 70], radius=10, fill=(20, 20, 20, 170))
-
-            # Weather Backdrop (Top Center)
-            if weather and weather != 'none':
-                overlay_draw.rounded_rectangle([250, 5, 350, 35], radius=8, fill=(20, 20, 20, 170))
-
-            # Composite the translucent HUD onto the background
-            bg = Image.alpha_composite(bg, overlay)
-            
-            # Re-initialize draw on the newly composited background for solid text/bars
-            draw = ImageDraw.Draw(bg)
-            
-            bar_width = 150
-            bar_height = 16 
-
-            p_pct = max(0.0, min(1.0, p_hp / max(1, p_max_hp)))
-            n_pct = max(0.0, min(1.0, n_hp / max(1, n_max_hp)))
-
-            def get_color(pct):
-                if pct > 0.5: return (46, 204, 113, 255)  
-                if pct > 0.2: return (241, 196, 15, 255)  
-                return (231, 76, 60, 255)                
-
-            font = ImageFont.load_default()
-
-            # ==========================================
-            # 4. DRAW WEATHER & STATUS TEXT
-            # ==========================================
-            if weather and weather != 'none':
-                w_colors = {'sun': (253, 203, 110), 'rain': (116, 185, 255), 'sand': (225, 177, 44), 'hail': (223, 230, 233)}
-                w_color = w_colors.get(weather, (255, 255, 255))
-                # Centered in the Weather Backdrop
-                draw.text((275, 13), f"[{weather.upper()}]", fill=w_color, font=font)
-
-            status_colors = {'burn': (255, 118, 117), 'poison': (162, 155, 254), 'paralysis': (253, 203, 110), 'sleep': (178, 190, 195), 'freeze': (129, 236, 236)}
-            
-            if n_status and n_status.get('name'):
-                s_name = n_status['name']
-                draw.text((395, 15), f"[{s_name[:3].upper()}]", fill=status_colors.get(s_name, (255, 255, 255)), font=font)
-                
-            if p_status and p_status.get('name'):
-                s_name = p_status['name']
-                draw.text((95, 240), f"[{s_name[:3].upper()}]", fill=status_colors.get(s_name, (255, 255, 255)), font=font)
-
-            # ==========================================
-            # 5. DRAW HP BARS
-            # ==========================================
-            # NPC Bar
-            draw.rectangle([400, 35, 400 + bar_width, 35 + bar_height], fill=(50, 50, 50, 255))
-            draw.rectangle([400, 35, 400 + (bar_width * n_pct), 35 + bar_height], fill=get_color(n_pct))
-            draw.text((405, 35), f"{n_hp} / {n_max_hp}", fill=(255, 255, 255, 255), font=font)
-
-            # Player Bar
-            draw.rectangle([100, 260, 100 + bar_width, 260 + bar_height], fill=(50, 50, 50, 255))
-            draw.rectangle([100, 260, 100 + (bar_width * p_pct), 260 + bar_height], fill=get_color(p_pct))
-            draw.text((105, 260), f"{p_hp} / {p_max_hp}", fill=(255, 255, 255, 255), font=font)
-
-            # ==========================================
-            # 6. DRAW ENVIRONMENTAL HAZARDS
-            # ==========================================
-            if p_hazards:
-                h_text = []
-                if p_hazards.get('stealth-rock'): h_text.append("ROCKS")
-                if p_hazards.get('spikes', 0) > 0: h_text.append(f"SPIKESx{p_hazards['spikes']}")
-                if p_hazards.get('toxic-spikes', 0) > 0: h_text.append(f"T.SPIKESx{p_hazards['toxic-spikes']}")
-                if p_hazards.get('sticky-web'): h_text.append("WEB")
-                if h_text:
-                    draw.text((95, 278), " | ".join(h_text), fill=(178, 190, 195, 255), font=font)
-
-            if n_hazards:
-                h_text = []
-                if n_hazards.get('stealth-rock'): h_text.append("ROCKS")
-                if n_hazards.get('spikes', 0) > 0: h_text.append(f"SPIKESx{n_hazards['spikes']}")
-                if n_hazards.get('toxic-spikes', 0) > 0: h_text.append(f"T.SPIKESx{n_hazards['toxic-spikes']}")
-                if n_hazards.get('sticky-web'): h_text.append("WEB")
-                if h_text:
-                    draw.text((395, 53), " | ".join(h_text), fill=(178, 190, 195, 255), font=font)
-
-            # Package into Discord File
-            buffer = BytesIO()
-            bg.save(buffer, format="PNG")
-            buffer.seek(0)
-            
-            # Randomize the filename to bust Discord's aggressive image cache!
-            new_filename = f"battle_{random.randint(10000, 99999)}.png"
-            return discord.File(fp=buffer, filename=new_filename)
+        # Randomize the filename to bust Discord's aggressive image cache!
+        new_filename = f"battle_{random.randint(10000, 99999)}.png"
+        return discord.File(fp=buffer, filename=new_filename)
 
     async def open_bag(self, interaction: discord.Interaction):
         """Queries the user's inventory for medical supplies and opens the Dropdown UI."""
@@ -5020,7 +4973,12 @@ class BattleDashboard(discord.ui.View):
                 p_status=p_active.get('status_condition'),
                 n_status=n_active.get('status_condition'),
                 p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards')
+                n_hazards=state.get('npc_hazards'),
+                p_name=p_active.get('name'), p_level=p_active.get('level'),
+                p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
+                n_name=n_active.get('name'), n_level=n_active.get('level'),
+                p_aura=battle_render.aura_for(state.get('adaptation')),
+                biome=state.get('warden_biome')
             )
             # ==========================================
             await self.refresh_buttons()
@@ -5125,11 +5083,13 @@ class Combat(commands.Cog):
         nature = random.choice(list(NATURE_MULTIPLIERS.keys()))
         
         final_stats = calculate_stats(base_stats, ivs, evs, level, nature)
-        
+        gender = roll_gender(await fetch_gender_rate(db, pokedex_id))
+
         return {
             'pokedex_id': pokedex_id, 'name': name, 'level': level, 'types': types,
             'max_hp': final_stats['hp'], 'current_hp': final_stats['hp'],
-            'stats': final_stats, 'moves': moves, 'status_condition': None
+            'stats': final_stats, 'moves': moves, 'status_condition': None,
+            'gender': gender
         }
     
     @commands.command(name="tutor", aliases=["relearn", "teach_move"])
@@ -5429,7 +5389,7 @@ class Combat(commands.Cog):
                             SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                                 cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                                 cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot
+                                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender
                             FROM user_party up
                             JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                             JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -5488,7 +5448,8 @@ class Combat(commands.Cog):
                                 'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
                                 'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 
                                 'is_shiny': row[21], 'held_item': row[22], 'gmax_factor': row[23], 
-                                'ability': row[24], 'types': p_types, 'experience': row[25], 'volatile_statuses': {}
+                                'ability': row[24], 'types': p_types, 'experience': row[25], 'volatile_statuses': {},
+                                'gender': normalize_gender(row[27])
                             })
                             
                         teams[uid] = player_team
@@ -5568,7 +5529,12 @@ class Combat(commands.Cog):
                 p_status=p1_lead.get('status_condition'),
                 n_status=p2_lead.get('status_condition'),
                 p_hazards=shared_state['p1_hazards'],
-                n_hazards=shared_state['p2_hazards']
+                n_hazards=shared_state['p2_hazards'],
+                p_name=p1_lead.get('name'), p_level=p1_lead.get('level'),
+                p_gender=p1_lead.get('gender'), n_gender=p2_lead.get('gender'),
+                n_name=p2_lead.get('name'), n_level=p2_lead.get('level'),
+                p_aura=battle_render.aura_for(shared_state.get('p1_adaptation')),
+                n_aura=battle_render.aura_for(shared_state.get('p2_adaptation'))
             )
 
             # 6. Render the UI
@@ -7086,7 +7052,12 @@ class Combat(commands.Cog):
                     p_status=new_p1_active.get('status_condition'),
                     n_status=new_p2_active.get('status_condition'),
                     p_hazards=state['p1_hazards'],
-                    n_hazards=state['p2_hazards']
+                    n_hazards=state['p2_hazards'],
+                    p_name=new_p1_active.get('name'), p_level=new_p1_active.get('level'),
+                    p_gender=new_p1_active.get('gender'), n_gender=new_p2_active.get('gender'),
+                    n_name=new_p2_active.get('name'), n_level=new_p2_active.get('level'),
+                    p_aura=battle_render.aura_for(state.get('p1_adaptation')),
+                    n_aura=battle_render.aura_for(state.get('p2_adaptation'))
                 )
                 
                 embed.set_image(url=f"attachment://{battle_file.filename}")
@@ -7201,7 +7172,12 @@ class Combat(commands.Cog):
                     player_shiny=p1_active.get('is_shiny', False), npc_shiny=p2_active.get('is_shiny', False),
                     weather=state['weather']['type'],
                     p_status=p1_active.get('status_condition'), n_status=p2_active.get('status_condition'),
-                    p_hazards=state['p1_hazards'], n_hazards=state['p2_hazards']
+                    p_hazards=state['p1_hazards'], n_hazards=state['p2_hazards'],
+                    p_name=p1_active.get('name'), p_level=p1_active.get('level'),
+                    p_gender=p1_active.get('gender'), n_gender=p2_active.get('gender'),
+                    n_name=p2_active.get('name'), n_level=p2_active.get('level'),
+                    p_aura=battle_render.aura_for(state.get('p1_adaptation')),
+                    n_aura=battle_render.aura_for(state.get('p2_adaptation'))
                 )
                 embed.set_image(url=f"attachment://{battle_file.filename}")
             except Exception as img_err:
@@ -7301,6 +7277,16 @@ class Combat(commands.Cog):
                         for m in pkmn['moves']:
                             hydrated_moves.append({'name': m['name'], 'pp': m['pp'], 'max_pp': m['max_pp']})
 
+                        # Wardens field a fixed roster, so their genders are seeded on the
+                        # sector + species instead of rerolled -- otherwise the same
+                        # Warden's Pokemon would flip gender between rematches. A roster
+                        # entry can pin it explicitly with a 'gender' key.
+                        w_gender = pkmn.get('gender')
+                        if w_gender is None:
+                            w_gender = roll_gender(
+                                await fetch_gender_rate(db, p_id),
+                                random.Random(f"{biome}:{pkmn['name']}:{pkmn['level']}"))
+
                         compiled_member = {
                             'pokedex_id': p_id,
                             'name': pkmn['name'],
@@ -7308,6 +7294,7 @@ class Combat(commands.Cog):
                             'types': pkmn['types'],
                             'held_item': pkmn['held_item'],
                             'nature': nature.capitalize(),
+                            'gender': normalize_gender(w_gender),
                             'max_hp': real_hp, 'current_hp': real_hp,
                             'stats': {'hp': real_hp, 'attack': real_atk, 'defense': real_def, 'sp_atk': real_spa, 'sp_def': real_spd, 'speed': real_spe},
                             'moves': hydrated_moves,
@@ -7325,7 +7312,7 @@ class Combat(commands.Cog):
                     SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -7365,7 +7352,8 @@ class Combat(commands.Cog):
                             'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
                             'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
                             'held_item': held_item, 'gmax_factor': gmax_factor, 'ability': ability, 'types': p_types,
-                            'experience': experience, 'volatile_statuses': {} 
+                            'experience': experience, 'volatile_statuses': {},
+                            'gender': normalize_gender(row[26])
                         })
 
                     # ==========================================
@@ -7477,7 +7465,12 @@ class Combat(commands.Cog):
                 p_status=p_lead.get('status_condition'),
                 n_status=n_lead.get('status_condition'),
                 p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards')
+                n_hazards=state.get('npc_hazards'),
+                p_name=p_lead.get('name'), p_level=p_lead.get('level'),
+                p_gender=p_lead.get('gender'), n_gender=n_lead.get('gender'),
+                n_name=n_lead.get('name'), n_level=n_lead.get('level'),
+                p_aura=battle_render.aura_for(state.get('adaptation')),
+                biome=state.get('warden_biome')
             )
 
             # Dynamically grab the new randomized filename!
@@ -8118,7 +8111,7 @@ class Combat(commands.Cog):
                     SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -8162,7 +8155,8 @@ class Combat(commands.Cog):
                                 'experience': experience, # <--- INJECTED INTO MEMORY!
                                 'volatile_statuses': {},   # <--- GUARANTEES PARASITES HAVE A HOST!
                                 'ivs': p_ivs,
-                                'evs': p_evs
+                                'evs': p_evs,
+                                'gender': normalize_gender(row[26])
                             })
                     
                     # ==========================================
@@ -8278,7 +8272,12 @@ class Combat(commands.Cog):
                 p_status=p_lead.get('status_condition'),
                 n_status=n_lead.get('status_condition'),
                 p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards')
+                n_hazards=state.get('npc_hazards'),
+                p_name=p_lead.get('name'), p_level=p_lead.get('level'),
+                p_gender=p_lead.get('gender'), n_gender=n_lead.get('gender'),
+                n_name=n_lead.get('name'), n_level=n_lead.get('level'),
+                p_aura=battle_render.aura_for(state.get('adaptation')),
+                biome=state.get('warden_biome')
             )
 
             # Attach the file to the embed
