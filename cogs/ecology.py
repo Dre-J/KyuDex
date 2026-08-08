@@ -3409,7 +3409,7 @@ class Ecology(commands.Cog):
                 
             except Exception as e:
                 if db.in_transaction:
-                    db.rollback()
+                    await db.rollback()
                 print(f"Refinement Error: {e}")
                 await ctx.send("❌ A critical error occurred in the laboratory machinery.")
     
