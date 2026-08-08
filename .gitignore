@@ -15,6 +15,12 @@ migrate_genders.py
 # Sprite assets (fetched separately from PokeAPI/sprites)
 KyuSprites/
 
+# Local battle backdrops (only consumed by the scratch battletest cog)
+assets/
+
+# Scratch/experimental cog, kept local
+cogs/battletest.py
+
 # Python
 __pycache__/
 *.py[cod]
