@@ -547,6 +547,146 @@ def shield_blocks(protect_type, move_class, move_priority, move_target):
     # Anything else on the field is a full shield
     return True
 
+# ==========================================
+# 🚨 TYPE-CHANGE MOVES
+# ==========================================
+# Held items that dictate a signature move's element. Suffix-driven so the whole family
+# is covered without listing all seventeen of each.
+ITEM_TYPE_MOVES = {
+    'judgment':     'plate',    # Arceus Plates
+    'techno-blast': 'drive',    # Genesect Drives
+    'multi-attack': 'memory',   # Silvally Memories
+}
+
+PLATE_TYPES = {
+    'draco-plate': 'dragon', 'dread-plate': 'dark', 'earth-plate': 'ground',
+    'fist-plate': 'fighting', 'flame-plate': 'fire', 'icicle-plate': 'ice',
+    'insect-plate': 'bug', 'iron-plate': 'steel', 'meadow-plate': 'grass',
+    'mind-plate': 'psychic', 'pixie-plate': 'fairy', 'sky-plate': 'flying',
+    'splash-plate': 'water', 'spooky-plate': 'ghost', 'stone-plate': 'rock',
+    'toxic-plate': 'poison', 'zap-plate': 'electric',
+}
+
+DRIVE_TYPES = {
+    'burn-drive': 'fire', 'chill-drive': 'ice',
+    'douse-drive': 'water', 'shock-drive': 'electric',
+}
+
+# Camouflage reads the ground it is standing on
+CAMOUFLAGE_TYPES = {
+    'electric': 'electric', 'grassy': 'grass',
+    'misty': 'fairy', 'psychic': 'psychic',
+}
+
+# Moves that burn away one of the user's own types once they connect
+TYPE_SHEDDING_MOVES = {'burn-up': 'fire', 'double-shock': 'electric'}
+
+def resolve_item_move_type(move_name, held_item, default_type):
+    """
+    Element for the signature moves that read a held item. Falls back to the stored type
+    when the matching item is absent, which is what the games do for a bare Arceus.
+    """
+    kind = ITEM_TYPE_MOVES.get(move_name)
+    if not kind:
+        return default_type
+
+    item = (held_item or '').lower().replace(' ', '-')
+
+    if kind == 'plate':
+        return PLATE_TYPES.get(item, default_type)
+    if kind == 'drive':
+        return DRIVE_TYPES.get(item, default_type)
+    if kind == 'memory':
+        # Memories are uniformly "<type>-memory"
+        if item.endswith('-memory'):
+            return item[:-len('-memory')]
+    return default_type
+
+def find_resisting_type(incoming_type, type_chart):
+    """
+    A type that would resist (or shrug off) the given attacking type. Used by
+    Conversion 2. Prefers an outright immunity, then any resistance.
+    """
+    immunities, resistances = [], []
+    for candidate in type_chart.get(incoming_type, {}):
+        effectiveness = type_chart[incoming_type].get(candidate, 1.0)
+        if effectiveness == 0:
+            immunities.append(candidate)
+        elif effectiveness < 1.0:
+            resistances.append(candidate)
+
+    pool = immunities or resistances
+    return random.choice(pool) if pool else None
+
+# Every stat stage a specimen can carry, including the two the damage formula reads
+# via .get() defaults.
+ALL_STAT_STAGES = ['attack', 'defense', 'sp_atk', 'sp_def', 'speed', 'accuracy', 'evasion']
+
+def reset_stat_stages(pokemon):
+    """
+    Wipe a specimen's stat stages, as happens the moment it leaves the field.
+
+    Boosts are tied to the slot, not the specimen, so a Swords Dance does not survive a
+    switch out and back in.
+    """
+    if pokemon is None:
+        return
+    pokemon['stat_stages'] = {stat: 0 for stat in ALL_STAT_STAGES}
+
+def snapshot_base_stats(pokemon):
+    """
+    Preserve the untouched stat block the first time a move rewrites raw stats.
+    Called by Guard Split, Power Split, Speed Swap and Power Trick.
+    """
+    if pokemon is not None and '_base_stats' not in pokemon:
+        pokemon['_base_stats'] = dict(pokemon.get('stats') or {})
+
+def clear_base_stat_snapshot(pokemon):
+    """
+    Drop a pending snapshot without applying it. Used when a transformation (Mega,
+    Dynamax) legitimately rewrites the stat block - the new form becomes the baseline,
+    and restoring the pre-transformation numbers on switch-out would be wrong.
+    """
+    if pokemon is not None:
+        pokemon.pop('_base_stats', None)
+
+def restore_base_stats(pokemon):
+    """
+    Undo raw-stat rewrites when a specimen leaves the field. Like stat stages, effects
+    such as Guard Split and Power Trick are tied to the slot, not the specimen.
+    """
+    if pokemon is not None and '_base_stats' in pokemon:
+        pokemon['stats'] = dict(pokemon.pop('_base_stats'))
+
+def leave_field(pokemon):
+    """Everything that comes off a specimen when it is withdrawn."""
+    reset_stat_stages(pokemon)
+    restore_base_stats(pokemon)
+
+def baton_pass_state(outgoing, incoming):
+    """
+    Baton Pass hands the replacement everything the user had built up: stat stages plus
+    the volatiles that are meant to travel (traps, Leech Seed, focus). Volatiles that
+    belong to the departing specimen itself are deliberately left behind.
+    """
+    if not outgoing or not incoming:
+        return
+
+    incoming['stat_stages'] = dict(outgoing.get('stat_stages') or {})
+
+    PASSABLE = ['leech_seed', 'volatile_leech_seed', 'confusion', 'perish_song',
+                'volatile_perish_song', 'focus_energy', 'laser_focus', 'ingrain',
+                'partially_trapped', 'hard_trapped', 'substitute']
+
+    carried = {k: v for k, v in (outgoing.get('volatile_statuses') or {}).items()
+               if k in PASSABLE}
+    incoming['volatile_statuses'] = carried
+
+    # A raw-stat rewrite is NOT passed on - it belongs to the specimen that used it.
+    restore_base_stats(outgoing)
+    reset_stat_stages(outgoing)
+    outgoing['volatile_statuses'] = {}
+
 def is_crit_shielded(target_hazards):
     """True while Lucky Chant is up on the defending side - no criticals get through."""
     if not target_hazards:
@@ -1062,6 +1202,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif 'cornerstone' in form_name: move_type = 'rock'
         else: move_type = 'grass'
 
+    # 🚨 ITEM-DRIVEN ELEMENTS (Judgment / Techno Blast / Multi-Attack)
+    move_type = resolve_item_move_type(move_name, attacker_item, move_type)
+
+    # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
+    if move_name == 'tera-blast' and attacker.get('tera_type'):
+        move_type = attacker['tera_type']
+
     if move_name in ['jump-kick', 'high-jump-kick']:
         crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
         attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
@@ -1140,6 +1287,224 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if TYPE_CHART.get(move_type, {}).get('flying', 1.0) > 1.0:
             type_multiplier /= 2.0 # Halves the super-effective damage back to neutral!
     
+    # ==========================================
+    # 🚨 TYPE REWRITES
+    # ==========================================
+    if move_name == 'conversion':
+        # Takes on the element of whatever sits in the user's first move slot
+        own_moves = attacker.get('moves') or []
+        new_type = next((m.get('type') for m in own_moves if m.get('type')), None)
+        if not new_type or attacker.get('types') == [new_type]:
+            return 0, "But it failed! There was nothing to convert into!", 'none', [], 0
+
+        attacker['types'] = [new_type]
+        return 0, f"🔀 {attacker['name'].capitalize()} converted into the {new_type.title()} type!", 'none', [], 0
+
+    if move_name == 'conversion-2':
+        incoming = defender.get('last_move_type')
+        if not incoming:
+            return 0, "But it failed! There was no attack to adapt to!", 'none', [], 0
+
+        new_type = find_resisting_type(incoming, TYPE_CHART)
+        if not new_type:
+            return 0, "But it failed! Nothing resists that element!", 'none', [], 0
+
+        attacker['types'] = [new_type]
+        return 0, f"🔀 {attacker['name'].capitalize()} adapted into the {new_type.title()} type to resist {incoming.title()}!", 'none', [], 0
+
+    if move_name == 'camouflage':
+        new_type = CAMOUFLAGE_TYPES.get(terrain, 'normal')
+        if attacker.get('types') == [new_type]:
+            return 0, "But it failed! It already blends in!", 'none', [], 0
+
+        attacker['types'] = [new_type]
+        return 0, f"🎨 {attacker['name'].capitalize()} blended into the surroundings and became {new_type.title()}!", 'none', [], 0
+
+    if move_name == 'reflect-type':
+        mirrored = list(defender.get('types') or [])
+        if not mirrored:
+            return 0, "But it failed!", 'none', [], 0
+
+        attacker['types'] = mirrored
+        return 0, f"🪞 {attacker['name'].capitalize()} mirrored {defender['name'].capitalize()}'s typing!", 'none', [], 0
+
+    if move_name == 'soak':
+        if defender.get('types') == ['water']:
+            return 0, "But it failed! It is already pure Water!", 'none', [], 0
+
+        defender['types'] = ['water']
+        return 0, f"💧 {defender['name'].capitalize()} was drenched and became pure Water!", 'none', [], 0
+
+    if move_name in ['trick-or-treat', 'forests-curse']:
+        added = 'ghost' if move_name == 'trick-or-treat' else 'grass'
+        current = list(defender.get('types') or [])
+
+        if added in current:
+            return 0, f"But it failed! It is already {added.title()} type!", 'none', [], 0
+
+        # The extra element is grafted on rather than replacing what is there
+        defender['types'] = current + [added]
+        flavour = "was haunted" if added == 'ghost' else "was entangled in roots"
+        return 0, f"🌿 {defender['name'].capitalize()} {flavour} and gained the {added.title()} type!", 'none', [], 0
+
+    # Burn Up and Double Shock need their element intact to fire at all
+    if move_name in TYPE_SHEDDING_MOVES:
+        required = TYPE_SHEDDING_MOVES[move_name]
+        if required not in (attacker.get('types') or []):
+            return 0, f"But it failed! There is no {required.title()} energy left to burn!", 'none', [], 0
+
+    # ==========================================
+    # 🚨 RESTORATIVE MOVES
+    # ==========================================
+    # Rest is a special case: the database records no healing and no ailment for it, but
+    # it is a full restore that puts the user to sleep for two turns.
+    if move_name == 'rest':
+        if attacker.get('current_hp', 0) >= attacker.get('max_hp', 1):
+            return 0, "But it failed! Its health is already full!", 'none', [], 0
+
+        attacker['current_hp'] = attacker.get('max_hp', 1)
+        attacker['status_condition'] = {'name': 'sleep', 'duration': 2}
+        return 0, f"😴 {attacker['name'].capitalize()} went to sleep and restored its health!", 'none', [], 0
+
+    # Everything else drives off the database's healing percentage, which nothing was
+    # reading until now - Recover, Roost, Soft-Boiled and the rest were all no-ops.
+    heal_pct = move.get('healing') or 0
+    if move_class == 'status' and heal_pct > 0:
+        fraction = heal_pct / 100.0
+
+        # Sun-fed recovery swings hard on the weather
+        if move_name in ['synthesis', 'moonlight', 'morning-sun']:
+            if weather in ['sun', 'extremely-harsh-sunlight']:
+                fraction = 2.0 / 3.0
+            elif weather in ['rain', 'heavy-rain', 'sandstorm', 'hail', 'snow']:
+                fraction = 0.25
+        elif move_name == 'shore-up' and weather == 'sandstorm':
+            fraction = 2.0 / 3.0
+
+        # A few of these mend the opponent rather than the user
+        mends_target = 'selected-pokemon' in str(move.get('target', ''))
+        patient = defender if mends_target else attacker
+
+        if patient.get('current_hp', 0) >= patient.get('max_hp', 1):
+            return 0, "But it failed! Its health is already full!", 'none', [], 0
+
+        restored = max(1, math.floor(patient.get('max_hp', 100) * fraction))
+        before = patient['current_hp']
+        patient['current_hp'] = min(patient.get('max_hp', 100), before + restored)
+        gained = patient['current_hp'] - before
+
+        return 0, f"💚 {patient['name'].capitalize()} restored {gained} HP!", 'none', [], 0
+
+    # ==========================================
+    # 🚨 SELF-DAMAGE STAT TRADES
+    # ==========================================
+    # Each pays a slice of maximum HP up front for a large boost, and each fails outright
+    # if the user cannot afford the cost - the HP is never spent on a move that fizzles.
+    if move_name in ['belly-drum', 'clangorous-soul', 'fillet-away']:
+        max_hp = attacker.get('max_hp', 100)
+
+        if move_name == 'clangorous-soul':
+            cost = max(1, max_hp // 3)
+            boosts = [('attacker', s, 1) for s in
+                      ['attack', 'defense', 'special-attack', 'special-defense', 'speed']]
+            flavour = "raised every stat"
+        elif move_name == 'fillet-away':
+            cost = max(1, max_hp // 2)
+            boosts = [('attacker', s, 2) for s in ['attack', 'special-attack', 'speed']]
+            flavour = "sharply raised Attack, Sp. Attack and Speed"
+        else:  # belly-drum
+            cost = max(1, max_hp // 2)
+            current = (attacker.get('stat_stages') or {}).get('attack', 0)
+            if current >= 6:
+                return 0, "But it failed! Its Attack is already maxed out!", 'none', [], 0
+            # Belly Drum jumps straight to the +6 ceiling rather than adding a fixed amount
+            boosts = [('attacker', 'attack', 6 - current)]
+            flavour = "maximised its Attack"
+
+        if attacker.get('current_hp', 0) <= cost:
+            return 0, "But it failed! There isn't enough health to pay the price!", 'none', [], 0
+
+        attacker['current_hp'] = max(1, attacker['current_hp'] - cost)
+        return 0, f"💥 {attacker['name'].capitalize()} spent {cost} HP and {flavour}!", 'none', boosts, 0
+
+    # ==========================================
+    # 🚨 STAT & HP SPLITS
+    # ==========================================
+    # These rewrite the raw stat block rather than adding a stage, so any stat stages
+    # already in play still layer on top of the new baseline afterwards.
+    #
+    # NOTE: the split persists for the rest of the battle rather than resetting when the
+    # specimen switches out. That matches how this engine already treats stat stages on a
+    # voluntary swap, so the two behave consistently.
+    if move_name in ['guard-split', 'power-split']:
+        pair = ('defense', 'sp_def') if move_name == 'guard-split' else ('attack', 'sp_atk')
+        label = "Defense and Sp. Defense" if move_name == 'guard-split' else "Attack and Sp. Attack"
+
+        atk_stats = attacker.setdefault('stats', {})
+        def_stats = defender.setdefault('stats', {})
+
+        # Remember the originals so a switch-out can undo the rewrite
+        snapshot_base_stats(attacker)
+        snapshot_base_stats(defender)
+
+        for stat in pair:
+            averaged = (atk_stats.get(stat, 50) + def_stats.get(stat, 50)) // 2
+            atk_stats[stat] = averaged
+            def_stats[stat] = averaged
+
+        return 0, f"⚖️ {attacker['name'].capitalize()} shared its power! {label} were averaged with {defender['name'].capitalize()}!", 'none', [], 0
+
+    # ==========================================
+    # 🚨 STAT SWAPS
+    # ==========================================
+    # Guard/Power/Heart Swap trade stat STAGES, leaving the underlying stats alone.
+    if move_name in ['guard-swap', 'power-swap', 'heart-swap']:
+        a_stages = attacker.setdefault('stat_stages', {})
+        d_stages = defender.setdefault('stat_stages', {})
+
+        if move_name == 'guard-swap':
+            keys, label = ['defense', 'sp_def'], "defensive"
+        elif move_name == 'power-swap':
+            keys, label = ['attack', 'sp_atk'], "offensive"
+        else:
+            keys, label = ALL_STAT_STAGES, "every"
+
+        for stat in keys:
+            a_stages[stat], d_stages[stat] = d_stages.get(stat, 0), a_stages.get(stat, 0)
+
+        return 0, f"🔄 {attacker['name'].capitalize()} swapped {label} changes with {defender['name'].capitalize()}!", 'none', [], 0
+
+    if move_name == 'psych-up':
+        # A straight copy, not a trade - the target keeps what it had.
+        attacker['stat_stages'] = dict(defender.get('stat_stages') or {})
+        return 0, f"🧠 {attacker['name'].capitalize()} copied {defender['name'].capitalize()}'s stat changes!", 'none', [], 0
+
+    # Speed Swap and Power Trick trade the RAW stats rather than the stages.
+    if move_name == 'speed-swap':
+        a_stats = attacker.setdefault('stats', {})
+        d_stats = defender.setdefault('stats', {})
+        snapshot_base_stats(attacker)
+        snapshot_base_stats(defender)
+        a_stats['speed'], d_stats['speed'] = d_stats.get('speed', 50), a_stats.get('speed', 50)
+        return 0, f"💨 {attacker['name'].capitalize()} traded Speed with {defender['name'].capitalize()}!", 'none', [], 0
+
+    if move_name == 'power-trick':
+        # Self-targeting: the user turns its own Attack and Defense inside out.
+        a_stats = attacker.setdefault('stats', {})
+        snapshot_base_stats(attacker)
+        a_stats['attack'], a_stats['defense'] = a_stats.get('defense', 50), a_stats.get('attack', 50)
+        return 0, f"🔃 {attacker['name'].capitalize()} switched its own Attack and Defense!", 'none', [], 0
+
+    if move_name == 'pain-split':
+        pooled = attacker.get('current_hp', 0) + defender.get('current_hp', 0)
+        shared = pooled // 2
+
+        # Neither side can be topped up past its own maximum
+        attacker['current_hp'] = min(attacker.get('max_hp', shared), shared)
+        defender['current_hp'] = min(defender.get('max_hp', shared), shared)
+
+        return 0, f"💔 The pain was shared! Both specimens settled at {shared} HP!", 'none', [], 0
+
     # ==========================================
     # 🚨 CRIT SETUP MOVES
     # ==========================================
@@ -1629,12 +1994,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             simulated_hp -= hit_damage
                     
             # --- F. PHYSICAL RECOIL (Rocky Helmet & Rough Skin) ---
+            # Applied straight to the attacker's HP. Routing it through healing_amount
+            # silently discarded it, because both engines only act on a POSITIVE heal.
             if move.get('class') == 'physical':
                 if defender_item == 'rocky-helmet':
-                    healing_amount -= max(1, math.floor(attacker.get('max_hp', 100) / 6))
+                    spike_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 6))
+                    attacker['current_hp'] = max(0, attacker['current_hp'] - spike_dmg)
                     msg += f" 💥 {attacker['name'].capitalize()} was hurt by the Rocky Helmet!"
                 if def_ability in BIOLOGICAL_TRAITS.get('contact_damage', []):
-                    healing_amount -= max(1, math.floor(attacker.get('max_hp', 100) / 8))
+                    skin_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 8))
+                    attacker['current_hp'] = max(0, attacker['current_hp'] - skin_dmg)
                     msg += f" 💥 {attacker['name'].capitalize()} was hurt by {defender['name'].capitalize()}'s {def_ability.replace('-', ' ').title()}!"
                     
             # --- G. LETHALITY CHECK ---
@@ -1743,6 +2112,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             attacker['volatile_statuses']['hard_trapped'] = True
             defender['volatile_statuses']['hard_trapped'] = True
             msg += " 🛑 Neither Pokémon can run away!"
+
+        elif move_name == 'no-retreat':
+            # The all-round boost comes with a catch: there is no backing out afterwards.
+            attacker['volatile_statuses']['hard_trapped'] = True
+            msg += f" 🛑 {attacker['name'].capitalize()} committed itself and can no longer retreat!"
             
         elif move_name == 'octolock':
             defender['volatile_statuses']['octolock'] = True
@@ -1941,6 +2315,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name in ['explosion', 'self-destruct', 'memento', 'final-gambit']:
         attacker['current_hp'] = 0
         msg += f" {attacker['name'].capitalize()} sacrificed itself!"
+
+    # 🚨 BURN UP / DOUBLE SHOCK: the element is spent powering the attack
+    if move_name in TYPE_SHEDDING_MOVES and damage > 0:
+        spent = TYPE_SHEDDING_MOVES[move_name]
+        remaining = [t for t in (attacker.get('types') or []) if t != spent]
+        # A mono-type user is left typeless rather than reverting to its old element
+        attacker['types'] = remaining
+        msg += f" 🔥 {attacker['name'].capitalize()} burned out its {spent.title()} typing!"
 
     # ==========================================
     # PHASE 7: HYBRID ENVIRONMENTAL POLLUTION
