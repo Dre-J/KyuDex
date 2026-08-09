@@ -458,6 +458,102 @@ SOLAR_DIMMING_WEATHER = ['rain', 'heavy-rain', 'sandstorm', 'hail', 'snow']
 SUPER_EFFECTIVE_BONUS_MOVES = ['collision-course', 'electro-drift']
 
 # ==========================================
+# 🚨 CRITICAL HITS & ACCURACY OVERRIDES
+# ==========================================
+# Moves that always land a critical hit. Battle Armor and Shell Armor still shut them
+# down - those abilities block criticals outright, not just the random roll.
+ALWAYS_CRIT_MOVES = [
+    'storm-throw', 'frost-breath', 'wicked-blow',
+    'surging-strikes', 'zippy-zap', 'flower-trick',
+]
+
+# Moves that bypass the accuracy/evasion roll entirely. Shared by both engines so the
+# two copies can no longer drift apart.
+#
+# The database stores these at 100 accuracy rather than NULL, so the list has to be
+# curated - there is no data flag to derive it from. Note this only skips the accuracy
+# roll: a semi-invulnerable target (Fly, Dig, Dive) is still untouchable, which is
+# handled separately in the damage engine.
+GUARANTEED_HIT_MOVES = [
+    'aerial-ace', 'aura-sphere', 'disarming-voice', 'false-surrender',
+    'feint-attack', 'flower-trick', 'kowtow-cleave', 'magical-leaf',
+    'magnet-bomb', 'shadow-punch', 'shock-wave', 'smart-strike',
+    'swift', 'vital-throw',
+]
+
+def is_crit_guaranteed(move_name, attacker):
+    """True when this strike is a certainty rather than a roll."""
+    if move_name in ALWAYS_CRIT_MOVES:
+        return True
+    return bool((attacker.get('volatile_statuses') or {}).get('laser_focus'))
+
+# Effects that sit on a team's side of the field and tick down once per turn. Shared with
+# both engines so the decay loops and the deployment list cannot fall out of step.
+SIDE_SCREEN_MOVES = ['reflect', 'light-screen', 'aurora-veil', 'lucky-chant']
+
+# ==========================================
+# 🚨 PROTECTION MOVES
+# ==========================================
+# Full shields: block anything aimed at the user. Names must match the move database -
+# it stores "kings-shield" and "silk-trap", not "king-shield"/"silky-trap".
+STANDARD_SHIELDS = [
+    'protect', 'detect', 'spiky-shield', 'kings-shield', 'baneful-bunker',
+    'obstruct', 'silk-trap', 'burning-bulwark', 'max-guard',
+]
+
+# What a shield does to an attacker whose CONTACT move it just swallowed.
+SHIELD_PUNISH = {
+    'spiky-shield':    {'kind': 'chip',   'fraction': 1.0 / 8.0},
+    'kings-shield':    {'kind': 'stat',   'stat': 'attack',  'amount': -1},
+    'obstruct':        {'kind': 'stat',   'stat': 'defense', 'amount': -2},
+    'silk-trap':       {'kind': 'stat',   'stat': 'speed',   'amount': -1},
+    'baneful-bunker':  {'kind': 'status', 'status': 'poison'},
+    'burning-bulwark': {'kind': 'status', 'status': 'burn'},
+}
+
+# Selective guards only stop one category of move and let everything else through.
+SELECTIVE_GUARDS = {
+    'crafty-shield': 'status',    # status moves only
+    'mat-block':     'damaging',  # damaging moves only
+    'quick-guard':   'priority',  # anything in a raised priority bracket
+    'wide-guard':    'spread',    # multi-target attacks
+}
+
+# PokeAPI target strings that describe a spread move
+SPREAD_TARGETS = ['all-opponents', 'all-other-pokemon', 'all-pokemon']
+
+PROTECT_MOVES = STANDARD_SHIELDS + list(SELECTIVE_GUARDS)
+
+def shield_blocks(protect_type, move_class, move_priority, move_target):
+    """
+    Decides whether an active shield actually stops this particular move.
+
+    Full shields stop everything. Selective guards only cover their own category, so a
+    Quick Guard does nothing against a normal-priority attack and a Crafty Shield does
+    nothing against a damaging one.
+    """
+    if protect_type in SELECTIVE_GUARDS:
+        kind = SELECTIVE_GUARDS[protect_type]
+        if kind == 'status':
+            return move_class == 'status'
+        if kind == 'damaging':
+            return move_class != 'status'
+        if kind == 'priority':
+            return int(move_priority or 0) > 0
+        if kind == 'spread':
+            return str(move_target) in SPREAD_TARGETS
+        return False
+
+    # Anything else on the field is a full shield
+    return True
+
+def is_crit_shielded(target_hazards):
+    """True while Lucky Chant is up on the defending side - no criticals get through."""
+    if not target_hazards:
+        return False
+    return target_hazards.get('lucky-chant', 0) > 0
+
+# ==========================================
 # 🚨 LOCK-IN MOVES
 # ==========================================
 # Uproar rides the same rampage machinery as Outrage, but runs a fixed 3 turns and leaves
@@ -591,7 +687,8 @@ def apply_stat_stage(raw_stat, stage):
         return int(raw_stat * (2.0 / (2.0 + abs(stage))))
     return raw_stat
 
-def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False):
+def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False,
+                         ignore_boosts=False):
     """
     Decides which Attack and Defense stats the damage formula reads, applies stat stages,
     Wonder Room and Assault Vest, and reports the category the move resolves as.
@@ -599,9 +696,17 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     Returns (attack_stat, defense_stat, effective_class). The returned class drives the
     burn penalty and screen selection, so a Photon Geyser that resolves physical is
     halved by a burn and blocked by Reflect rather than Light Screen.
+
+    ignore_boosts models a critical hit, which punches through anything that would make
+    the hit weaker: the target's defensive *increases* and the user's offensive
+    *decreases* are both discarded. Changes that favour the attacker still count.
     """
     a_stages = attacker.get('stat_stages') or {}
     d_stages = defender.get('stat_stages') or {}
+
+    if ignore_boosts:
+        a_stages = {k: max(0, v) for k, v in a_stages.items()}
+        d_stages = {k: min(0, v) for k, v in d_stages.items()}
 
     phys_atk = apply_stat_stage(attacker.get('stats', {}).get('attack', 50), a_stages.get('attack', 0))
     spec_atk = apply_stat_stage(attacker.get('stats', {}).get('sp_atk', 50), a_stages.get('sp_atk', 0))
@@ -822,18 +927,33 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # 1. CONTAINMENT FIELD DEPLOYMENT & DECAY
     # =========================================
-    PROTECT_MOVES = ['protect', 'detect', 'spiky-shield', 'king-shield', 'baneful-bunker', 'obstruct', 'silky-trap', 'burning-bulwark', 'max-guard']
-    
     if move_name in PROTECT_MOVES:
+        # Selective guards are cheap to spam in the franchise, so only the full shields
+        # suffer the diminishing-returns roll.
+        is_selective = move_name in SELECTIVE_GUARDS
         counter = attacker['volatile_statuses'].get('protect_counter', 0)
-        success_chance = 100 / (3 ** counter) # 100%, 33%, 11%, 3%...
-        
+        success_chance = 100 if is_selective else 100 / (3 ** counter) # 100%, 33%, 11%, 3%...
+
         if random.uniform(0, 100) <= success_chance:
             attacker['volatile_statuses']['protected'] = True
-            attacker['volatile_statuses']['protect_counter'] = counter + 1
-            return 0, f"🛡️ **{attacker['name'].capitalize()}** protected itself!", None, [], 0
+            # Remember WHICH shield it is - the collision needs it for both the
+            # selective-guard filter and the on-contact punishment.
+            attacker['volatile_statuses']['protect_type'] = move_name
+
+            if not is_selective:
+                attacker['volatile_statuses']['protect_counter'] = counter + 1
+
+            guard_flavour = {
+                'crafty-shield': "raised a crafty shield against status moves!",
+                'mat-block':     "threw up a mat to block incoming attacks!",
+                'quick-guard':   "braced against high-priority attacks!",
+                'wide-guard':    "braced against wide-reaching attacks!",
+            }.get(move_name, "protected itself!")
+
+            return 0, f"🛡️ **{attacker['name'].capitalize()}** {guard_flavour}", None, [], 0
         else:
             attacker['volatile_statuses']['protected'] = False
+            attacker['volatile_statuses'].pop('protect_type', None)
             attacker['volatile_statuses']['protect_counter'] = 0
             return 0, f"🛡️ **{attacker['name'].capitalize()}** tried to protect itself, but the barrier failed!", None, [], 0
     else:
@@ -843,31 +963,44 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # 🚨 BARRIER DEPLOYMENT (Screens)
     # ==========================================
-    if move_name in ['reflect', 'light-screen', 'aurora-veil'] and user_hazards is not None:
-        duration = 8 if attacker_item == 'light-clay' else 5
-        
+    if move_name in SIDE_SCREEN_MOVES and user_hazards is not None:
+        # Light Clay only extends the damage-reducing screens; Lucky Chant is a flat 5.
+        if move_name == 'lucky-chant':
+            duration = 5
+        else:
+            duration = 8 if attacker_item == 'light-clay' else 5
+
         if move_name == 'aurora-veil' and weather not in ['hail', 'snow']:
             return 0, "But it failed! Aurora Veil requires Hail or Snow!", 'none', [], 0
-            
+
         if user_hazards.get(move_name, 0) > 0:
             return 0, "But it failed! The barrier is already active!", 'none', [], 0
-            
+
         user_hazards[move_name] = duration
-        
+
         if move_name == 'reflect': msg += f" 🧱 A wondrous wall of light appeared to protect {attacker['name'].capitalize()}'s team!"
         elif move_name == 'light-screen': msg += f" 🪞 A wondrous wall of light appeared to protect {attacker['name'].capitalize()}'s team!"
         elif move_name == 'aurora-veil': msg += f" 🌌 An aurora appeared to protect {attacker['name'].capitalize()}'s team!"
-            
+        elif move_name == 'lucky-chant': msg += f" 🍀 The chant shielded {attacker['name'].capitalize()}'s team from critical hits!"
+
         return 0, msg.strip(), 'none', [], 0
+
+    # 🚨 FEINT only exists to punish a shield. With nothing to break, it fails outright.
+    if move_name == 'feint' and not defender['volatile_statuses'].get('protected'):
+        return 0, "But it failed! There was no barrier to break!", 'none', [], 0
 
     # ==========================================
     # 2. CONTAINMENT FIELD COLLISION
     # ==========================================
-    if defender['volatile_statuses'].get('protected') and 'user' not in move_target:
+    active_shield = defender['volatile_statuses'].get('protect_type', 'protect')
+    shield_stops_this = shield_blocks(active_shield, move_class, move.get('priority'), move_target)
+
+    if defender['volatile_statuses'].get('protected') and shield_stops_this and 'user' not in move_target:
         BYPASS_MOVES = ['feint', 'phantom-force', 'shadow-force', 'hyperspace-fury', 'hyperspace-hole']
-        
+
         if move_name in BYPASS_MOVES:
             defender['volatile_statuses']['protected'] = False
+            defender['volatile_statuses'].pop('protect_type', None)
             msg += f"💥 **{attacker['name'].capitalize()}** broke through the protection! "
         elif is_max_move and move_class != 'status':
             pass # Max Moves pierce the shield! Damage quartered at the end of this function.
@@ -876,8 +1009,33 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
                 attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
                 return 0, f"**{attacker['name'].capitalize()} kept going and crashed!", None, [], 0
-            
-            return 0, f"🛡️ **{defender['name'].capitalize()}** protected itself from the attack!", None, [], 0
+
+            block_msg = f"🛡️ **{defender['name'].capitalize()}** protected itself from the attack!"
+
+            # 🚨 ON-CONTACT PUNISHMENT
+            # Only a contact move gets punished - the engine uses the physical class as
+            # its contact proxy, so a blocked special move walks away unscathed.
+            punish = SHIELD_PUNISH.get(active_shield)
+            if punish and move_class == 'physical':
+                if punish['kind'] == 'chip':
+                    chip = max(1, math.floor(attacker.get('max_hp', 100) * punish['fraction']))
+                    attacker['current_hp'] = max(0, attacker['current_hp'] - chip)
+                    block_msg += f" 🌵 **{attacker['name'].capitalize()}** was hurt by the spikes! (-{chip} HP)"
+
+                elif punish['kind'] == 'stat':
+                    # Routed through stat_changes so the engines clamp and log it normally
+                    stat_changes.append(('attacker', punish['stat'], punish['amount']))
+                    block_msg += f" 📉 **{attacker['name'].capitalize()}**'s {punish['stat']} was reduced by the shield!"
+
+                elif punish['kind'] == 'status' and not attacker.get('status_condition'):
+                    ailment = punish['status']
+                    immune_types = {'poison': ['poison', 'steel'], 'burn': ['fire']}.get(ailment, [])
+                    if not any(t in immune_types for t in (attacker.get('types') or [])):
+                        attacker['status_condition'] = {'name': ailment, 'duration': -1}
+                        icon = '☣️' if ailment == 'poison' else '🔥'
+                        block_msg += f" {icon} **{attacker['name'].capitalize()}** was afflicted with {ailment} by the shield!"
+
+            return 0, block_msg, None, stat_changes, 0
 
     # Safely catch SQLite NULL values before running string methods!
     atk_ability = (attacker.get('ability') or 'none').lower().replace(' ', '-')
@@ -982,6 +1140,19 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if TYPE_CHART.get(move_type, {}).get('flying', 1.0) > 1.0:
             type_multiplier /= 2.0 # Halves the super-effective damage back to neutral!
     
+    # ==========================================
+    # 🚨 CRIT SETUP MOVES
+    # ==========================================
+    if move_name == 'focus-energy':
+        if attacker['volatile_statuses'].get('focus_energy'):
+            return 0, "But it failed! It is already fired up!", 'none', [], 0
+        attacker['volatile_statuses']['focus_energy'] = True
+        return 0, f"🔥 {attacker['name'].capitalize()} is getting pumped! Its critical hit ratio rose!", 'none', [], 0
+
+    if move_name == 'laser-focus':
+        attacker['volatile_statuses']['laser_focus'] = True
+        return 0, f"🎯 {attacker['name'].capitalize()} began focusing intently! Its next strike will be critical!", 'none', [], 0
+
     if move_name == 'perish-song':
         stat_changes.append(('attacker', 'volatile_perish_song', 3))
         stat_changes.append(('defender', 'volatile_perish_song', 3))
@@ -1124,11 +1295,24 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # Geyser and Shell Side Arm.
         a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room)
 
+        # A critical hit reads the same stats with unfavourable stages stripped out. We
+        # resolve that variant up front and express it as a ratio, so the multi-strike loop
+        # can apply it per hit without recomputing the whole base damage.
+        a_crit, d_crit, _ = resolve_combat_stats(move_name, move_class, attacker, defender,
+                                                 wonder_room, ignore_boosts=True)
+
         # Choice items reinforce the offensive stat the move ended up swinging with
         if effective_class == 'physical':
-            if attacker_item == 'choice-band': a = math.floor(a * 1.5)
+            if attacker_item == 'choice-band':
+                a = math.floor(a * 1.5)
+                a_crit = math.floor(a_crit * 1.5)
         else:
-            if attacker_item == 'choice-specs': a = math.floor(a * 1.5)
+            if attacker_item == 'choice-specs':
+                a = math.floor(a * 1.5)
+                a_crit = math.floor(a_crit * 1.5)
+
+        normal_ratio = a / max(1, d)
+        crit_stat_ratio = (a_crit / max(1, d_crit)) / normal_ratio if normal_ratio > 0 else 1.0
 
 
         # 🚨 THE BATTLE BOND MUTATION
@@ -1376,9 +1560,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif crit_stage == 2: crit_chance = 2 # 50%
             else: crit_chance = 1                 # 100% Guaranteed!
             
-            # The Merciless Ability: Total immunity to critical hits!
+            # Battle Armor, Shell Armor and a Lucky Chant on the defending side all shut
+            # out criticals entirely - including the guaranteed ones, which is why both
+            # checks sit ahead of the forced-crit branch.
             if def_ability in ['battle-armor', 'shell-armor']:
                 is_crit = False
+            elif is_crit_shielded(target_hazards):
+                is_crit = False
+            elif is_crit_guaranteed(move_name, attacker):
+                is_crit = True
             else:
                 is_crit = (random.randint(1, crit_chance) == 1)
 
@@ -1401,6 +1591,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 # 1. Screen Shattering (Brick Break, Psychic Fangs)
                 if move_name in ['brick-break', 'psychic-fangs']:
                     shattered = False
+                    # Deliberately NOT SIDE_SCREEN_MOVES: these shatter the damage screens
+                    # only. Lucky Chant is not a barrier and survives them.
                     for screen in ['reflect', 'light-screen', 'aurora-veil']:
                         if target_hazards.get(screen, 0) > 0:
                             target_hazards[screen] = 0
@@ -1420,7 +1612,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             # ==========================================
             
             hit_damage = math.floor(base_damage_unmodified * hit_modifier)
-            if is_crit: hit_damage = math.floor(hit_damage * 1.5)
+            if is_crit:
+                # 1.5x, plus the stat ratio recomputed with unfavourable stages ignored
+                hit_damage = math.floor(hit_damage * 1.5 * crit_stat_ratio)
             
             # --- D. DEFENSIVE RESIST BERRIES (Only triggers on the VERY FIRST strike) ---
             if strike == 0 and defender_item in berry_resist_map:
@@ -1454,6 +1648,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # Report how many strikes actually connected, so a 5-hit Bullet Seed advances
         # Rage Fist by 5 rather than by 1.
         defender['last_hit_count'] = max(1, hits_landed)
+
+        # Laser Focus is spent on the first damaging move that follows it, whether or not
+        # the crit was actually allowed through (Shell Armor still consumes the charge).
+        attacker['volatile_statuses'].pop('laser_focus', None)
         
         if type_multiplier > 1.0: msg += "It's super effective! "
         elif type_multiplier > 0.0 and type_multiplier < 1.0: msg += "It's not very effective... "
