@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -3596,11 +3596,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         is_ohko = raw_move_name in OHKO_MOVES
 
-                        GUARANTEED_HIT_MOVES = [
-                            'aerial-ace', 'aura-sphere', 'disarming-voice', 'false-surrender', 
-                            'magical-leaf', 'magnet-bomb', 'shadow-punch', 'shock-wave', 
-                            'smart-strike', 'swift', 'vital-throw'
-                        ]
+                        # Shared with the physics engine so the two copies cannot drift
                         is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
 
                         # Safely fetch abilities
@@ -4670,7 +4666,7 @@ class BattleDashboard(discord.ui.View):
             
             # 5. Barrier Decay (Screens)
             for hazards, owner_str in [(state['player_hazards'], "Your"), (state['npc_hazards'], "The rival's")]: 
-                for screen in ['reflect', 'light-screen', 'aurora-veil']:
+                for screen in SIDE_SCREEN_MOVES:
                     if hazards.get(screen, 0) > 0:
                         hazards[screen] -= 1
                         if hazards[screen] <= 0:
@@ -4714,6 +4710,7 @@ class BattleDashboard(discord.ui.View):
                 if 'volatile_statuses' in combatant:
                     combatant['volatile_statuses'].pop('flinch', None)
                     combatant['volatile_statuses'].pop('protected', None)
+                    combatant['volatile_statuses'].pop('protect_type', None)
                     combatant['volatile_statuses'].pop('destiny-bond', None)
                     combatant['volatile_statuses'].pop('is_switching', None)
                     combatant['volatile_statuses'].pop('stats_lowered_this_turn', None)
@@ -6409,11 +6406,7 @@ class Combat(commands.Cog):
                         # ==========================================
                         is_ohko = raw_move_name in OHKO_MOVES
 
-                        GUARANTEED_HIT_MOVES = [
-                            'aerial-ace', 'aura-sphere', 'disarming-voice', 'false-surrender', 
-                            'magical-leaf', 'magnet-bomb', 'shadow-punch', 'shock-wave', 
-                            'smart-strike', 'swift', 'vital-throw'
-                        ]
+                        # Shared with the physics engine so the two copies cannot drift
                         is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
 
                         # Safely fetch abilities
@@ -7128,7 +7121,7 @@ class Combat(commands.Cog):
             # (Note: Map the hazards and names properly depending on PvE or PvP!)
             for hazards, owner_str in [(state['p1_hazards'], f"{state['p1'].display_name}'s"),
                 (state['p2_hazards'], f"{state['p2'].display_name}'s")]: 
-                for screen in ['reflect', 'light-screen', 'aurora-veil']:
+                for screen in SIDE_SCREEN_MOVES:
                     if hazards.get(screen, 0) > 0:
                         hazards[screen] -= 1
                         if hazards[screen] <= 0:
@@ -7144,6 +7137,7 @@ class Combat(commands.Cog):
                 if 'volatile_statuses' in p_active:
                     p_active['volatile_statuses'].pop('flinch', None)
                     p_active['volatile_statuses'].pop('protected', None)
+                    p_active['volatile_statuses'].pop('protect_type', None)
                     p_active['volatile_statuses'].pop('destiny-bond', None)
                     p_active['volatile_statuses'].pop('is_switching', None)
                     p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
