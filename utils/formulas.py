@@ -457,6 +457,109 @@ SOLAR_DIMMING_WEATHER = ['rain', 'heavy-rain', 'sandstorm', 'hail', 'snow']
 # Wrings extra damage out of a super-effective hit (5461/4096 in the games)
 SUPER_EFFECTIVE_BONUS_MOVES = ['collision-course', 'electro-drift']
 
+# ==========================================
+# 🚨 LOCK-IN MOVES
+# ==========================================
+# Uproar rides the same rampage machinery as Outrage, but runs a fixed 3 turns and leaves
+# the user clear-headed instead of confused.
+UPROAR_MOVES = ['uproar']
+
+# Moves that cannot be copied by Encore - either they are Encore itself or they have no
+# meaningful "last move" to repeat.
+ENCORE_IMMUNE_MOVES = ['encore', 'struggle', 'transform', 'mimic', 'sketch', 'mirror-move']
+
+def is_uproar_active(*combatants):
+    """True while any of the given specimens is mid-Uproar. Nothing can sleep through it."""
+    for mon in combatants:
+        if not mon:
+            continue
+        rampage = (mon.get('volatile_statuses') or {}).get('rampage') or {}
+        if rampage.get('move') in UPROAR_MOVES:
+            return True
+    return False
+
+# Double power when the user gets in before the target has taken its action this turn.
+# Distinct from Revenge/Payback, which key off having *been hit* rather than turn order.
+AMBUSH_MOVES = ['bolt-beak', 'fishious-rend']
+
+# Two-turn moves that raise a stat while CHARGING. The engines apply that boost from
+# their own two-turn table, but these moves also carry a stat_name/stat_change in the
+# database with target 'selected-pokemon' - so without excluding them here, the attack
+# turn would hand a duplicate boost to the opponent.
+CHARGE_BOOST_MOVES = ['meteor-beam', 'electro-shot']
+
+# ==========================================
+# 🚨 DELAYED STRIKES (Future Sight / Doom Desire)
+# ==========================================
+# These queue an attack that lands two turns later against whoever occupies the target
+# slot at that moment - even if the original user has switched out or fainted.
+DELAYED_ATTACK_MOVES = ['future-sight', 'doom-desire']
+
+def snapshot_delayed_attack(move_name, attacker, move, owner_label):
+    """
+    Freezes the launcher's offensive profile at the moment of use. The strike later
+    resolves with these numbers rather than whatever is on the field, so switching out,
+    losing a stat boost, or fainting does not change the incoming damage.
+    """
+    return {
+        'move': move_name,
+        'type': move.get('type', 'psychic'),
+        'power': move.get('power') or 0,
+        'owner': owner_label,
+        'name': attacker.get('name', 'a specimen'),
+        'level': attacker.get('level', 50),
+        'sp_atk': attacker.get('stats', {}).get('sp_atk', 50),
+        'types': list(attacker.get('types') or []),
+        'ability': (attacker.get('ability') or 'none'),
+        # Two full turns must pass, so the tick on the turn it was queued is skipped
+        'turns': 2,
+        'just_queued': True,
+    }
+
+def resolve_delayed_strike(pending, defender, weather='none', terrain='none'):
+    """
+    Fires a queued strike at whoever now occupies the target slot. Uses the launcher's
+    frozen offence but the CURRENT occupant's defences and typing, so a switch-in eats
+    the hit at its own resistances. Returns (damage, message).
+    """
+    # A stand-in for the original user - only the fields the damage formula reads
+    ghost_attacker = {
+        'name': pending['name'],
+        'level': pending['level'],
+        'current_hp': 1, 'max_hp': 1,
+        'stats': {'attack': pending['sp_atk'], 'defense': 50,
+                  'sp_atk': pending['sp_atk'], 'sp_def': 50, 'speed': 50},
+        'types': pending['types'],
+        'status_condition': None,
+        'volatile_statuses': {},
+        # Deliberately itemless: the launcher is not on the field, so held-item
+        # interactions (Life Orb recoil, Rocky Helmet) have nobody to apply to.
+        'held_item': 'none',
+        'ability': pending['ability'],
+        'stat_stages': {},
+    }
+
+    strike = {
+        'name': pending['move'], 'type': pending['type'], 'class': 'special',
+        'power': pending['power'], 'accuracy': 100, 'pp': 1, 'max_pp': 1,
+        'ailment': 'none', 'ailment_chance': 0, 'stat_name': 'none', 'stat_change': 0,
+        'stat_chance': 0, 'drain': 0, 'healing': 0, 'priority': 0,
+        'target': 'selected-pokemon', 'status_type': 'none', 'status_chance': 0,
+    }
+
+    # The delayed strike arrives after the shield has served its purpose, so Protect
+    # does not stop it. Lifted for the calculation and put back afterwards.
+    volatiles = defender.setdefault('volatile_statuses', {})
+    was_protected = volatiles.pop('protected', None)
+    try:
+        damage, msg, _, _, _ = calculate_damage(ghost_attacker, defender, strike,
+                                                weather=weather, terrain=terrain)
+    finally:
+        if was_protected is not None:
+            volatiles['protected'] = was_protected
+
+    return damage, msg
+
 def get_effective_priority(move_name, base_priority, attacker, terrain='none'):
     """
     The priority bracket a move actually moves in, after terrain effects. Grassy Glide
@@ -1067,6 +1170,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif move_name == 'pursuit' and defender.get('volatile_statuses', {}).get('is_switching'):
             move_power *= 2
             
+        # 2a. Ambush Amplifiers (Bolt Beak / Fishious Rend)
+        # Doubles when the user strikes before the target has acted. A target that merely
+        # switched in has not acted, so it still eats the full-power hit.
+        if move_name in AMBUSH_MOVES and not defender.get('acted_this_turn'):
+            move_power *= 2
+            msg += " ⚡ It struck before the target could react! "
+
         # 2b. Super-Effective Amplifiers (Collision Course / Electro Drift)
         # These stack on top of the type multiplier, which is applied separately later.
         if move_name in SUPER_EFFECTIVE_BONUS_MOVES and type_multiplier > 1.0:
@@ -1245,9 +1355,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             HIGH_CRIT_MOVES = [
                 'air-cutter', 'attack-order', 'blaze-kick', 'crabhammer', 'cross-chop', 
                 'cross-poison', 'drill-run', 'esper-wing', 'ivy-cudgel', 'karate-chop', 
-                'leaf-blade', 'night-slash', 'poison-tail', 'psycho-cut', 'razor-leaf', 
-                'razor-wind', 'shadow-claw', 'slash', 'snipe-shot', 'spacial-rend', 
-                'stone-edge', 'triple-arrows'
+                'leaf-blade', 'night-slash', 'poison-tail', 'psycho-cut', 'razor-leaf',
+                'razor-wind', 'shadow-claw', 'slash', 'snipe-shot', 'spacial-rend',
+                'stone-edge', 'triple-arrows', 'sky-attack'
             ]
             
             crit_stage = 0
@@ -1378,6 +1488,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # 🚨 TERRAIN PATHOGEN BLOCKERS
     # ==========================================
+    # 🚨 UPROAR: the racket keeps everyone awake, whichever side is making it
+    if inflicted_status == 'sleep' and is_uproar_active(attacker, defender):
+        inflicted_status = None
+        msg += " 📢 The uproar kept everyone awake!"
+
     if inflicted_status and inflicted_status != 'none':
         if is_grounded(defender):
             if terrain == 'misty' and inflicted_status != 'trap':
@@ -1512,7 +1627,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 stat_changes.append((target, s_name, s_change))
                 
     # 2. Standard Single-Stat Moves (From the database payload)
-    else:
+    # Skipped for charge-turn boosters: Meteor Beam and Electro Shot raise the user's
+    # Sp. Atk while charging (handled by the engines' two-turn table), but their database
+    # rows repeat that stat with target 'selected-pokemon', which would hand a second
+    # boost to the OPPONENT when the attack finally lands.
+    elif move_name not in CHARGE_BOOST_MOVES:
         stat_name = move.get('stat_name', 'none')
         stat_change = move.get('stat_change', 0)
         
