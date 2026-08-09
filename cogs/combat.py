@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -437,23 +437,40 @@ Z_CRYSTAL_TYPES = {
 }
 
 TWO_TURN_MOVES = {
+                            # --- Weather-skippable ---
                             'solar-beam': {'msg': "absorbed light!", 'skip_weather': ['sun', 'extremely-harsh-sunlight']},
                             'solar-blade': {'msg': "absorbed light!", 'skip_weather': ['sun', 'extremely-harsh-sunlight']},
+                            'electro-shot': {'msg': "absorbed electricity!", 'boost': ('sp_atk', 1), 'skip_weather': ['rain', 'heavy-rain']},
+
+                            # --- Semi-invulnerable (untargetable during the charge turn) ---
                             'dig': {'msg': "burrowed its way under the ground!", 'invuln': 'underground'},
                             'fly': {'msg': "flew up high!", 'invuln': 'air'},
                             'bounce': {'msg': "sprang up!", 'invuln': 'air'},
-                            'razor-wind': {'msg': "whipped up a whirlwind!"},
                             'dive': {'msg': "hid underwater!", 'invuln': 'underwater'},
                             'phantom-force': {'msg': "vanished instantly!", 'invuln': 'phantom'},
+                            'shadow-force': {'msg': "vanished instantly!", 'invuln': 'phantom'},
+
+                            # --- Charge-turn stat boosts ---
                             'meteor-beam': {'msg': "is overflowing with space power!", 'boost': ('sp_atk', 1)},
-                            'skull-bash': {'msg': "tucked in its head!", 'boost': ('defense', 1)}
+                            'skull-bash': {'msg': "tucked in its head!", 'boost': ('defense', 1)},
+                            'geomancy': {'msg': "is absorbing power!"},
+
+                            # --- Plain charge turns ---
+                            'razor-wind': {'msg': "whipped up a whirlwind!"},
+                            'sky-attack': {'msg': "became cloaked in a harsh light!"},
+                            'freeze-shock': {'msg': "became cloaked in a freezing light!"},
+                            'ice-burn': {'msg': "became cloaked in freezing air!"}
                         }
 
 pivot_moves = ['u-turn', 'volt-switch', 'flip-turn', 'baton-pass', 'parting-shot', 'chilly-reception']
 
 phaze_moves = ['roar', 'whirlwind', 'dragon-tail', 'circle-throw']
 
-RAMPAGE_MOVES = ['outrage', 'petal-dance', 'thrash', 'raging-fury']
+RAMPAGE_MOVES = ['outrage', 'petal-dance', 'thrash', 'raging-fury', 'uproar']
+
+# Uproar locks in like a rampage but runs a fixed 3 turns and skips the confusion
+# that normally follows, so it is excluded from the fatigue branch below.
+LOCK_IN_NO_FATIGUE = ['uproar']
                     
 OHKO_MOVES = ['fissure', 'horn-drill', 'guillotine', 'sheer-cold']
 
@@ -489,6 +506,19 @@ def can_dynamax(pokemon):
     """False for species whose transformation slot is taken by Primal Reversion."""
     base_name = (pokemon.get('name') or '').lower().split('-')[0].strip()
     return base_name not in PRIMAL_SPECIES
+
+
+def is_dynamax_active(adaptation):
+    """
+    True while a Dynamax or Gigantamax transformation is live.
+
+    While Dynamaxed every move becomes a Max Move, and Max Moves neither charge for a
+    turn (Meteor Beam, Solar Beam, Fly, Dig) nor leave the user recharging afterwards
+    (Hyper Beam, Giga Impact). Both engines use this to skip those lockouts.
+    """
+    if not adaptation:
+        return False
+    return bool(adaptation.get('active')) and adaptation.get('type') in ['dynamax', 'gmax']
 
 
 def normalize_gender(value):
@@ -1041,8 +1071,13 @@ class PvPMoveMenu(discord.ui.View):
             is_recharging = self.active_poke.get('volatile_statuses', {}).get('recharging')
             is_rampage = self.active_poke.get('volatile_statuses', {}).get('rampage')
 
-            if is_rampage: 
+            is_encore = self.active_poke.get('volatile_statuses', {}).get('encore')
+
+            if is_rampage:
                 is_charging = is_rampage['move']
+            elif is_encore:
+                # Encore reuses the single-move UI lock the charge system already provides
+                is_charging = is_encore['move']
                 
             # Safely get the Z-Crystal type
             allowed_z_type = None
@@ -2386,6 +2421,11 @@ class BattleDashboard(discord.ui.View):
         is_charging = p_active.get('volatile_statuses', {}).get('charging')
         is_recharging = p_active.get('volatile_statuses', {}).get('recharging')
 
+        # Encore borrows the same single-move lock
+        _encore = p_active.get('volatile_statuses', {}).get('encore')
+        if _encore and not is_charging:
+            is_charging = _encore['move']
+
         
         # ==========================================
         # 1. Draw Combat Behaviors (Row 0)
@@ -2745,10 +2785,14 @@ class BattleDashboard(discord.ui.View):
                     is_charging = p_active['volatile_statuses'].get('charging')
                     is_rampage = p_active['volatile_statuses'].get('rampage')
                     
+                    is_encore = p_active['volatile_statuses'].get('encore')
+
                     if is_charging:
                         move_name = is_charging # Force the engine to use the charging move!
                     elif is_rampage:
                         move_name = is_rampage['move'] # Force the rampage move!
+                    elif is_encore:
+                        move_name = is_encore['move'] # Encore forces a repeat!
 
                     # APPLY THE PVE CHOICE LOCK 🚨
                     held_item = (p_active.get('held_item') or "").lower().replace(' ', '-')
@@ -2930,7 +2974,7 @@ class BattleDashboard(discord.ui.View):
                     print(f"DEBUG AI [FLIGHT]: Alive bench indices: {alive_bench}")
                     
                     # Only consider fleeing if we actually have backup AND they are not locked/trapped!
-                    if alive_bench and not npc_is_charging and not npc_is_rampage and not npc_is_trapped:
+                    if alive_bench and not npc_is_charging and not npc_is_rampage and not npc_is_trapped and not n_active.get('volatile_statuses', {}).get('encore'):
                         p_types = p_active.get('types', [])
                         n_types = n_active.get('types', [])
                         
@@ -3057,6 +3101,9 @@ class BattleDashboard(discord.ui.View):
                             # Force the AI to finish its attack!
                             npc_move_name = npc_is_charging
                             print(f"DEBUG AI [ATTACK]: NPC is locked into charging move '{npc_move_name}'!")
+                        elif n_active.get('volatile_statuses', {}).get('encore'):
+                            npc_move_name = n_active['volatile_statuses']['encore']['move']
+                            print(f"DEBUG AI [ATTACK]: NPC is locked into encored move '{npc_move_name}'!")
                         elif npc_is_rampage:
                             # 🚨 NEW: Force the AI to continue its rampage!
                             # Rampage is stored as a dict: {'move': 'outrage', 'turns': 2}
@@ -3189,12 +3236,13 @@ class BattleDashboard(discord.ui.View):
                                 chosen_move['pp'] -= 1 
                                 
                                 async with db.execute("""
-                                    SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance, 
-                                        stat_name, stat_change, stat_chance, healing, drain, name, priority
+                                    SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance,
+                                        stat_name, stat_change, stat_chance, healing, drain, name, priority,
+                                        status_type, status_chance
                                 FROM base_moves WHERE name = ?
                                 """, (npc_move_name,)) as cursor:
                                     n_row = await cursor.fetchone()
-                                
+
                                 if n_row:
                                     n_move_stats = {
                                         'type': n_row[0], 'power': n_row[1] or 0, 'accuracy': n_row[2] or 100, 'class': n_row[3],
@@ -3202,7 +3250,10 @@ class BattleDashboard(discord.ui.View):
                                         'stat_name': n_row[7], 'stat_change': n_row[8] or 0, 'stat_chance': n_row[9] or 0,
                                         'healing': n_row[10] or 0, 'drain': n_row[11] or 0,
                                         'name': n_row[12],
-                                        'priority': n_row[13] or 0
+                                        'priority': n_row[13] or 0,
+                                        # Flinch lives here - without it NPC moves could never flinch
+                                        'status_type': n_row[14] or 'none',
+                                        'status_chance': n_row[15] or 0
                                     }
                                 else:
                                     print(f"⚠️ WARNING: NPC move '{npc_move_name}' not found in DB! Using typeless fallback.")
@@ -3299,9 +3350,19 @@ class BattleDashboard(discord.ui.View):
                 # ==========================================
                 # 4. EXECUTE THE INITIATIVE QUEUE
                 # ==========================================
+                # 🚨 TURN-ORDER TRACKING (Bolt Beak / Fishious Rend)
+                # Cleared for every specimen so a switch-in starts the turn "not yet acted".
+                for _side in [state.get('player_team', []), state.get('npc_team', [])]:
+                    for _mon in _side:
+                        _mon['acted_this_turn'] = False
+
                 for attacker, defender, move_stats, raw_move_name, is_player, z_disp, is_z_action, is_max_action in action_queue:
                     print(f"DEBUG 2: Now processing turn for: {attacker['name']} using {raw_move_name}")
-                    
+
+                    # Mark BEFORE resolving: a target that is about to act has not acted yet,
+                    # so the faster attacker still earns the ambush bonus.
+                    attacker['acted_this_turn'] = True
+
                     if attacker['current_hp'] <= 0:
                         continue
                     if defender['current_hp'] <= 0:
@@ -3461,12 +3522,18 @@ class BattleDashboard(discord.ui.View):
                         is_currently_charging = attacker.get('volatile_statuses', {}).get('charging') == raw_move_name
                         held_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
 
+                        # Only the player can Dynamax in PvE, so the NPC never qualifies
+                        attacker_is_maxed = bool(is_max_action) or (is_player and is_dynamax_active(state.get('adaptation')))
+
                         if raw_move_name in TWO_TURN_MOVES and not is_currently_charging:
                             charge_data = TWO_TURN_MOVES[raw_move_name]
                             current_weather = state.get('weather', {'type': 'none'})['type']
-                            
-                            # 1. Biological Bypasses (Harsh Sunlight & Power Herbs)
-                            if current_weather in charge_data.get('skip_weather', []):
+
+                            # 1. Biological Bypasses (Max Moves, Harsh Sunlight & Power Herbs)
+                            if attacker_is_maxed:
+                                # Dynamaxed specimens fire Max Moves, which never charge
+                                combat_log += f"🌪️ {owner_prefix.strip()} **{attacker['name'].capitalize()}** unleashed the attack instantly through its Max form!\n"
+                            elif current_weather in charge_data.get('skip_weather', []):
                                 pass # Skip the charge turn and fire immediately!
                             elif held_item == 'power-herb':
                                 combat_log += f"🌿 **{attacker['name'].capitalize()}** became fully charged due to its Power Herb!\n"
@@ -3490,6 +3557,33 @@ class BattleDashboard(discord.ui.View):
                                 # 🚨 ABORT THE REST OF THE TURN!
                                 continue 
                                 
+                        # ==========================================
+                        # 🚨 DELAYED STRIKES (Future Sight / Doom Desire) - PvE
+                        # ==========================================
+                        if raw_move_name == 'encore':
+                            victim_volatiles = defender.setdefault('volatile_statuses', {})
+                            copied = defender.get('last_move_used')
+
+                            if victim_volatiles.get('encore'):
+                                combat_log += f"⚠️ But it failed! **{defender['name'].capitalize()}** is already encored!\n"
+                            elif not copied or copied in ENCORE_IMMUNE_MOVES:
+                                combat_log += "⚠️ But it failed! There was no performance to repeat!\n"
+                            else:
+                                victim_volatiles['encore'] = {'move': copied, 'turns': 3}
+                                combat_log += f"👏 **{defender['name'].capitalize()}** received an encore and must repeat **{copied.replace('-', ' ').title()}**!\n"
+                            continue
+
+                        if raw_move_name in DELAYED_ATTACK_MOVES:
+                            target_slot = 'npc_future' if is_player else 'player_future'
+                            launcher = owner_prefix.strip() or ("Your" if is_player else "The rival's")
+
+                            if state.get(target_slot):
+                                combat_log += "⚠️ But it failed! A strike is already converging on that side!\n"
+                            else:
+                                state[target_slot] = snapshot_delayed_attack(raw_move_name, attacker, move_stats, launcher)
+                                combat_log += f"🔮 {launcher} **{attacker['name'].capitalize()}** foresaw an attack!\n"
+                            continue
+
                         # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                         if is_currently_charging:
                             del attacker['volatile_statuses']['charging']
@@ -3580,7 +3674,11 @@ class BattleDashboard(discord.ui.View):
                             if dmg > 0: # The attack successfully landed!
                                 if 'rampage' not in attacker['volatile_statuses']:
                                     # Start the rampage (Locks in for 2 to 3 turns)
-                                    attacker['volatile_statuses']['rampage'] = {'move': raw_move_name, 'turns': random.randint(1, 2)}
+                                    attacker['volatile_statuses']['rampage'] = {
+                                        'move': raw_move_name,
+                                        # Uproar is a fixed 3 attacks; the others roll 2-3
+                                        'turns': 2 if raw_move_name in UPROAR_MOVES else random.randint(1, 2)
+                                    }
                                 else:
                                     # Decrement the rampage timer
                                     attacker['volatile_statuses']['rampage']['turns'] -= 1
@@ -3589,7 +3687,7 @@ class BattleDashboard(discord.ui.View):
                                         
                                         # Rampage ends, apply confusion! (Own Tempo grants immunity)
                                         atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
-                                        if atk_ability != 'own-tempo':
+                                        if atk_ability != 'own-tempo' and raw_move_name not in LOCK_IN_NO_FATIGUE:
                                             attacker['volatile_statuses']['confusion'] = random.randint(2, 5)
                                             combat_log += f"💫 {owner_prefix.strip()} **{attacker['name'].capitalize()}** became confused due to fatigue!\n"
                             else:
@@ -3615,6 +3713,9 @@ class BattleDashboard(discord.ui.View):
                             attacker['last_move_failed'] = True
                         else:
                             attacker['last_move_failed'] = False
+
+                        # Encore copies whatever actually resolved here
+                        attacker['last_move_used'] = raw_move_name
 
                         if msg: combat_log += f"*{msg}*\n"
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
@@ -3715,8 +3816,9 @@ class BattleDashboard(discord.ui.View):
                                 if chg < 0:
                                     target_specimen['volatile_statuses']['stats_lowered_this_turn'] = True
 
-                        # Only apply the exhaustion tag if the attack actually dealt damage!
-                        if raw_move_name in RECHARGE_MOVES and dmg > 0:
+                        # Only apply the exhaustion tag if the attack actually dealt damage,
+                        # and never while Dynamaxed - Max Moves leave no recharge window.
+                        if raw_move_name in RECHARGE_MOVES and dmg > 0 and not attacker_is_maxed:
                             if 'volatile_statuses' not in attacker:
                                 attacker['volatile_statuses'] = {}
                             attacker['volatile_statuses']['recharging'] = True
@@ -4223,7 +4325,59 @@ class BattleDashboard(discord.ui.View):
 
             # --- PHASE 3: POST-TURN ENVIRONMENTAL DAMAGE (PvE) ---
             combat_log += "\n"
-            
+
+            # ==========================================
+            # 🚨 LOCK-IN UPKEEP (Encore decay / Uproar insomnia) - PvE
+            # ==========================================
+            for mon, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
+                enc = (mon.get('volatile_statuses') or {}).get('encore')
+                if enc:
+                    enc['turns'] -= 1
+                    if enc['turns'] <= 0:
+                        del mon['volatile_statuses']['encore']
+                        combat_log += f"👏 {owner_str} **{mon['name'].capitalize()}**'s encore ended!\n"
+
+            # An active Uproar jolts anything already asleep back awake
+            if is_uproar_active(p_active, n_active):
+                for mon, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
+                    status = mon.get('status_condition') or {}
+                    if status.get('name') == 'sleep':
+                        mon['status_condition'] = None
+                        combat_log += f"📢 {owner_str} **{mon['name'].capitalize()}** was jolted awake by the uproar!\n"
+
+            # ==========================================
+            # 🚨 DELAYED STRIKES LANDING (Future Sight / Doom Desire) - PvE
+            # ==========================================
+            for slot_key, victim, victim_label in [('player_future', p_active, "Your"),
+                                                   ('npc_future', n_active, "The rival's")]:
+                pending = state.get(slot_key)
+                if not pending:
+                    continue
+
+                # Skip the tick on the turn it was queued so two full turns elapse
+                if pending.get('just_queued'):
+                    pending['just_queued'] = False
+                    continue
+
+                pending['turns'] -= 1
+                if pending['turns'] > 0:
+                    continue
+
+                state[slot_key] = None
+                if victim['current_hp'] <= 0:
+                    continue
+
+                strike_dmg, strike_msg = resolve_delayed_strike(
+                    pending, victim,
+                    weather=state.get('weather', {'type': 'none'})['type'],
+                    terrain=state.get('terrain', {'type': 'none'})['type']
+                )
+                victim['current_hp'] = max(0, victim['current_hp'] - strike_dmg)
+
+                combat_log += f"🔮 {victim_label} **{victim['name'].capitalize()}** took the {pending['move'].replace('-', ' ').title()} attack! (-{strike_dmg} HP)\n"
+                if strike_msg:
+                    combat_log += f"*{strike_msg}*\n"
+
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
             weather = state.get('weather', {'type': 'none', 'duration': 0})
             if weather['type'] != 'none':
@@ -5413,24 +5567,33 @@ class Combat(commands.Cog):
                             raw_moves = [m for m in row[17:21] if m and m != 'none']
                             p_moves = []
                             for m_name in raw_moves:
+                                # 🚨 `target` decides whether a stat change lands on the user or the
+                                # opponent, and status_type/status_chance carry flinch. Without all
+                                # three, PvP sent every self-buff to the wrong side and no move
+                                # could ever flinch.
                                 async with db.execute("""
-                                    SELECT type, power, accuracy, damage_class, pp, 
-                                        ailment, ailment_chance, stat_name, stat_change, 
-                                        stat_chance, drain, healing, priority
+                                    SELECT type, power, accuracy, damage_class, pp,
+                                        ailment, ailment_chance, stat_name, stat_change,
+                                        stat_chance, drain, healing, priority,
+                                        target, status_type, status_chance
                                     FROM base_moves WHERE name = ?
                                 """, (m_name,)) as cursor:
                                     m_data = await cursor.fetchone()
-                                
-                                
+
+
                                 if m_data:
-                                    # Unpack the new 13th variable!
-                                    m_type, m_power, m_acc, m_class, m_pp, m_ail, m_ail_c, m_stat, m_stat_c, m_stat_ch, m_drain, m_heal, m_prio = m_data
+                                    (m_type, m_power, m_acc, m_class, m_pp, m_ail, m_ail_c, m_stat,
+                                     m_stat_c, m_stat_ch, m_drain, m_heal, m_prio,
+                                     m_target, m_status_type, m_status_chance) = m_data
                                     p_moves.append({
                                         'name': m_name, 'type': m_type, 'power': m_power, 'accuracy': m_acc,
                                         'class': m_class, 'pp': m_pp, 'max_pp': m_pp, 'ailment': m_ail,
                                         'ailment_chance': m_ail_c, 'stat_name': m_stat, 'stat_change': m_stat_c,
                                         'stat_chance': m_stat_ch, 'drain': m_drain, 'healing': m_heal,
-                                        'priority': m_prio # 🚨 Save it to the dictionary!
+                                        'priority': m_prio,
+                                        'target': m_target,
+                                        'status_type': m_status_type or 'none',
+                                        'status_chance': m_status_chance or 0
                                     })
                                 else:
                                     p_moves.append({'name': m_name, 'pp': 5, 'max_pp': 5, 'priority': 0})
@@ -5495,7 +5658,11 @@ class Combat(commands.Cog):
                 'p2_key_items': key_items[p2_id],
                 
                 'p1_hazards': {'stealth-rock': False, 'spikes': 0, 'toxic-spikes': 0, 'sticky-web': False},
-                'p2_hazards': {'stealth-rock': False, 'spikes': 0, 'toxic-spikes': 0, 'sticky-web': False}
+                'p2_hazards': {'stealth-rock': False, 'spikes': 0, 'toxic-spikes': 0, 'sticky-web': False},
+
+                # Pending Future Sight / Doom Desire strikes, keyed by the side they will HIT
+                'p1_future': None,
+                'p2_future': None
             }
 
             # 3. Map BOTH players to the exact same dictionary in RAM!
@@ -5621,6 +5788,12 @@ class Combat(commands.Cog):
         # Initialize Pivot Trackers for the turn!
         state['p1_must_pivot'] = False
         state['p2_must_pivot'] = False
+
+        # 🚨 TURN-ORDER TRACKING (Bolt Beak / Fishious Rend)
+        # Cleared for every specimen so a switch-in starts the turn "not yet acted".
+        for _side in ['p1_team', 'p2_team']:
+            for _mon in state.get(_side, []):
+                _mon['acted_this_turn'] = False
 
         try:
             c1 = state['commits'][p1_id]
@@ -5781,9 +5954,12 @@ class Combat(commands.Cog):
                 is_charging = active_poke['volatile_statuses'].get('charging')
                 is_rampage = active_poke['volatile_statuses'].get('rampage')
                 
+                is_encore = active_poke['volatile_statuses'].get('encore')
+
                 forced_move_name = None
                 if is_charging: forced_move_name = is_charging
                 elif is_rampage: forced_move_name = is_rampage['move']
+                elif is_encore: forced_move_name = is_encore['move']
                 
                 if forced_move_name:
                     # Look up the forced move in their biological database payload
@@ -5944,7 +6120,11 @@ class Combat(commands.Cog):
                 # --- EXECUTE ATTACK ---
                 elif commit['type'] == 'attack':
                     move = commit['data']
-                    
+
+                    # Mark BEFORE resolving, so the faster attacker still sees the target
+                    # as "not yet acted" and earns the ambush bonus. A swap does not count.
+                    attacker['acted_this_turn'] = True
+
                     if defender['current_hp'] <= 0:
                         combat_log += f"💥 **{owner_name}'s** {attacker['name'].capitalize()} used **{move['name'].replace('-', ' ').title()}**, but there was no target!\n"
                         
@@ -6045,6 +6225,12 @@ class Combat(commands.Cog):
                     # ==========================================
                     # 🚨 THE ATTACK ANNOUNCEMENT & PURSUIT LOGIC
                     # ==========================================
+                    # Bind the ACTIVE attacker's adaptation here. Without this, adp_state is
+                    # still whatever the transformation loop above left behind (always p2),
+                    # so p1's announcements and gimmick checks read the wrong player.
+                    adp_state = state[f"{player_tag}_adaptation"]
+                    attacker_is_maxed = is_dynamax_active(adp_state)
+
                     is_status_gimmick = (adp_state['active'] and adp_state['type'] in ['zmove', 'dynamax']) and move.get('class') == 'status'
                     
                     if not is_status_gimmick:
@@ -6156,9 +6342,12 @@ class Combat(commands.Cog):
                     if raw_move_name in TWO_TURN_MOVES and not is_currently_charging:
                         charge_data = TWO_TURN_MOVES[raw_move_name]
                         current_weather = state.get('weather', {'type': 'none'})['type']
-                        
-                        # 1. Biological Bypasses (Harsh Sunlight & Power Herbs)
-                        if current_weather in charge_data.get('skip_weather', []):
+
+                        # 1. Biological Bypasses (Max Moves, Harsh Sunlight & Power Herbs)
+                        if attacker_is_maxed:
+                            # Dynamaxed specimens fire Max Moves, which never charge
+                            combat_log += f"🌪️ **{owner_name}'s** {attacker['name'].capitalize()} unleashed the attack instantly through its Max form!\n"
+                        elif current_weather in charge_data.get('skip_weather', []):
                             pass # Skip the charge turn and fire immediately!
                         elif held_item_check == 'power-herb':
                             combat_log += f"🌿 **{owner_name}'s** {attacker['name'].capitalize()} became fully charged due to its Power Herb!\n"
@@ -6182,6 +6371,32 @@ class Combat(commands.Cog):
                             # 🚨 ABORT THE REST OF THE TURN!
                             continue 
                             
+                    # ==========================================
+                    # 🚨 DELAYED STRIKES (Future Sight / Doom Desire) - PvP
+                    # ==========================================
+                    if raw_move_name == 'encore':
+                        victim_volatiles = defender.setdefault('volatile_statuses', {})
+                        copied = defender.get('last_move_used')
+
+                        if victim_volatiles.get('encore'):
+                            combat_log += f"⚠️ But it failed! **{opp_name}'s** {defender['name'].capitalize()} is already encored!\n"
+                        elif not copied or copied in ENCORE_IMMUNE_MOVES:
+                            combat_log += "⚠️ But it failed! There was no performance to repeat!\n"
+                        else:
+                            victim_volatiles['encore'] = {'move': copied, 'turns': 3}
+                            combat_log += f"👏 **{opp_name}'s** {defender['name'].capitalize()} received an encore and must repeat **{copied.replace('-', ' ').title()}**!\n"
+                        continue
+
+                    if raw_move_name in DELAYED_ATTACK_MOVES:
+                        target_slot = f"{opp_tag}_future"
+
+                        if state.get(target_slot):
+                            combat_log += f"⚠️ But it failed! A strike is already converging on **{opp_name}'s** side!\n"
+                        else:
+                            state[target_slot] = snapshot_delayed_attack(raw_move_name, attacker, move, owner_name)
+                            combat_log += f"🔮 **{owner_name}'s** {attacker['name'].capitalize()} foresaw an attack against **{opp_name}**!\n"
+                        continue
+
                     # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                     if is_currently_charging:
                         del attacker['volatile_statuses']['charging']
@@ -6272,7 +6487,11 @@ class Combat(commands.Cog):
                         if dmg > 0: # The attack successfully landed!
                             if 'rampage' not in attacker['volatile_statuses']:
                                 # Start the rampage (Locks in for 2 to 3 turns)
-                                attacker['volatile_statuses']['rampage'] = {'move': raw_move_name, 'turns': random.randint(1, 2)}
+                                attacker['volatile_statuses']['rampage'] = {
+                                        'move': raw_move_name,
+                                        # Uproar is a fixed 3 attacks; the others roll 2-3
+                                        'turns': 2 if raw_move_name in UPROAR_MOVES else random.randint(1, 2)
+                                    }
                             else:
                                 # Decrement the rampage timer
                                 attacker['volatile_statuses']['rampage']['turns'] -= 1
@@ -6281,7 +6500,7 @@ class Combat(commands.Cog):
                                     
                                     # Rampage ends, apply confusion! (Own Tempo grants immunity)
                                     atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
-                                    if atk_ability != 'own-tempo':
+                                    if atk_ability != 'own-tempo' and raw_move_name not in LOCK_IN_NO_FATIGUE:
                                         attacker['volatile_statuses']['confusion'] = random.randint(2, 5)
                                         combat_log += f"💫 {owner_name.strip()} **{attacker['name'].capitalize()}** became confused due to fatigue!\n"
                         else:
@@ -6307,6 +6526,9 @@ class Combat(commands.Cog):
                         attacker['last_move_failed'] = True
                     else:
                         attacker['last_move_failed'] = False
+
+                    # Encore copies whatever actually resolved here
+                    attacker['last_move_used'] = raw_move_name
                     # ==========================================
 
                     if heal > 0:
@@ -6346,8 +6568,9 @@ class Combat(commands.Cog):
                         defender['status_condition'] = {'name': status, 'duration': -1}
                         combat_log += f"↳ **{opp_name}'s** {defender['name'].capitalize()} was afflicted with {status}!\n"
 
-                    # Only apply the exhaustion tag if the attack actually dealt damage!
-                    if raw_move_name in RECHARGE_MOVES and dmg > 0:
+                    # Only apply the exhaustion tag if the attack actually dealt damage,
+                    # and never while Dynamaxed - Max Moves leave no recharge window.
+                    if raw_move_name in RECHARGE_MOVES and dmg > 0 and not attacker_is_maxed:
                         if 'volatile_statuses' not in attacker:
                             attacker['volatile_statuses'] = {}
                         attacker['volatile_statuses']['recharging'] = True
@@ -6553,6 +6776,59 @@ class Combat(commands.Cog):
                 (new_p1_active, new_p2_active, f"{state['p1'].display_name}'s"),
                 (new_p2_active, new_p1_active, f"{state['p2'].display_name}'s")
             ]
+
+            # ==========================================
+            # 🚨 LOCK-IN UPKEEP (Encore decay / Uproar insomnia) - PvP
+            # ==========================================
+            for mon, _opp, owner_str in combatants:
+                enc = (mon.get('volatile_statuses') or {}).get('encore')
+                if enc:
+                    enc['turns'] -= 1
+                    if enc['turns'] <= 0:
+                        del mon['volatile_statuses']['encore']
+                        combat_log += f"👏 {owner_str} **{mon['name'].capitalize()}**'s encore ended!\n"
+
+            # An active Uproar jolts anything already asleep back awake
+            if is_uproar_active(new_p1_active, new_p2_active):
+                for mon, _opp, owner_str in combatants:
+                    status = mon.get('status_condition') or {}
+                    if status.get('name') == 'sleep':
+                        mon['status_condition'] = None
+                        combat_log += f"📢 {owner_str} **{mon['name'].capitalize()}** was jolted awake by the uproar!\n"
+
+            # ==========================================
+            # 🚨 DELAYED STRIKES LANDING (Future Sight / Doom Desire) - PvP
+            # ==========================================
+            # Resolved against whoever currently holds the slot, which may not be the
+            # specimen that was targeted when the strike was queued.
+            for slot_tag, victim in [('p1', new_p1_active), ('p2', new_p2_active)]:
+                pending = state.get(f"{slot_tag}_future")
+                if not pending:
+                    continue
+
+                # Skip the tick on the turn it was queued so two full turns elapse
+                if pending.get('just_queued'):
+                    pending['just_queued'] = False
+                    continue
+
+                pending['turns'] -= 1
+                if pending['turns'] > 0:
+                    continue
+
+                state[f"{slot_tag}_future"] = None
+                if victim['current_hp'] <= 0:
+                    continue
+
+                strike_dmg, strike_msg = resolve_delayed_strike(
+                    pending, victim,
+                    weather=state['weather']['type'],
+                    terrain=state.get('terrain', {'type': 'none'})['type']
+                )
+                victim['current_hp'] = max(0, victim['current_hp'] - strike_dmg)
+
+                combat_log += f"🔮 **{victim['name'].capitalize()}** took the {pending['move'].replace('-', ' ').title()} attack! (-{strike_dmg} HP)\n"
+                if strike_msg:
+                    combat_log += f"↳ {strike_msg}\n"
 
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
             if state['weather']['type'] != 'none':
