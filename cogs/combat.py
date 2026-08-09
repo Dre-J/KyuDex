@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1858,7 +1858,10 @@ class SwapMenu(discord.ui.View):
             new_active = state['player_team'][selected_index]
             n_active = state['npc_team'][state['active_npc_index']]
 
+            # Boosts belong to the slot, not the specimen: a Swords Dance does not
+            # survive a switch out and back in.
             p_active['volatile_statuses'] = {}
+            leave_field(p_active)
 
             if self.forced:
                 combat_log = f"You sent out **{new_active['name'].capitalize()}**!\n"
@@ -2239,6 +2242,10 @@ class BattleDashboard(discord.ui.View):
 
             # 1. CREATE THE BIOLOGICAL BACKUP
             print("DEBUG: Creating biological backup...")
+            # The transformed form becomes the new baseline, so discard any pending
+            # Guard Split / Power Trick snapshot rather than reverting to it later.
+            clear_base_stat_snapshot(p_active)
+
             state['adaptation']['backup'] = {
                 'name': p_active['name'],
                 'pokedex_id': p_active['pokedex_id'],
@@ -3710,8 +3717,10 @@ class BattleDashboard(discord.ui.View):
                         else:
                             attacker['last_move_failed'] = False
 
-                        # Encore copies whatever actually resolved here
+                        # Encore copies whatever actually resolved here; Conversion 2
+                        # reads the element off it.
                         attacker['last_move_used'] = raw_move_name
+                        attacker['last_move_type'] = move_stats.get('type')
 
                         if msg: combat_log += f"*{msg}*\n"
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
@@ -3833,9 +3842,11 @@ class BattleDashboard(discord.ui.View):
                                 has_bench = any(i != active_idx and p['current_hp'] > 0 for i, p in enumerate(state['npc_team']))
                             
                             if has_bench:
-                                # Biologically flush the outgoing specimen's stat mutations
+                                # Biologically flush the outgoing specimen's stat mutations.
+                                # Baton Pass is exempt because it hands them to the
+                                # replacement instead - see baton_pass_state below.
                                 if effective_move_name != 'baton-pass':
-                                    attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                    leave_field(attacker)
                                     attacker['volatile_statuses'] = {}
                                     
                                 combat_log += f"💨 {owner_prefix.strip()} **{attacker['name'].capitalize()}** retreated to the bench!\n"
@@ -3865,6 +3876,11 @@ class BattleDashboard(discord.ui.View):
                                     state['active_npc_index'] = new_idx
                                     new_active = state['npc_team'][new_idx]
                                     
+                                # 🚨 BATON PASS: hand the built-up state to the replacement
+                                if effective_move_name == 'baton-pass':
+                                    baton_pass_state(attacker, new_active)
+                                    combat_log += f"🎽 {owner_prefix.strip()} **{attacker['name'].capitalize()}** passed the baton!\n"
+
                                 # ==========================================
                                 # RESUME COMBAT: INJECT THE NEW POKEMON INTO THE TIMELINE
                                 # ==========================================
@@ -4006,7 +4022,7 @@ class BattleDashboard(discord.ui.View):
                                     forced_in_poke = state['player_team'][forced_idx]
                                     
                                 # Biologically flush the outgoing specimen's stat mutations
-                                defender['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                leave_field(defender)
                                 defender['volatile_statuses'] = {}
                                 
                                 target_prefix = "The rival's" if is_player else "Your"
@@ -5824,6 +5840,9 @@ class Combat(commands.Cog):
                                 continue
 
                             # 1. Create Biological Backup
+                            # The transformed form becomes the new baseline
+                            clear_base_stat_snapshot(active_poke)
+
                             adp_state['backup'] = {
                                 'name': active_poke['name'],
                                 'pokedex_id': active_poke['pokedex_id'],
@@ -6092,6 +6111,11 @@ class Combat(commands.Cog):
                     # ==========================================
                     
                     # 2. STATE MUTATION: Only update the index if the specimen is alive!
+                    # Boosts belong to the slot: flush the outgoing specimen so a Swords
+                    # Dance cannot be parked on the bench and brought back.
+                    leave_field(attacker)
+                    attacker['volatile_statuses'] = {}
+
                     state[f"{player_tag}_active_index"] = bench_idx
                     
                     combat_log += f"🔄 **{owner_name}** withdrew {attacker['name'].capitalize()} and sent out **{new_active['name'].capitalize()}**!\n"
@@ -6520,8 +6544,10 @@ class Combat(commands.Cog):
                     else:
                         attacker['last_move_failed'] = False
 
-                    # Encore copies whatever actually resolved here
+                    # Encore copies whatever actually resolved here; Conversion 2
+                    # reads the element off it.
                     attacker['last_move_used'] = raw_move_name
+                    attacker['last_move_type'] = move.get('type')
                     # ==========================================
 
                     if heal > 0:
@@ -6579,9 +6605,10 @@ class Combat(commands.Cog):
                         has_bench = any(i != active_idx and p['current_hp'] > 0 for i, p in enumerate(state[f"{player_tag}_team"]))
                         
                         if has_bench:
-                            # Biologically flush the outgoing specimen's stat mutations (UNLESS it is Baton Pass!)
+                            # Biologically flush the outgoing specimen's stat mutations.
+                            # Baton Pass is exempt because it hands them to the replacement.
                             if raw_move_name != 'baton-pass':
-                                attacker['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                                leave_field(attacker)
                                 attacker['volatile_statuses'] = {}
                                 
                             combat_log += f"💨 {owner_name}'s **{attacker['name'].capitalize()}** retreated to the bench!\n"
@@ -6607,7 +6634,12 @@ class Combat(commands.Cog):
                             new_idx = swap_view.selected_index
                             state[f"{player_tag}_active_index"] = new_idx
                             new_active = state[f"{player_tag}_team"][new_idx]
-                            
+
+                            # 🚨 BATON PASS: hand the built-up state to the replacement
+                            if raw_move_name == 'baton-pass':
+                                baton_pass_state(attacker, new_active)
+                                combat_log += f"🎽 **{attacker['name'].capitalize()}** passed the baton!\n"
+
                             combat_log += f"\n{owner_name} sent out **{new_active['name'].capitalize()}**!\n"
                             
                             # 5. Trigger Entry Hazards / Abilities for the new arrival!
@@ -6635,7 +6667,7 @@ class Combat(commands.Cog):
                             forced_in_poke = state[f"{opp_tag}_team"][forced_idx]
                             
                             # Biologically flush the outgoing specimen's stat mutations
-                            defender['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
+                            leave_field(defender)
                             defender['volatile_statuses'] = {}
                             
                             combat_log += f"🌪️ **{opp_name}'s** {defender['name'].capitalize()} was forced out of the battlefield!\n"
@@ -7370,8 +7402,10 @@ class Combat(commands.Cog):
             # --- Process Player 1's Replacement ---
             if c1 and c1['type'] == 'forced_swap':
                 bench_idx = c1['data']
+                leave_field(state['p1_team'][state['p1_active_index']])
                 state['p1_active_index'] = bench_idx
                 new_p1 = state['p1_team'][bench_idx]
+                leave_field(new_p1)
                 combat_log += f"🔄 **{state['p1'].display_name}** deployed **{new_p1['name'].capitalize()}**!\n"
                 
                 # Safely execute hazards
@@ -7392,8 +7426,10 @@ class Combat(commands.Cog):
             # --- Process Player 2's Replacement ---
             if c2 and c2['type'] == 'forced_swap':
                 bench_idx = c2['data']
+                leave_field(state['p2_team'][state['p2_active_index']])
                 state['p2_active_index'] = bench_idx
                 new_p2 = state['p2_team'][bench_idx]
+                leave_field(new_p2)
                 combat_log += f"🔄 **{state['p2'].display_name}** deployed **{new_p2['name'].capitalize()}**!\n"
                 
                 try:
