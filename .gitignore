@@ -21,6 +21,9 @@ assets/
 # Scratch/experimental cog, kept local
 cogs/battletest.py
 
+# Battle-engine test suites, kept local (run with: python tests/run_all.py)
+tests/
+
 # Python
 __pycache__/
 *.py[cod]
