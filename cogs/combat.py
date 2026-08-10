@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -692,7 +692,7 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
         except Exception as e:
             print(f"DEBUG: Failed Primal Reversion: {e}")
 
-    ability = entering_combatant.get('ability', 'none').lower().replace(' ', '-')
+    ability = get_active_ability(entering_combatant)
     name = entering_combatant['name'].capitalize()
     opp_name = opponent['name'].capitalize()
 
@@ -738,7 +738,7 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             w_type, msg = BIOLOGICAL_TRAITS['weather_setters'][ability]
 
             # Geological Weather Extenders
-            held_item = (entering_combatant.get('held_item') or "").lower().replace(' ', '-')
+            held_item = get_active_item(entering_combatant, state.get('field', {}).get('magic_room', 0) > 0)
             duration = 5
 
             if w_type == 'sun' and held_item == 'heat-rock': duration = 8
@@ -1011,7 +1011,7 @@ class PvPDashboard(discord.ui.View):
         active_poke = self.state[team_key][active_idx]
         opp_poke = self.state[opp_team_key][opp_active_idx]
         
-        opp_ability = (opp_poke.get('ability') or '').lower().replace(' ', '-')
+        opp_ability = get_active_ability(opp_poke)
         my_types = active_poke.get('types', [])
         volatiles = active_poke.get('volatile_statuses', {})
         
@@ -1401,7 +1401,7 @@ class PvPMoveMenu(discord.ui.View):
                 # ==========================================
                 # CHOICE ITEM LOCK INTERCEPTOR
                 # ==========================================
-                held_item = (self.active_poke.get('held_item') or "").lower().replace(' ', '-')
+                held_item = get_active_item(self.active_poke, self.state.get('field', {}).get('magic_room', 0) > 0)
                 print(f"DEBUG LOCK 1: Detected held item: {held_item}") # Tripwire 1
                 if held_item in ['choice-band', 'choice-specs', 'choice-scarf']:
                     if 'volatile_statuses' not in self.active_poke:
@@ -1849,7 +1849,7 @@ class SwapMenu(discord.ui.View):
             # ==========================================
             weather_cleared_msg = ""
             if state.get('weather', {}).get('primordial', False):
-                if p_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']:
+                if get_active_ability(p_active) in ['desolate-land', 'primordial-sea', 'delta-stream']:
                     state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
                     weather_cleared_msg = f"🌤️ The primordial weather dissipated as {p_active['name'].capitalize()} retreated!\n"
             # ==========================================
@@ -1872,7 +1872,7 @@ class SwapMenu(discord.ui.View):
                     if hazard_log: combat_log += hazard_log
 
                     #Did the hazards trigger a berry?
-                    berry_log = check_consumables(new_active, "Your")
+                    berry_log = check_consumables(new_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
                     if berry_log: combat_log += berry_log
                 except Exception as e:
                     print(f"DEBUG: Error applying forced swap hazards/abilities: {e}")
@@ -1940,7 +1940,7 @@ class SwapMenu(discord.ui.View):
                     hazard_log = apply_entry_hazards(new_active, state['player_hazards'], TYPE_CHART, "Your")
                     if hazard_log: combat_log += hazard_log
                     # Did the hazards trigger a berry?
-                    berry_log = check_consumables(new_active, "Your")
+                    berry_log = check_consumables(new_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
                     if berry_log: combat_log += berry_log
                 except Exception as e:
                     print(f"DEBUG: Error applying voluntary swap hazards/abilities: {e}")
@@ -1981,7 +1981,8 @@ class SwapMenu(discord.ui.View):
                                     user_hazards=state['npc_hazards'],
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                                    gravity=state.get('field', {}).get('gravity', 0) > 0
+                                    gravity=state.get('field', {}).get('gravity', 0) > 0,
+                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0
                                 )
                                 new_active['current_hp'] = max(0, new_active['current_hp'] - dmg)
                                 if msg: combat_log += f"*{msg}*\n"
@@ -2564,7 +2565,7 @@ class BattleDashboard(discord.ui.View):
             # We disable it if there are no other healthy specimens on the team!
             healthy_bench = [p for i, p in enumerate(state['player_team']) if p['current_hp'] > 0 and i != state['active_player_index']]
             # 🚨 THE ULTIMATE SPATIAL LOCK (Player UI)
-            opp_ability = (n_active.get('ability') or '').lower().replace(' ', '-')
+            opp_ability = get_active_ability(n_active)
             my_types = p_active.get('types', [])
             volatiles = p_active.get('volatile_statuses', {})
 
@@ -2802,7 +2803,7 @@ class BattleDashboard(discord.ui.View):
                         move_name = is_encore['move'] # Encore forces a repeat!
 
                     # APPLY THE PVE CHOICE LOCK 🚨
-                    held_item = (p_active.get('held_item') or "").lower().replace(' ', '-')
+                    held_item = get_active_item(p_active, state.get('field', {}).get('magic_room', 0) > 0)
                     if held_item in ['choice-band', 'choice-specs', 'choice-scarf']:
                         if 'volatile_statuses' not in p_active:
                             p_active['volatile_statuses'] = {}
@@ -2964,7 +2965,7 @@ class BattleDashboard(discord.ui.View):
                     npc_is_rampage = n_active.get('volatile_statuses', {}).get('rampage') 
 
 
-                    opp_ability = (p_active.get('ability') or '').lower().replace(' ', '-')
+                    opp_ability = get_active_ability(p_active)
                     npc_types = n_active.get('types', [])
                     npc_volatiles = n_active.get('volatile_statuses', {})
 
@@ -3061,7 +3062,8 @@ class BattleDashboard(discord.ui.View):
                                             target_hazards=state['npc_hazards'],
                                             user_hazards=state['player_hazards'],
                                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                                            gravity=state.get('field', {}).get('gravity', 0) > 0
+                                            gravity=state.get('field', {}).get('gravity', 0) > 0,
+                                            magic_room=state.get('field', {}).get('magic_room', 0) > 0
                                         )
                                         
                                         n_active['current_hp'] = max(0, n_active['current_hp'] - dmg)
@@ -3219,6 +3221,24 @@ class BattleDashboard(discord.ui.View):
                                                 if n_hp_pct > 0.7: score += 400.0     # Healthy? Set up!
                                                 elif n_hp_pct < 0.3: score -= 5000.0  # Dying? Do NOT set up!
                                                 
+                                            # Ability manipulation (Gastro Acid, Skill Swap...)
+                                            # Only worth a turn if it would actually land -
+                                            # most of these fail flat against the wrong target.
+                                            would_land = ability_move_would_land(m['name'], n_active, p_active)
+                                            if would_land is False:
+                                                score -= 10000.0
+                                            elif would_land:
+                                                score += 600.0
+
+                                            # Item manipulation (Trick, Bestow, Embargo...)
+                                            item_lands = item_move_would_land(
+                                                m['name'], n_active, p_active,
+                                                state.get('field', {}).get('magic_room', 0) > 0)
+                                            if item_lands is False:
+                                                score -= 10000.0
+                                            elif item_lands:
+                                                score += 600.0
+
                                             # Stalling (Smart Protect)
                                             if m['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield']:
                                                 if state.get('npc_used_protect_last_turn'):
@@ -3286,7 +3306,7 @@ class BattleDashboard(discord.ui.View):
                     final_spd = int(raw_spd * multiplier)
                     
                     # --- Equipment Modifiers ---
-                    item = (specimen.get('held_item') or "").lower().replace(' ', '-')
+                    item = get_active_item(specimen, state.get('field', {}).get('magic_room', 0) > 0)
                     if item == 'choice-scarf':
                         final_spd = int(final_spd * 1.5)
 
@@ -3428,7 +3448,8 @@ class BattleDashboard(discord.ui.View):
                                 user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
                                 terrain=state.get('terrain', {'type': 'none'})['type'],
                                 wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                                gravity=state.get('field', {}).get('gravity', 0) > 0
+                                gravity=state.get('field', {}).get('gravity', 0) > 0,
+                                magic_room=state.get('field', {}).get('magic_room', 0) > 0
                             )
                                 attacker['current_hp'] = max(0, attacker['current_hp'] - dmg)
                                 combat_log += f"💥 {msg} (Dealt **{dmg}** damage!)\n"
@@ -3527,7 +3548,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
 
                         is_currently_charging = attacker.get('volatile_statuses', {}).get('charging') == raw_move_name
-                        held_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                        held_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
 
                         # Only the player can Dynamax in PvE, so the NPC never qualifies
                         attacker_is_maxed = bool(is_max_action) or (is_player and is_dynamax_active(state.get('adaptation')))
@@ -3544,6 +3565,7 @@ class BattleDashboard(discord.ui.View):
                                 pass # Skip the charge turn and fire immediately!
                             elif held_item == 'power-herb':
                                 combat_log += f"🌿 **{attacker['name'].capitalize()}** became fully charged due to its Power Herb!\n"
+                                mark_item_consumed(attacker, held_item)
                                 attacker['held_item'] = 'none' 
                             else:
                                 # 2. Lock in the Charge state!
@@ -3607,8 +3629,8 @@ class BattleDashboard(discord.ui.View):
                         is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
 
                         # Safely fetch abilities
-                        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
-                        def_ability = (defender.get('ability') or '').lower().replace(' ', '-')
+                        atk_ability = get_active_ability(attacker)
+                        def_ability = get_active_ability(defender)
                         has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
                         target_is_vulnerable = defender.get('volatile_statuses', {}).get('glaive_rush')
                         
@@ -3662,7 +3684,8 @@ class BattleDashboard(discord.ui.View):
                             user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                            gravity=state.get('field', {}).get('gravity', 0) > 0
+                            gravity=state.get('field', {}).get('gravity', 0) > 0,
+                            magic_room=state.get('field', {}).get('magic_room', 0) > 0
                         )
                         print(f"DEBUG 4: Physics engine success! Damage calculated: {dmg}")
                         
@@ -3689,7 +3712,7 @@ class BattleDashboard(discord.ui.View):
                                         del attacker['volatile_statuses']['rampage']
                                         
                                         # Rampage ends, apply confusion! (Own Tempo grants immunity)
-                                        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+                                        atk_ability = get_active_ability(attacker)
                                         if atk_ability != 'own-tempo' and raw_move_name not in LOCK_IN_NO_FATIGUE:
                                             attacker['volatile_statuses']['confusion'] = random.randint(2, 5)
                                             combat_log += f"💫 {owner_prefix.strip()} **{attacker['name'].capitalize()}** became confused due to fatigue!\n"
@@ -3726,7 +3749,7 @@ class BattleDashboard(discord.ui.View):
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
                         
                         #Check if the damage pushed them below the berry threshold!
-                        berry_log = check_consumables(defender, owner_prefix) 
+                        berry_log = check_consumables(defender, owner_prefix, state.get('field', {}).get('magic_room', 0) > 0)
                         if berry_log: combat_log += berry_log
 
                         if heal_amt > 0:
@@ -3925,7 +3948,7 @@ class BattleDashboard(discord.ui.View):
                             if state.get('weather', {}).get('primordial', False):
                                 combat_log += f"↳ The extreme weather prevented `{effective_move_name}` from taking effect!\n"
                             else:
-                                attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                                attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
                                 weather_rocks = {'sun': 'heat-rock', 'rain': 'damp-rock', 'sand': 'smooth-rock', 'hail': 'icy-rock'}
                                 
                                 duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
@@ -3944,7 +3967,7 @@ class BattleDashboard(discord.ui.View):
                                 new_terrain = max_move_data['terrain']
 
                         if new_terrain:
-                            attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                            attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
                             duration = 8 if attacker_item == 'terrain-extender' else 5
                             
                             if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
@@ -3956,7 +3979,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # 🚨 FIELD STATE DEPLOYMENT
                         # ==========================================
-                        if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0}
+                        if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0, 'magic_room': 0}
                         
                         # 1. Tailwind (Side-Specific)
                         if raw_move_name == 'tailwind':
@@ -3983,6 +4006,14 @@ class BattleDashboard(discord.ui.View):
                             else:
                                 state['field']['wonder_room'] = 5
                                 combat_log += "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
+
+                        elif raw_move_name == 'magic-room':
+                            if state['field']['magic_room'] > 0:
+                                state['field']['magic_room'] = 0
+                                combat_log += "↳ Magic Room wore off, and held items regained their power!\n"
+                            else:
+                                state['field']['magic_room'] = 5
+                                combat_log += "↳ It created a bizarre area in which held items lose their effects!\n"
                                 
                         # 3. Gravity (Global Absolute)
                         elif raw_move_name == 'gravity':
@@ -4141,6 +4172,32 @@ class BattleDashboard(discord.ui.View):
 
             # --- 2. OFFENSIVE RETALIATION ---
             if not is_swapping:
+                # ==========================================
+                # 🚨 LOCK HANDLING (free actions honour the same locks as a real turn)
+                # ==========================================
+                # This is the NPC's free swing when the player uses an item or swaps out,
+                # and it used to pick a move from scratch. Mid-Fly that meant wandering off
+                # to something else and never clearing 'charging' - which in turn strands
+                # 'semi_invulnerable', because the end-of-turn sweep only drops that flag
+                # when nothing is charging. The NPC then sat underground/airborne for the
+                # rest of the battle, untouchable by anything but a Max move.
+                retaliation_volatiles = n_active.setdefault('volatile_statuses', {})
+                npc_is_charging = retaliation_volatiles.get('charging')
+                npc_encore = retaliation_volatiles.get('encore') or {}
+                npc_rampage = retaliation_volatiles.get('rampage') or {}
+
+                forced_move = npc_is_charging or npc_encore.get('move') or npc_rampage.get('move')
+                if forced_move:
+                    locked_in = [m for m in available_moves if m['name'] == forced_move]
+                    if locked_in:
+                        available_moves = locked_in
+
+                # The charge is spent either way. Even if the locked move has no PP left and
+                # the NPC falls back to something else, the flags must not survive the swing.
+                if npc_is_charging:
+                    retaliation_volatiles.pop('charging', None)
+                    retaliation_volatiles.pop('semi_invulnerable', None)
+
                 if not available_moves:
                     npc_move_name = 'struggle'
                     n_move_stats = {'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical', 'target': 'defender', 'ailment': 'none', 'ailment_chance': 0, 'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0, 'healing': 0, 'drain': 0, 'name': 'struggle'}
@@ -4237,7 +4294,8 @@ class BattleDashboard(discord.ui.View):
                                     user_hazards=state['npc_hazards'],
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                                    gravity=state.get('field', {}).get('gravity', 0) > 0
+                                    gravity=state.get('field', {}).get('gravity', 0) > 0,
+                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0
                                 )
                         n_active['current_hp'] = max(0, n_active['current_hp'] - dmg)
                         combat_log += f"💥 {msg} (Dealt **{dmg}** damage!)\n"
@@ -4300,7 +4358,8 @@ class BattleDashboard(discord.ui.View):
                             user_hazards=state['npc_hazards'],       # NPC's own side
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                            gravity=state.get('field', {}).get('gravity', 0) > 0
+                            gravity=state.get('field', {}).get('gravity', 0) > 0,
+                            magic_room=state.get('field', {}).get('magic_room', 0) > 0
                         )
                         
                         p_active['current_hp'] = max(0, p_active['current_hp'] - dmg)
@@ -4308,7 +4367,7 @@ class BattleDashboard(discord.ui.View):
                         if dmg > 0: combat_log += f"You took **{dmg}** damage.\n"
                         
                         # Did the attack trigger the player's Sitrus Berry?
-                        berry_log = check_consumables(p_active, "Your")
+                        berry_log = check_consumables(p_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
                         if berry_log: combat_log += berry_log
 
 
@@ -4426,7 +4485,7 @@ class BattleDashboard(discord.ui.View):
 
                     # Dry Skin Atmospheric Reactions
                     for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]: # Remove the '_' in PvE!
-                        if combatant['current_hp'] > 0 and combatant.get('ability') == 'dry-skin':
+                        if combatant['current_hp'] > 0 and get_active_ability(combatant) == 'dry-skin':
                             weather_type = state['weather']['type']
                             
                             # Takes 1/8th damage in Sunlight
@@ -4471,7 +4530,7 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
                 if combatant['current_hp'] > 0 and not combatant.get('status_condition'):
-                    orb_item = (combatant.get('held_item') or "").lower().replace(' ', '-')
+                    orb_item = get_active_item(combatant, state.get('field', {}).get('magic_room', 0) > 0)
                     
                     if orb_item == 'flame-orb' and 'fire' not in combatant.get('types', []):
                         combatant['status_condition'] = {'name': 'burn', 'duration': -1}
@@ -4483,7 +4542,7 @@ class BattleDashboard(discord.ui.View):
 
             # 2. Pathogen Damage (Burn/Poison)
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
-                ability = (combatant.get('ability') or "").lower().replace(' ', '-')
+                ability = get_active_ability(combatant)
                 if combatant['current_hp'] > 0 and combatant.get('status_condition'):
                     status = combatant['status_condition']['name']
                     if status == 'burn':
@@ -4503,7 +4562,7 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
                 if combatant['current_hp'] > 0:
-                    item = (combatant.get('held_item') or "").lower().replace(' ', '-')
+                    item = get_active_item(combatant, state.get('field', {}).get('magic_room', 0) > 0)
                     max_hp = combatant.get('max_hp', 100)
                     
                     if item == 'leftovers':
@@ -4537,7 +4596,7 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]: 
                 if combatant['current_hp'] > 0:
-                    ability = (combatant.get('ability') or "").lower().replace(' ', '-')
+                    ability = get_active_ability(combatant)
                     eot_trait = BIOLOGICAL_TRAITS.get('end_of_turn', {}).get(ability)
                     
                     if eot_trait:
@@ -4731,6 +4790,13 @@ class BattleDashboard(discord.ui.View):
                     combatant['volatile_statuses'].pop('is_switching', None)
                     combatant['volatile_statuses'].pop('stats_lowered_this_turn', None)
 
+                    # Embargo runs on its own five-turn clock rather than being wiped
+                    if combatant['volatile_statuses'].get('embargo'):
+                        combatant['volatile_statuses']['embargo'] -= 1
+                        if combatant['volatile_statuses']['embargo'] <= 0:
+                            del combatant['volatile_statuses']['embargo']
+                            combat_log += f"✨ **{combatant['name'].capitalize()}** is free of its Embargo!\n"
+
                     # Only wipe it if they are NOT currently charging a two-turn move!
                     if not combatant['volatile_statuses'].get('charging'):
                         combatant['volatile_statuses'].pop('semi_invulnerable', None)
@@ -4739,19 +4805,21 @@ class BattleDashboard(discord.ui.View):
 
             # Final End-of-Turn Berry Sweep
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
-                berry_log = check_consumables(combatant, owner_str)
+                berry_log = check_consumables(combatant, owner_str,
+                                              state.get('field', {}).get('magic_room', 0) > 0)
                 if berry_log: combat_log += berry_log
 
             # 🚨 FIELD STATE DECAY
             if 'field' in state:
-                for field_state in ['trick_room', 'wonder_room', 'gravity']:
+                for field_state in ['trick_room', 'wonder_room', 'gravity', 'magic_room']:
                     if state['field'][field_state] > 0:
                         state['field'][field_state] -= 1
                         if state['field'][field_state] == 0:
                             msgs = {
                                 'trick_room': "The twisted dimensions returned to normal!", 
                                 'wonder_room': "Wonder Room wore off, and stats returned to normal!", 
-                                'gravity': "Gravity returned to normal!"
+                                'gravity': "Gravity returned to normal!",
+                                'magic_room': "Magic Room wore off, and held items regained their power!"
                             }
                             combat_log += f"✨ {msgs[field_state]}\n"
                             
@@ -4772,8 +4840,8 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             weather = state.get('weather', {})
             if weather.get('primordial'):
-                p_is_setter = p_needs_swap and p_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
-                n_is_setter = n_needs_swap and n_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
+                p_is_setter = p_needs_swap and get_active_ability(p_active) in ['desolate-land', 'primordial-sea', 'delta-stream']
+                n_is_setter = n_needs_swap and get_active_ability(n_active) in ['desolate-land', 'primordial-sea', 'delta-stream']
                 
                 if p_is_setter or n_is_setter:
                     state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
@@ -4949,8 +5017,10 @@ class BattleDashboard(discord.ui.View):
                                 
                                 # --- THE EVOLUTION TRIGGER ---
                                 if 'instance_id' in p:
-                                    held_item = (p.get('held_item') or "").lower().replace(' ', '-')
-                                    
+                                    # What it will KEEP, not what a Trick happens to have
+                                    # left in its hands at the final bell.
+                                    held_item = resolve_persisted_item(p).lower().replace(' ', '-')
+
                                     # Block 1: The Everstone Suppressant
                                     if held_item == 'everstone':
                                         rewards_log += f"🪨 **{p['name'].capitalize()}**'s biological mutation was suppressed by its Everstone!\n"
@@ -4978,9 +5048,9 @@ class BattleDashboard(discord.ui.View):
                             if 'instance_id' in p:
                                 await db.execute("""
                                     UPDATE caught_pokemon 
-                                    SET level = ?, experience = ?, held_item = ? 
+                                    SET level = ?, experience = ?, held_item = ?
                                     WHERE instance_id = ?
-                                """, (p['level'], p['experience'], p.get('held_item', 'none'), p['instance_id']))
+                                """, (p['level'], p['experience'], resolve_persisted_item(p), p['instance_id']))
 
                         # ==========================================
                         # DIRECTIVE TRACKER: INVASIVE CULLING
@@ -5654,8 +5724,8 @@ class Combat(commands.Cog):
                 'p1': p1, 
                 'p2': p2,
                 
-                'p1_team': teams[p1_id],
-                'p2_team': teams[p2_id],
+                'p1_team': snapshot_team_items(teams[p1_id]),
+                'p2_team': snapshot_team_items(teams[p2_id]),
                 'p1_active_index': 0,
                 'p2_active_index': 0,
                 
@@ -6024,7 +6094,7 @@ class Combat(commands.Cog):
                 final_spd = base_spd * multiplier
                 
                 # 2. Apply Equipment Modifiers
-                item = (pokemon.get('held_item') or "").lower().replace(' ', '-')
+                item = get_active_item(pokemon, state.get('field', {}).get('magic_room', 0) > 0)
                 if item == 'choice-scarf':
                     final_spd *= 1.5
 
@@ -6105,7 +6175,7 @@ class Combat(commands.Cog):
                     # ==========================================
                     weather_cleared_msg = ""
                     if state.get('weather', {}).get('primordial', False):
-                        if attacker.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']:
+                        if get_active_ability(attacker) in ['desolate-land', 'primordial-sea', 'delta-stream']:
                             state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
                             weather_cleared_msg = f"🌤️ The primordial weather dissipated as {attacker['name'].capitalize()} retreated!\n"
                     # ==========================================
@@ -6358,7 +6428,7 @@ class Combat(commands.Cog):
 
                     raw_move_name = move.get('base_name', move['name']).lower().replace(' ', '-')
                     is_currently_charging = attacker.get('volatile_statuses', {}).get('charging') == raw_move_name
-                    held_item_check = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                    held_item_check = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
 
                     if raw_move_name in TWO_TURN_MOVES and not is_currently_charging:
                         charge_data = TWO_TURN_MOVES[raw_move_name]
@@ -6372,7 +6442,8 @@ class Combat(commands.Cog):
                             pass # Skip the charge turn and fire immediately!
                         elif held_item_check == 'power-herb':
                             combat_log += f"🌿 **{owner_name}'s** {attacker['name'].capitalize()} became fully charged due to its Power Herb!\n"
-                            attacker['held_item'] = 'none' 
+                            mark_item_consumed(attacker, held_item_check)
+                            attacker['held_item'] = 'none'
                         else:
                             # 2. Lock in the Charge state!
                             attacker['volatile_statuses']['charging'] = raw_move_name
@@ -6434,8 +6505,8 @@ class Combat(commands.Cog):
                         is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
 
                         # Safely fetch abilities
-                        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
-                        def_ability = (defender.get('ability') or '').lower().replace(' ', '-')
+                        atk_ability = get_active_ability(attacker)
+                        def_ability = get_active_ability(defender)
                         has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
                         target_is_vulnerable = defender.get('volatile_statuses', {}).get('glaive_rush')
                         
@@ -6489,7 +6560,8 @@ class Combat(commands.Cog):
                         user_hazards=state[f"{player_tag}_hazards"],
                         terrain=state.get('terrain', {'type': 'none'})['type'],
                         wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
-                        gravity=state.get('field', {}).get('gravity', 0) > 0
+                        gravity=state.get('field', {}).get('gravity', 0) > 0,
+                        magic_room=state.get('field', {}).get('magic_room', 0) > 0
                     )
 
                     print(f"DEBUG: Result -> Dmg: {dmg}, Heal: {heal}, Stat Chgs: {stat_changes}")
@@ -6516,7 +6588,7 @@ class Combat(commands.Cog):
                                     del attacker['volatile_statuses']['rampage']
                                     
                                     # Rampage ends, apply confusion! (Own Tempo grants immunity)
-                                    atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
+                                    atk_ability = get_active_ability(attacker)
                                     if atk_ability != 'own-tempo' and raw_move_name not in LOCK_IN_NO_FATIGUE:
                                         attacker['volatile_statuses']['confusion'] = random.randint(2, 5)
                                         combat_log += f"💫 {owner_name.strip()} **{attacker['name'].capitalize()}** became confused due to fatigue!\n"
@@ -6558,7 +6630,7 @@ class Combat(commands.Cog):
                     if dmg > 0: combat_log += f"↳ Dealt **{dmg}** damage.\n"
                     
                     # Check if the damage pushed them below the berry threshold!
-                    berry_log = check_consumables(defender, attacker) 
+                    berry_log = check_consumables(defender, f"{opp_name}'s", state.get('field', {}).get('magic_room', 0) > 0)
                     if berry_log: combat_log += berry_log
 
                     # Apply Stat Changes (Swords Dance, Max Strike speed drop, etc.)
@@ -6708,7 +6780,7 @@ class Combat(commands.Cog):
                         if state.get('weather', {}).get('primordial', False):
                             combat_log += f"↳ The extreme weather prevented `{effective_move_name}` from taking effect!\n"
                         else:
-                            attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                            attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
                             weather_rocks = {'sun': 'heat-rock', 'rain': 'damp-rock', 'sand': 'smooth-rock', 'hail': 'icy-rock'}
                             
                             duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
@@ -6731,7 +6803,7 @@ class Combat(commands.Cog):
                             new_terrain = max_move_data['terrain']
 
                     if new_terrain:
-                        attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
+                        attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
                         duration = 8 if attacker_item == 'terrain-extender' else 5
                         
                         if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
@@ -6743,7 +6815,7 @@ class Combat(commands.Cog):
                     # ==========================================
                     # 🚨 FIELD STATE DEPLOYMENT
                     # ==========================================
-                    if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0}
+                    if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0, 'magic_room': 0}
                     
                     # 1. Tailwind (Side-Specific)
                     if raw_move_name == 'tailwind':
@@ -6770,6 +6842,14 @@ class Combat(commands.Cog):
                         else:
                             state['field']['wonder_room'] = 5
                             combat_log += "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
+
+                    elif raw_move_name == 'magic-room':
+                        if state['field']['magic_room'] > 0:
+                            state['field']['magic_room'] = 0
+                            combat_log += "↳ Magic Room wore off, and held items regained their power!\n"
+                        else:
+                            state['field']['magic_room'] = 5
+                            combat_log += "↳ It created a bizarre area in which held items lose their effects!\n"
                             
                     # 3. Gravity (Global Absolute)
                     elif raw_move_name == 'gravity':
@@ -6887,7 +6967,7 @@ class Combat(commands.Cog):
                                     combat_log += f"{icon} {owner_str} **{combatant['name'].capitalize()}** is buffeted by the {state['weather']['type']}! (-{chip_dmg} HP)\n"
                     # Dry Skin Atmospheric Reactions
                     for combatant, _, owner_str in combatants: # Remove the '_' in PvE!
-                        if combatant['current_hp'] > 0 and combatant.get('ability') == 'dry-skin':
+                        if combatant['current_hp'] > 0 and get_active_ability(combatant) == 'dry-skin':
                             weather_type = state['weather']['type']
                             
                             # Takes 1/8th damage in Sunlight
@@ -6929,14 +7009,15 @@ class Combat(commands.Cog):
             
             # 🚨 FIELD STATE DECAY
             if 'field' in state:
-                for field_state in ['trick_room', 'wonder_room', 'gravity']:
+                for field_state in ['trick_room', 'wonder_room', 'gravity', 'magic_room']:
                     if state['field'][field_state] > 0:
                         state['field'][field_state] -= 1
                         if state['field'][field_state] == 0:
                             msgs = {
                                 'trick_room': "The twisted dimensions returned to normal!", 
                                 'wonder_room': "Wonder Room wore off, and stats returned to normal!", 
-                                'gravity': "Gravity returned to normal!"
+                                'gravity': "Gravity returned to normal!",
+                                'magic_room': "Magic Room wore off, and held items regained their power!"
                             }
                             combat_log += f"✨ {msgs[field_state]}\n"
                             
@@ -6953,7 +7034,7 @@ class Combat(commands.Cog):
             # ==========================================
             for combatant, _, owner_str in combatants: # Use just 'combatant, owner_str' in PvE!
                 if combatant['current_hp'] > 0 and not combatant.get('status_condition'):
-                    orb_item = (combatant.get('held_item') or "").lower().replace(' ', '-')
+                    orb_item = get_active_item(combatant, state.get('field', {}).get('magic_room', 0) > 0)
                     
                     if orb_item == 'flame-orb' and 'fire' not in combatant.get('types', []):
                         combatant['status_condition'] = {'name': 'burn', 'duration': -1}
@@ -6965,7 +7046,7 @@ class Combat(commands.Cog):
 
             # 2. Pathogen Damage (Burn/Poison)
             for combatant, _, owner_str in combatants:
-                ability = (combatant.get('ability') or "").lower().replace(' ', '-')
+                ability = get_active_ability(combatant)
                 if combatant['current_hp'] > 0 and combatant.get('status_condition'):
                     status_name = combatant['status_condition']['name']
                     if status_name == 'burn':
@@ -6983,7 +7064,7 @@ class Combat(commands.Cog):
             # 2.5 Biological Sustenance (Held Items: Leftovers, Black Sludge)
             for combatant, _, owner_str in combatants:
                 if combatant['current_hp'] > 0:
-                    item = (combatant.get('held_item') or "").lower().replace(' ', '-')
+                    item = get_active_item(combatant, state.get('field', {}).get('magic_room', 0) > 0)
                     max_hp = combatant.get('max_hp', 100)
                     
                     if item == 'leftovers':
@@ -7012,7 +7093,7 @@ class Combat(commands.Cog):
             # (Note: In process_turn_end, remember to use `for combatant, owner_str in combatants:`)
             for combatant, _, owner_str in combatants: 
                 if combatant['current_hp'] > 0:
-                    ability = (combatant.get('ability') or "").lower().replace(' ', '-')
+                    ability = get_active_ability(combatant)
                     eot_trait = BIOLOGICAL_TRAITS.get('end_of_turn', {}).get(ability)
                     
                     if eot_trait:
@@ -7173,6 +7254,13 @@ class Combat(commands.Cog):
                     p_active['volatile_statuses'].pop('destiny-bond', None)
                     p_active['volatile_statuses'].pop('is_switching', None)
                     p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
+
+                    # Embargo runs on its own five-turn clock rather than being wiped
+                    if p_active['volatile_statuses'].get('embargo'):
+                        p_active['volatile_statuses']['embargo'] -= 1
+                        if p_active['volatile_statuses']['embargo'] <= 0:
+                            del p_active['volatile_statuses']['embargo']
+                            combat_log += f"✨ **{p_active['name'].capitalize()}** is free of its Embargo!\n"
             # ==========================================
             # PHASE 4: FAINT CHECKS & UI REDRAW
             # ==========================================
@@ -7237,7 +7325,7 @@ class Combat(commands.Cog):
 
                                         # --- EVOLUTION CHECK ---
                                         if 'instance_id' in p:
-                                            held_item = (p.get('held_item') or "").lower().replace(' ', '-')
+                                            held_item = resolve_persisted_item(p).lower().replace(' ', '-')
                                             
                                             # Block 1: The Everstone Suppressant
                                             if held_item == 'everstone':
@@ -7268,7 +7356,7 @@ class Combat(commands.Cog):
                                         UPDATE caught_pokemon
                                         SET level = ?, experience = ?, held_item = ?
                                         WHERE instance_id = ?
-                                    """, (p['level'], p['experience'], p.get('held_item', 'none'), p['instance_id']))
+                                    """, (p['level'], p['experience'], resolve_persisted_item(p), p['instance_id']))
 
                         await db.commit()
 
@@ -7300,8 +7388,8 @@ class Combat(commands.Cog):
             # ==========================================
             weather = state.get('weather', {})
             if weather.get('primordial'):
-                p1_is_setter = p1_needs_swap and new_p1_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
-                p2_is_setter = p2_needs_swap and new_p2_active.get('ability') in ['desolate-land', 'primordial-sea', 'delta-stream']
+                p1_is_setter = p1_needs_swap and get_active_ability(new_p1_active) in ['desolate-land', 'primordial-sea', 'delta-stream']
+                p2_is_setter = p2_needs_swap and get_active_ability(new_p2_active) in ['desolate-land', 'primordial-sea', 'delta-stream']
                 
                 if p1_is_setter or p2_is_setter:
                     state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
@@ -7697,7 +7785,7 @@ class Combat(commands.Cog):
             
             # 5. Initialize the Battle State Memory
             self.active_battles[user_id] = {
-                'player_team': player_team,
+                'player_team': snapshot_team_items(player_team),
                 'npc_team': compiled_team,
                 'active_player_index': 0, # Slot 1
                 'active_npc_index': 0,    # Slot 1
@@ -8491,7 +8579,7 @@ class Combat(commands.Cog):
         print("DEBUG: Database closed. Entering Step 5: State Initialization...")
         try:
             self.active_battles[user_id] = {
-                'player_team': player_team,
+                'player_team': snapshot_team_items(player_team),
                 'npc_team': npc_team,
                 'active_player_index': 0, # Slot 1
                 'active_npc_index': 0,    # Slot 1

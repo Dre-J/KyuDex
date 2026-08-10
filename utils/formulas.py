@@ -14,7 +14,7 @@ def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
     
     # Is the specimen touching the ground? (We check for Flying type!)
     # Note: If you add the 'Levitate' ability later, you will add `and specimen.get('ability') != 'levitate'` here!
-    ability = (specimen.get('ability') or 'none').lower().replace(' ', '-')
+    ability = get_active_ability(specimen)
     
     # Is the specimen touching the ground?
     is_grounded = 'flying' not in types and ability != 'levitate'
@@ -148,69 +148,30 @@ def calculate_stats(base_stats, ivs, evs, level, nature):
         
     return final_stats
 
-def check_consumables(pokemon, owner_str):
-    """Monitors biological thresholds and dynamically consumes items based on the JSON database."""
-    log = ""
-    if pokemon['current_hp'] <= 0:
-        return log
-        
-    held_item = (pokemon.get('held_item') or "").lower().replace(' ', '-')
-    
-    # 🚨 Check the global dictionary!
+def check_consumables(pokemon, owner_str, magic_room=False):
+    """
+    Monitors biological thresholds and consumes berries that have hit their trigger.
+
+    The actual resolution lives in apply_berry_effect, which Teatime, Bug Bite, Pluck and
+    a flung berry also drive - keeping one implementation is what guarantees every route
+    to eating a berry records it for Belch.
+    """
+    if pokemon is None or pokemon['current_hp'] <= 0:
+        return ""
+
+    # An embargoed holder, or one standing in a Magic Room, cannot reach its own berry.
+    held_item = get_active_item(pokemon, magic_room)
     if held_item not in CONSUMABLE_DATABASE:
-        return log
-        
-    item_data = CONSUMABLE_DATABASE[held_item]
-    behavior = item_data.get('type')
-    max_hp = pokemon.get('max_hp', 100)
-    current_hp = pokemon['current_hp']
-    hp_pct = current_hp / max_hp
-    
-    # 1. FLAT HEALING (e.g., Oran Berry)
-    if behavior == 'heal_flat' and hp_pct <= item_data.get('threshold', 0.5):
-        heal_amt = item_data.get('value', 10)
-        pokemon['current_hp'] = min(max_hp, current_hp + heal_amt)
-        pokemon['held_item'] = 'none'
-        log += f"{item_data.get('icon', '🫐')} {owner_str.strip()} **{pokemon['name'].capitalize()}** consumed its {held_item.replace('-', ' ').title()}! (+{heal_amt} HP)\n"
-        
-    # 2. PERCENTAGE HEALING (e.g., Sitrus Berry)
-    elif behavior == 'heal_pct' and hp_pct <= item_data.get('threshold', 0.5):
-        heal_amt = max(1, math.floor(max_hp * item_data.get('value', 0.25)))
-        pokemon['current_hp'] = min(max_hp, current_hp + heal_amt)
-        pokemon['held_item'] = 'none'
-        log += f"{item_data.get('icon', '🍋')} {owner_str.strip()} **{pokemon['name'].capitalize()}** consumed its {held_item.replace('-', ' ').title()}! (+{heal_amt} HP)\n"
-        
-    # 3. STATUS CURES (e.g., Lum, Pecha)
-    elif behavior == 'cure_status' and pokemon.get('status_condition'):
-        status_name = pokemon['status_condition']['name']
-        if item_data.get('target') == 'all' or item_data.get('target') == status_name:
-            pokemon['status_condition'] = None
-            pokemon['held_item'] = 'none'
-            log += f"{item_data.get('icon', '🌿')} {owner_str.strip()} **{pokemon['name'].capitalize()}** consumed its {held_item.replace('-', ' ').title()} and cured its {status_name}!\n"
+        return ""
 
-    # 4. PINCH STAT BOOSTERS (e.g., Liechi, Salac)
-    elif behavior == 'stat_boost' and hp_pct <= item_data.get('threshold', 0.25):
-        stat_target = item_data.get('stat', 'attack')
-        boost_val = item_data.get('value', 1)
-        
-        if 'stat_stages' not in pokemon:
-            pokemon['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
-            
-        current_stage = pokemon['stat_stages'].get(stat_target, 0)
-        
-        if current_stage < 6:
-            pokemon['stat_stages'][stat_target] = min(6, current_stage + boost_val)
-            pokemon['held_item'] = 'none'
-            log += f"{item_data.get('icon', '🔴')} {owner_str.strip()} **{pokemon['name'].capitalize()}** consumed its {held_item.replace('-', ' ').title()}! Its {stat_target.replace('_', ' ').title()} rose!\n"
-
-    return log
+    return apply_berry_effect(pokemon, held_item, ignore_threshold=False, owner_str=owner_str)
 
 def is_grounded(pokemon, gravity_active=False):
     """Evaluates if a specimen is physically touching the battlefield."""
     if gravity_active: return True # 🚨 Gravity grounds everything!
     types = pokemon.get('types', [])
-    ability = (pokemon.get('ability') or '').lower().replace(' ', '-')
-    item = (pokemon.get('held_item') or '').lower().replace(' ', '-')
+    ability = get_active_ability(pokemon)
+    item = get_active_item(pokemon)
     
     if 'flying' in types: return False
     if ability == 'levitate': return False
@@ -431,6 +392,11 @@ def resolve_dynamic_power(move_name, attacker, defender):
     if scaled is not None:
         return scaled
 
+    # Fling reads whatever the user is holding, so the AI and the move button both need
+    # it resolved here rather than at swing time.
+    if move_name == 'fling':
+        return get_fling_power(get_stored_item(attacker)) or None
+
     return get_stat_scaled_power(move_name, attacker, defender)
 
 # ==========================================
@@ -618,6 +584,482 @@ def find_resisting_type(incoming_type, type_chart):
     pool = immunities or resistances
     return random.choice(pool) if pool else None
 
+# ==========================================
+# 🧬 ABILITY REWRITES
+# ==========================================
+# Abilities welded to a species' form or identity. Nothing switches these off, paints over
+# them, or trades them away - they are the machinery that drives the form change itself.
+FORM_LOCKED_ABILITIES = {
+    'as-one-glastrier', 'as-one-spectrier', 'battle-bond', 'comatose', 'commander',
+    'disguise', 'gulp-missile', 'ice-face', 'multitype', 'power-construct',
+    'rks-system', 'schooling', 'shields-down', 'stance-change', 'zen-mode',
+    'zero-to-hero',
+}
+
+# Abilities that re-read the field the instant they land, so handing out a copy is
+# meaningless. Skill Swap can still trade these because it moves them rather than
+# duplicating them.
+FIELD_READING_ABILITIES = {
+    'flower-gift', 'forecast', 'imposter', 'power-of-alchemy', 'receiver', 'trace',
+}
+
+# Gastro Acid / Core Enforcer. Neutralizing Gas is already an abilities-off field, so a
+# second layer of suppression has nothing left to switch off.
+UNSUPPRESSABLE_ABILITIES = FORM_LOCKED_ABILITIES | {'neutralizing-gas'}
+
+# What refuses to be overwritten ON THE TARGET by Worry Seed, Simple Beam or Entrainment.
+# Truant is here because the games will not let you hand the drawback away.
+UNREPLACEABLE_ABILITIES = FORM_LOCKED_ABILITIES | {'truant'}
+
+# What cannot be READ OFF a specimen by Role Play, Doodle or Entrainment.
+UNCOPYABLE_ABILITIES = (FORM_LOCKED_ABILITIES | FIELD_READING_ABILITIES |
+                        {'hunger-switch', 'illusion', 'neutralizing-gas', 'wonder-guard'})
+
+# Skill Swap trades rather than copies, so the field-readers and Wonder Guard are fair game.
+UNSWAPPABLE_ABILITIES = FORM_LOCKED_ABILITIES | {'hunger-switch', 'illusion',
+                                                 'neutralizing-gas'}
+
+# Moves that staple a fixed ability onto the target
+ABILITY_IMPLANT_MOVES = {'worry-seed': 'insomnia', 'simple-beam': 'simple'}
+
+
+def pretty_ability(ability):
+    """'sheer-force' -> 'Sheer Force', for combat log lines."""
+    return (ability or 'none').replace('-', ' ').title()
+
+
+def pretty_item(item):
+    """'choice-scarf' -> 'Choice Scarf', for combat log lines."""
+    return (item or 'none').replace('-', ' ').title()
+
+
+def get_stored_ability(pokemon):
+    """
+    The ability written on the specimen's sheet, normalised, ignoring suppression.
+
+    This is what the ability-manipulation moves read: Role Play can still copy off a
+    target that is sitting under a Gastro Acid, because the ability is switched off
+    rather than erased.
+    """
+    if pokemon is None:
+        return 'none'
+    return (pokemon.get('ability') or 'none').lower().replace(' ', '-')
+
+
+def get_active_ability(pokemon):
+    """
+    The ability actually in force right now - 'none' while it is suppressed.
+
+    Gastro Acid and Core Enforcer switch an ability off without erasing it, so the stored
+    name has to survive in order to come back when the specimen is withdrawn. Every
+    battle-time read goes through here so a suppressed ability is genuinely inert; only
+    code that PERSISTS an ability (evolution, Mega forms) touches ['ability'] directly.
+    """
+    if pokemon is None:
+        return 'none'
+    if (pokemon.get('volatile_statuses') or {}).get('ability_suppressed'):
+        return 'none'
+    return get_stored_ability(pokemon)
+
+
+def set_active_ability(pokemon, new_ability):
+    """
+    Overwrite an ability for the rest of the battle, remembering the original so that
+    restore_base_ability can put it back when the specimen leaves the field.
+    """
+    if pokemon is None:
+        return
+    if '_base_ability' not in pokemon:
+        pokemon['_base_ability'] = pokemon.get('ability')
+    pokemon['ability'] = new_ability
+    # Suppression is a property of the SLOT, not of the ability sitting in it, so a
+    # Worry Seed onto a Gastro Acid'd target lands an Insomnia that is still switched off.
+
+
+def restore_base_ability(pokemon):
+    """
+    Undo ability rewrites and suppression when a specimen is withdrawn. Like stat stages
+    and raw-stat rewrites, these are tied to the slot rather than to the specimen.
+    """
+    if pokemon is None:
+        return
+    if '_base_ability' in pokemon:
+        pokemon['ability'] = pokemon.pop('_base_ability')
+    (pokemon.get('volatile_statuses') or {}).pop('ability_suppressed', None)
+
+
+def suppress_ability(pokemon):
+    """
+    Switch a specimen's ability off. Returns (worked, reason) so Gastro Acid can print a
+    failure line and Core Enforcer can stay quiet.
+    """
+    stored = get_stored_ability(pokemon)
+    if stored in ('none', ''):
+        return False, "There was no ability to suppress!"
+    if stored in UNSUPPRESSABLE_ABILITIES:
+        return False, f"{pretty_ability(stored)} cannot be shut down!"
+    if (pokemon.get('volatile_statuses') or {}).get('ability_suppressed'):
+        return False, "Its ability is already suppressed!"
+
+    pokemon.setdefault('volatile_statuses', {})['ability_suppressed'] = True
+    return True, stored
+
+# The status half of the block - Core Enforcer is scored on its power like any attack.
+ABILITY_MANIPULATION_MOVES = {'gastro-acid', 'worry-seed', 'simple-beam', 'entrainment',
+                              'role-play', 'doodle', 'skill-swap'}
+
+
+def ability_move_would_land(move_name, attacker, defender):
+    """
+    Whether an ability-manipulation move would achieve anything in this matchup.
+
+    The NPC AI reads this so it stops spending turns on a Gastro Acid that is guaranteed
+    to bounce off a Stance Change, or a Skill Swap into a mirror match. Returns None for
+    moves this does not cover.
+
+    This mirrors the guards in calculate_damage rather than sharing them, because the
+    handlers there each need their own failure message. The test suite pins the two
+    together across a matrix of ability pairings so they cannot drift apart.
+    """
+    if move_name not in ABILITY_MANIPULATION_MOVES:
+        return None
+
+    mine = get_stored_ability(attacker)
+    theirs = get_stored_ability(defender)
+
+    if move_name == 'gastro-acid':
+        return (theirs != 'none' and theirs not in UNSUPPRESSABLE_ABILITIES
+                and not (defender.get('volatile_statuses') or {}).get('ability_suppressed'))
+
+    if move_name in ABILITY_IMPLANT_MOVES:
+        return (theirs not in UNREPLACEABLE_ABILITIES
+                and theirs != ABILITY_IMPLANT_MOVES[move_name])
+
+    if move_name == 'entrainment':
+        return (mine != 'none' and mine not in UNCOPYABLE_ABILITIES
+                and theirs not in UNREPLACEABLE_ABILITIES and theirs != mine)
+
+    if move_name in ['role-play', 'doodle']:
+        return (theirs != 'none' and theirs not in UNCOPYABLE_ABILITIES
+                and mine not in FORM_LOCKED_ABILITIES and mine != theirs)
+
+    # skill-swap
+    return (mine not in UNSWAPPABLE_ABILITIES and theirs not in UNSWAPPABLE_ABILITIES
+            and mine != theirs)
+
+# ==========================================
+# 🎒 ITEM INTERACTIONS
+# ==========================================
+# Items bolted to their holder. Nothing swaps, steals, flings, burns or corrodes these.
+UNTRANSFERABLE_ITEMS = {
+    'red-orb', 'blue-orb', 'griseous-orb', 'rusted-sword', 'rusted-shield',
+}
+
+# Items whose name ends in 'ite' but which are ordinary held items, not Mega Stones.
+NON_MEGA_ITE_ITEMS = {'eviolite'}
+
+# Fling's base power is item-dependent. Anything not listed uses FLING_DEFAULT_POWER,
+# which is what the overwhelming majority of held items throw for.
+FLING_DEFAULT_POWER = 30
+FLING_POWER = {
+    'iron-ball': 130,
+    'hard-stone': 100, 'rare-bone': 100,
+    'deep-sea-tooth': 90, 'thick-club': 90, 'grip-claw': 90,
+    'assault-vest': 80, 'dubious-disc': 80, 'electirizer': 80, 'magmarizer': 80,
+    'odd-keystone': 80, 'oval-stone': 80, 'prism-scale': 80, 'protector': 80,
+    'reaper-cloth': 80, 'sachet': 80, 'whipped-dream': 80,
+    'dawn-stone': 80, 'dusk-stone': 80, 'fire-stone': 80, 'ice-stone': 80,
+    'leaf-stone': 80, 'moon-stone': 80, 'shiny-stone': 80, 'sun-stone': 80,
+    'thunder-stone': 80, 'water-stone': 80,
+    'dragon-fang': 70, 'poison-barb': 70,
+    'adamant-orb': 60, 'lustrous-orb': 60, 'damp-rock': 60, 'heat-rock': 60,
+    'macho-brace': 60, 'rocky-helmet': 60, 'stick': 60,
+    'sharp-beak': 50,
+    'eviolite': 40, 'icy-rock': 40, 'lucky-punch': 40,
+    # The featherweight tier - throwing these barely registers
+    'choice-band': 10, 'choice-scarf': 10, 'choice-specs': 10, 'focus-sash': 10,
+    'leftovers': 10, 'air-balloon': 10, 'bright-powder': 10, 'white-herb': 10,
+    'mental-herb': 10, 'shed-shell': 10, 'wide-lens': 10, 'zoom-lens': 10,
+    'muscle-band': 10, 'wise-glasses': 10, 'binding-band': 10, 'safety-goggles': 10,
+    'metronome': 10, 'black-sludge': 10, 'light-clay': 10, 'power-herb': 10,
+}
+
+# Items that inflict something on the target when flung at them
+FLING_AILMENTS = {
+    'flame-orb': 'burn', 'toxic-orb': 'poison', 'poison-barb': 'poison',
+    'light-ball': 'paralysis', 'kings-rock': 'flinch', 'razor-fang': 'flinch',
+}
+
+# Moves that read the target's berry rather than destroying it outright
+BERRY_EATING_MOVES = {'bug-bite', 'pluck'}
+
+# Item moves that can fail outright, and so are worth scoring before they are picked.
+# Incinerate, Bug Bite and Pluck are deliberately absent: they still land their damage
+# when the target has no berry, so there is nothing for the AI to avoid.
+ITEM_MANIPULATION_MOVES = {'bestow', 'trick', 'switcheroo', 'corrosive-gas', 'embargo',
+                           'teatime', 'poltergeist', 'belch', 'fling'}
+
+
+def item_move_would_land(move_name, attacker, defender, magic_room=False):
+    """
+    Whether an item move would achieve anything in this matchup.
+
+    Read by the NPC AI so it stops throwing a Bestow at a target whose hands are already
+    full, or a Belch before it has eaten anything. Returns None for moves not covered.
+
+    Like ability_move_would_land this mirrors the guards in calculate_damage rather than
+    sharing them, because each handler needs its own failure message; the test suite pins
+    the two together across a matrix of item pairings.
+    """
+    if move_name not in ITEM_MANIPULATION_MOVES:
+        return None
+
+    mine = get_stored_item(attacker)
+    theirs = get_stored_item(defender)
+
+    if move_name == 'bestow':
+        return is_transferable_item(mine) and theirs == 'none'
+
+    if move_name in ('trick', 'switcheroo'):
+        if mine == 'none' and theirs == 'none':
+            return False
+        return ((mine == 'none' or is_transferable_item(mine)) and
+                (theirs == 'none' or is_transferable_item(theirs)))
+
+    if move_name == 'corrosive-gas':
+        return is_transferable_item(theirs)
+
+    if move_name == 'embargo':
+        return not (defender.get('volatile_statuses') or {}).get('embargo')
+
+    if move_name == 'teatime':
+        return is_berry(mine) or is_berry(theirs)
+
+    if move_name == 'poltergeist':
+        return is_transferable_item(theirs)
+
+    if move_name == 'belch':
+        return bool(attacker.get('_ate_berry'))
+
+    # fling
+    return (get_active_item(attacker, magic_room) != 'none'
+            and get_fling_power(mine) > 0)
+
+
+def get_stored_item(pokemon):
+    """The item on the specimen's sheet, normalised, ignoring any suppression."""
+    if pokemon is None:
+        return 'none'
+    return (pokemon.get('held_item') or 'none').lower().replace(' ', '-')
+
+
+def get_active_item(pokemon, magic_room=False):
+    """
+    The item whose effects are actually in force - 'none' while they are switched off.
+
+    Embargo and Magic Room suppress what an item DOES without taking it away, so the
+    stored name has to survive: Trick can still swap an embargoed Choice Scarf, and the
+    Scarf comes back to life the moment the room wears off. Passive item effects read
+    this; the moves that physically move or destroy an item read get_stored_item.
+    """
+    if pokemon is None:
+        return 'none'
+    if magic_room:
+        return 'none'
+    if (pokemon.get('volatile_statuses') or {}).get('embargo'):
+        return 'none'
+    return get_stored_item(pokemon)
+
+
+def is_transferable_item(item):
+    """
+    Whether an item can be moved off its holder by Trick, Bestow, Knock Off, Thief,
+    Fling, Incinerate or Corrosive Gas.
+
+    Centralises a guard that was copy-pasted at three sites in the damage formula. The
+    old inline version tested `endswith('ite')`, which silently missed the split Mega
+    Stones - 'charizardite-x' does not end in 'ite', so it could be knocked off.
+    """
+    item = (item or 'none').lower().replace(' ', '-')
+
+    if item in ('none', '') or item in UNTRANSFERABLE_ITEMS:
+        return False
+    if item.endswith('ium-z'):                      # Z-Crystals
+        return False
+
+    stem = item[:-2] if item.endswith(('-x', '-y')) else item
+    if stem.endswith('ite') and stem not in NON_MEGA_ITE_ITEMS:
+        return False
+
+    return True
+
+
+def is_berry(item):
+    """Berries are exactly the botanical database, which is keyed '<name>-berry'."""
+    item = (item or '').lower().replace(' ', '-')
+    return item.endswith('-berry') or item in CONSUMABLE_DATABASE
+
+
+# One-shot equipment that is genuinely spent when it triggers, alongside the berries.
+# Everything NOT in here (Leftovers, Choice items, Mega Stones...) is merely carried, so
+# losing it to Trick or Knock Off has to be undone when the battle ends.
+ONE_USE_ITEMS = {
+    'focus-sash', 'power-herb', 'white-herb', 'mental-herb', 'air-balloon',
+    'absorb-bulb', 'cell-battery', 'luminous-moss', 'snowball', 'weakness-policy',
+    'blunder-policy', 'throat-spray', 'eject-button', 'eject-pack', 'red-card',
+    'room-service', 'electric-seed', 'grassy-seed', 'misty-seed', 'psychic-seed',
+}
+
+
+def is_consumable(item):
+    """Whether an item is used up by its own effect rather than merely being carried."""
+    item = (item or '').lower().replace(' ', '-')
+    return is_berry(item) or item in ONE_USE_ITEMS
+
+
+def mark_item_consumed(pokemon, item):
+    """
+    Record that a specific held item was USED UP - eaten, triggered or burnt away - as
+    opposed to being tricked, bestowed, knocked off or stolen.
+
+    Only a genuine consumption is written back to the database when the battle ends.
+    Everything else is battle-scoped, which is what stops Trick and Bestow from
+    permanently moving equipment between two players' collections.
+
+    The item NAME is recorded rather than a bare flag, because a specimen can lose its
+    own Leftovers to a Trick and then eat a berry it was handed - the Leftovers still has
+    to come home.
+    """
+    if pokemon is None:
+        return
+    item = (item or '').lower().replace(' ', '-')
+    if is_consumable(item):
+        pokemon.setdefault('_consumed_items', set()).add(item)
+
+
+def snapshot_team_items(team):
+    """
+    Record what each specimen walked into the battle holding, so the transfers can be
+    unwound at the end. Safe to call more than once on the same team.
+
+    Returns the team so it can wrap a roster inline where the battle state is built.
+    """
+    for pokemon in team or []:
+        if pokemon is not None and '_original_item' not in pokemon:
+            pokemon['_original_item'] = pokemon.get('held_item') or 'none'
+    return team
+
+
+def item_was_consumed(pokemon):
+    """Whether the specimen used up the exact item it started the battle holding."""
+    if pokemon is None:
+        return False
+    original = (pokemon.get('_original_item') or pokemon.get('held_item') or 'none')
+    return original.lower().replace(' ', '-') in pokemon.get('_consumed_items', set())
+
+
+def resolve_persisted_item(pokemon):
+    """
+    What to write back to caught_pokemon when the battle ends.
+
+    A consumable the specimen actually used up stays gone. Everything else reverts to
+    what it started with, so an item that was tricked, bestowed, knocked off or stolen
+    comes home rather than changing owner permanently.
+    """
+    if pokemon is None:
+        return 'none'
+
+    original = pokemon.get('_original_item')
+    if original is None:
+        # Never snapshotted - an NPC, or a path that predates this. Leave it as found.
+        return pokemon.get('held_item') or 'none'
+
+    return 'none' if item_was_consumed(pokemon) else original
+
+
+def get_fling_power(item):
+    """Base power Fling throws the given item for. 0 means it cannot be flung at all."""
+    item = (item or 'none').lower().replace(' ', '-')
+    if not is_transferable_item(item):
+        return 0
+    if is_berry(item):
+        return 10
+    return FLING_POWER.get(item, FLING_DEFAULT_POWER)
+
+
+def apply_berry_effect(pokemon, item, ignore_threshold=False, owner_str=""):
+    """
+    Resolve one berry on one specimen and return a log line, or '' if nothing happened.
+
+    check_consumables uses this with the normal HP/status thresholds; Teatime, Bug Bite,
+    Pluck and a flung berry force it through with ignore_threshold, which is what "eats
+    the berry regardless" means.
+    """
+    item = (item or '').lower().replace(' ', '-')
+    data = CONSUMABLE_DATABASE.get(item)
+    if not data or pokemon is None or pokemon.get('current_hp', 0) <= 0:
+        return ""
+
+    behavior = data.get('type')
+    max_hp = pokemon.get('max_hp', 100)
+    current_hp = pokemon['current_hp']
+    hp_pct = current_hp / max_hp if max_hp else 1.0
+    who = f"{owner_str.strip()} " if owner_str else ""
+    name = pokemon['name'].capitalize()
+    label = item.replace('-', ' ').title()
+
+    def eaten():
+        # Only empty the slot when the berry actually came off THIS specimen. Bug Bite,
+        # Pluck and a flung berry feed someone else's berry to the eater, and must not
+        # take the eater's own item with it.
+        if get_stored_item(pokemon) == item:
+            pokemon['held_item'] = 'none'
+            mark_item_consumed(pokemon, item)
+        # Belch needs to know this happened, and it has to outlive a switch, so it lives
+        # on the specimen rather than in the volatiles that get wiped on withdrawal.
+        pokemon['_ate_berry'] = True
+
+    if behavior == 'heal_flat' and (ignore_threshold or hp_pct <= data.get('threshold', 0.5)):
+        if not ignore_threshold or current_hp < max_hp:
+            heal_amt = data.get('value', 10)
+            pokemon['current_hp'] = min(max_hp, current_hp + heal_amt)
+            eaten()
+            return f"{data.get('icon', '🫐')} {who}**{name}** consumed its {label}! (+{heal_amt} HP)\n"
+
+    elif behavior == 'heal_pct' and (ignore_threshold or hp_pct <= data.get('threshold', 0.5)):
+        if not ignore_threshold or current_hp < max_hp:
+            heal_amt = max(1, math.floor(max_hp * data.get('value', 0.25)))
+            pokemon['current_hp'] = min(max_hp, current_hp + heal_amt)
+            eaten()
+            return f"{data.get('icon', '🍋')} {who}**{name}** consumed its {label}! (+{heal_amt} HP)\n"
+
+    elif behavior == 'cure_status' and pokemon.get('status_condition'):
+        status_name = pokemon['status_condition']['name']
+        if data.get('target') in ('all', status_name):
+            pokemon['status_condition'] = None
+            eaten()
+            return f"{data.get('icon', '🌿')} {who}**{name}** consumed its {label} and cured its {status_name}!\n"
+
+    elif behavior == 'stat_boost' and (ignore_threshold or hp_pct <= data.get('threshold', 0.25)):
+        stat_target = data.get('stat', 'attack')
+        boost_val = data.get('value', 1)
+        if 'stat_stages' not in pokemon:
+            pokemon['stat_stages'] = {stat: 0 for stat in ALL_STAT_STAGES}
+
+        if pokemon['stat_stages'].get(stat_target, 0) < 6:
+            pokemon['stat_stages'][stat_target] = min(6, pokemon['stat_stages'].get(stat_target, 0) + boost_val)
+            eaten()
+            return (f"{data.get('icon', '🔴')} {who}**{name}** consumed its {label}! "
+                    f"Its {stat_target.replace('_', ' ').title()} rose!\n")
+
+    # Resist berries and the PP restorer have no effect outside their own trigger, but a
+    # forced feed still eats them.
+    if ignore_threshold:
+        eaten()
+        return f"{data.get('icon', '🫐')} {who}**{name}** ate its {label}.\n"
+
+    return ""
+
 # Every stat stage a specimen can carry, including the two the damage formula reads
 # via .get() defaults.
 ALL_STAT_STAGES = ['attack', 'defense', 'sp_atk', 'sp_def', 'speed', 'accuracy', 'evasion']
@@ -662,6 +1104,7 @@ def leave_field(pokemon):
     """Everything that comes off a specimen when it is withdrawn."""
     reset_stat_stages(pokemon)
     restore_base_stats(pokemon)
+    restore_base_ability(pokemon)
 
 def baton_pass_state(outgoing, incoming):
     """
@@ -683,7 +1126,9 @@ def baton_pass_state(outgoing, incoming):
     incoming['volatile_statuses'] = carried
 
     # A raw-stat rewrite is NOT passed on - it belongs to the specimen that used it.
+    # Neither is an ability rewrite or a Gastro Acid: the replacement arrives with its own.
     restore_base_stats(outgoing)
+    restore_base_ability(outgoing)
     reset_stat_stages(outgoing)
     outgoing['volatile_statuses'] = {}
 
@@ -746,7 +1191,7 @@ def snapshot_delayed_attack(move_name, attacker, move, owner_label):
         'level': attacker.get('level', 50),
         'sp_atk': attacker.get('stats', {}).get('sp_atk', 50),
         'types': list(attacker.get('types') or []),
-        'ability': (attacker.get('ability') or 'none'),
+        'ability': get_active_ability(attacker),
         # Two full turns must pass, so the tick on the turn it was queued is skipped
         'turns': 2,
         'just_queued': True,
@@ -827,7 +1272,7 @@ def apply_stat_stage(raw_stat, stage):
         return int(raw_stat * (2.0 / (2.0 + abs(stage))))
     return raw_stat
 
-def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False,
+def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False, magic_room=False,
                          ignore_boosts=False):
     """
     Decides which Attack and Defense stats the damage formula reads, applies stat stages,
@@ -855,7 +1300,7 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
 
     # Assault Vest reinforces the Sp. Def stat itself, so it follows that stat rather than
     # the move - a Psyshock aimed at physical Defense correctly ignores the vest.
-    if (defender.get('held_item') or "").lower().replace(' ', '-') == 'assault-vest':
+    if get_active_item(defender, magic_room) == 'assault-vest':
         spec_def = math.floor(spec_def * 1.5)
 
     # 🚨 WONDER ROOM swaps which of the target's two walls is standing where
@@ -974,8 +1419,8 @@ def estimate_bypass_payload(move_name, move_type, attacker, defender):
     if move_name in OHKO_MOVES:
         atk_lvl = attacker.get('level', 50)
         def_lvl = defender.get('level', 50)
-        atk_ability = (attacker.get('ability') or '').lower().replace(' ', '-')
-        def_ability = (defender.get('ability') or '').lower().replace(' ', '-')
+        atk_ability = get_active_ability(attacker)
+        def_ability = get_active_ability(defender)
 
         # Conditions the engine rejects outright, so the turn would be wasted
         if atk_lvl < def_lvl:
@@ -998,7 +1443,7 @@ def estimate_bypass_payload(move_name, move_type, attacker, defender):
 
     return 0
 
-def apply_survival_floor(defender, damage):
+def apply_survival_floor(defender, damage, magic_room=False):
     """
     Focus Sash, Sturdy, and Endure clamp any otherwise-lethal hit so the specimen
     survives on exactly 1 HP. Returns (final_damage, message_fragment).
@@ -1006,12 +1451,13 @@ def apply_survival_floor(defender, damage):
     if damage < defender.get('current_hp', 0):
         return damage, ""
 
-    def_item = (defender.get('held_item') or "").lower().replace(' ', '-')
-    def_ability = (defender.get('ability') or "").lower().replace(' ', '-')
+    def_item = get_active_item(defender, magic_room)
+    def_ability = get_active_ability(defender)
     at_full_health = defender['current_hp'] == defender.get('max_hp', 100)
 
     if def_item == 'focus-sash' and at_full_health:
         defender['held_item'] = 'none' # The sash disintegrates on use!
+        mark_item_consumed(defender, def_item)
         return defender['current_hp'] - 1, " It hung on using its Focus Sash!"
 
     if def_ability == 'sturdy' and at_full_health:
@@ -1022,7 +1468,7 @@ def apply_survival_floor(defender, damage):
 
     return damage, ""
 
-def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False):
+def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False):
     """
     Acts as the central physics and biology engine for field combat.
     Processes raw damage, parasitic drains, status afflictions, and hybrid field hazards.
@@ -1038,8 +1484,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     move_target = str(move.get('target', ''))
     is_max_move = move_name.startswith('max-') or move_name.startswith('g-max-') or 'max' in move_name
 
-    attacker_item = (attacker.get('held_item') or "").lower().replace(' ', '-')
-    defender_item = (defender.get('held_item') or "").lower().replace(' ', '-')
+    attacker_item = get_active_item(attacker, magic_room)
+    defender_item = get_active_item(defender, magic_room)
     
     # 🚨 GRAVITY MOVE BLOCKER
     if gravity and move_name in ['fly', 'bounce', 'splash', 'jump-kick', 'high-jump-kick']:
@@ -1178,8 +1624,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             return 0, block_msg, None, stat_changes, 0
 
     # Safely catch SQLite NULL values before running string methods!
-    atk_ability = (attacker.get('ability') or 'none').lower().replace(' ', '-')
-    def_ability = (defender.get('ability') or 'none').lower().replace(' ', '-')
+    atk_ability = get_active_ability(attacker)
+    def_ability = get_active_ability(defender)
 
     if move.get('name') == 'confusion-snap':
         level = attacker.get('level', 50)
@@ -1352,6 +1798,172 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         required = TYPE_SHEDDING_MOVES[move_name]
         if required not in (attacker.get('types') or []):
             return 0, f"But it failed! There is no {required.title()} energy left to burn!", 'none', [], 0
+
+    # ==========================================
+    # 🧬 ABILITY REWRITES
+    # ==========================================
+    # All of these read the STORED ability rather than the active one - an ability that is
+    # sitting under a Gastro Acid is switched off, not gone, so it can still be copied.
+    if move_name == 'gastro-acid':
+        worked, detail = suppress_ability(defender)
+        if not worked:
+            return 0, f"But it failed! {detail}", 'none', [], 0
+        return 0, (f"🧪 {defender['name'].capitalize()} was doused in fluid - its "
+                   f"{pretty_ability(detail)} was suppressed!"), 'none', [], 0
+
+    if move_name in ABILITY_IMPLANT_MOVES:
+        implant = ABILITY_IMPLANT_MOVES[move_name]
+        theirs = get_stored_ability(defender)
+
+        if theirs in UNREPLACEABLE_ABILITIES:
+            return 0, (f"But it failed! {defender['name'].capitalize()}'s "
+                       f"{pretty_ability(theirs)} will not budge!"), 'none', [], 0
+        if theirs == implant:
+            return 0, f"But it failed! It already has {pretty_ability(implant)}!", 'none', [], 0
+
+        set_active_ability(defender, implant)
+        note = f"🌱 {defender['name'].capitalize()}'s ability became {pretty_ability(implant)}!"
+
+        # Worry Seed's Insomnia shakes the target awake the moment it lands
+        if implant == 'insomnia' and (defender.get('status_condition') or {}).get('name') == 'sleep':
+            defender['status_condition'] = None
+            note += f" {defender['name'].capitalize()} woke up!"
+
+        return 0, note, 'none', [], 0
+
+    if move_name == 'entrainment':
+        mine = get_stored_ability(attacker)
+        theirs = get_stored_ability(defender)
+
+        if mine in UNCOPYABLE_ABILITIES or mine == 'none':
+            return 0, (f"But it failed! {attacker['name'].capitalize()}'s "
+                       f"{pretty_ability(mine)} cannot be shared!"), 'none', [], 0
+        if theirs in UNREPLACEABLE_ABILITIES:
+            return 0, (f"But it failed! {defender['name'].capitalize()}'s "
+                       f"{pretty_ability(theirs)} will not budge!"), 'none', [], 0
+        if theirs == mine:
+            return 0, "But it failed! They already share that ability!", 'none', [], 0
+
+        set_active_ability(defender, mine)
+        return 0, (f"🔗 {defender['name'].capitalize()} fell into step - its ability "
+                   f"became {pretty_ability(mine)}!"), 'none', [], 0
+
+    # Doodle spreads the copy across the user's whole side; with one specimen per side on
+    # this field that collapses into the same behaviour as Role Play.
+    if move_name in ['role-play', 'doodle']:
+        mine = get_stored_ability(attacker)
+        theirs = get_stored_ability(defender)
+
+        if theirs in UNCOPYABLE_ABILITIES or theirs == 'none':
+            return 0, (f"But it failed! {defender['name'].capitalize()}'s "
+                       f"{pretty_ability(theirs)} cannot be copied!"), 'none', [], 0
+        # Only the form-locked abilities refuse to be painted over here - unlike Worry
+        # Seed, copying your way OUT of a Truant is allowed.
+        if mine in FORM_LOCKED_ABILITIES:
+            return 0, (f"But it failed! {attacker['name'].capitalize()}'s "
+                       f"{pretty_ability(mine)} cannot be replaced!"), 'none', [], 0
+        if mine == theirs:
+            return 0, "But it failed! It already has that ability!", 'none', [], 0
+
+        set_active_ability(attacker, theirs)
+        return 0, (f"🎭 {attacker['name'].capitalize()} mimicked "
+                   f"{defender['name'].capitalize()} and gained "
+                   f"{pretty_ability(theirs)}!"), 'none', [], 0
+
+    if move_name == 'skill-swap':
+        mine = get_stored_ability(attacker)
+        theirs = get_stored_ability(defender)
+
+        if mine in UNSWAPPABLE_ABILITIES or theirs in UNSWAPPABLE_ABILITIES:
+            return 0, "But it failed! Those abilities cannot be traded!", 'none', [], 0
+        if mine == theirs:
+            return 0, "But it failed! They already share that ability!", 'none', [], 0
+
+        set_active_ability(attacker, theirs)
+        set_active_ability(defender, mine)
+        return 0, (f"🔄 {attacker['name'].capitalize()} and {defender['name'].capitalize()} "
+                   f"traded abilities - {pretty_ability(theirs)} for "
+                   f"{pretty_ability(mine)}!"), 'none', [], 0
+
+    # ==========================================
+    # 🎒 ITEM INTERACTIONS
+    # ==========================================
+    # These move or destroy the item itself, so they read the STORED name - an embargoed
+    # Choice Scarf is switched off, not gone, and can still be tricked away.
+    if move_name == 'bestow':
+        mine = get_stored_item(attacker)
+        theirs = get_stored_item(defender)
+
+        if not is_transferable_item(mine):
+            return 0, "But it failed! There is nothing it can hand over!", 'none', [], 0
+        if theirs != 'none':
+            return 0, (f"But it failed! {defender['name'].capitalize()} is already "
+                       f"holding something!"), 'none', [], 0
+
+        attacker['held_item'] = 'none'
+        defender['held_item'] = mine
+        return 0, (f"🎁 {attacker['name'].capitalize()} handed its "
+                   f"{pretty_item(mine)} to {defender['name'].capitalize()}!"), 'none', [], 0
+
+    if move_name in ['trick', 'switcheroo']:
+        mine = get_stored_item(attacker)
+        theirs = get_stored_item(defender)
+
+        if mine == 'none' and theirs == 'none':
+            return 0, "But it failed! Neither of them is holding anything!", 'none', [], 0
+        # A bolted-on item blocks the whole swap rather than half of it
+        if (mine != 'none' and not is_transferable_item(mine)) or \
+           (theirs != 'none' and not is_transferable_item(theirs)):
+            return 0, "But it failed! Those items cannot be swapped!", 'none', [], 0
+
+        attacker['held_item'] = theirs
+        defender['held_item'] = mine
+        return 0, (f"🔀 {attacker['name'].capitalize()} swapped items - it got the "
+                   f"{pretty_item(theirs)} and handed over the "
+                   f"{pretty_item(mine)}!"), 'none', [], 0
+
+    if move_name == 'embargo':
+        if (defender.get('volatile_statuses') or {}).get('embargo'):
+            return 0, "But it failed! It is already under an Embargo!", 'none', [], 0
+
+        defender.setdefault('volatile_statuses', {})['embargo'] = 5
+        return 0, (f"🚫 {defender['name'].capitalize()} is under an Embargo - it "
+                   f"cannot use its item!"), 'none', [], 0
+
+    if move_name == 'corrosive-gas':
+        theirs = get_stored_item(defender)
+        if not is_transferable_item(theirs):
+            return 0, "But it failed! There is nothing to corrode!", 'none', [], 0
+
+        defender['held_item'] = 'none'
+        return 0, (f"🧪 The corrosive gas dissolved {defender['name'].capitalize()}'s "
+                   f"{pretty_item(theirs)}!"), 'none', [], 0
+
+    if move_name == 'teatime':
+        # Everyone on the field is force-fed, holder and attacker alike
+        note = ""
+        for eater in [attacker, defender]:
+            item = get_stored_item(eater)
+            if is_berry(item):
+                note += apply_berry_effect(eater, item, ignore_threshold=True)
+
+        if not note:
+            return 0, "But it failed! Nobody had a berry to eat!", 'none', [], 0
+        return 0, ("🍵 Teatime! Everyone on the field ate their berry! " +
+                   note.replace('\n', ' ').strip()), 'none', [], 0
+
+    # --- Attacks that need something in hand to work at all ---
+    if move_name == 'poltergeist' and not is_transferable_item(get_stored_item(defender)):
+        return 0, "But it failed! The target has no item to turn against it!", 'none', [], 0
+
+    if move_name == 'belch' and not attacker.get('_ate_berry'):
+        return 0, "But it failed! It has not eaten a berry yet!", 'none', [], 0
+
+    if move_name == 'fling':
+        thrown = get_stored_item(attacker)
+        # Embargo and Magic Room stop the user reaching its own item to throw it
+        if get_active_item(attacker, magic_room) == 'none' or get_fling_power(thrown) <= 0:
+            return 0, "But it failed! There is nothing it can fling!", 'none', [], 0
 
     # ==========================================
     # 🚨 RESTORATIVE MOVES
@@ -1565,13 +2177,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
     if move_name in ['seismic-toss', 'night-shade']:
         # These moves always deal damage exactly equal to the user's level
-        fixed_damage, survival_msg = apply_survival_floor(defender, attacker.get('level', 50))
+        fixed_damage, survival_msg = apply_survival_floor(defender, attacker.get('level', 50), magic_room)
         return fixed_damage, survival_msg.strip(), 'none', [], 0
 
     if move_name in ['super-fang', 'natures-madness', 'ruination']:
         # These moves instantly halve the defender's current HP!
         fixed_damage = max(1, math.floor(defender['current_hp'] / 2))
-        fixed_damage, survival_msg = apply_survival_floor(defender, fixed_damage)
+        fixed_damage, survival_msg = apply_survival_floor(defender, fixed_damage, magic_room)
         return fixed_damage, survival_msg.strip(), 'none', [], 0
 
     # ==========================================
@@ -1589,7 +2201,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             # branch returns early and never reaches it.
             attacker['current_hp'] = 0
 
-        fixed_damage, survival_msg = apply_survival_floor(defender, fixed_damage)
+        fixed_damage, survival_msg = apply_survival_floor(defender, fixed_damage, magic_room)
 
         flavor_text = {
             'dragon-rage': "💢 A pulse of pure draconic rage slammed into the target!",
@@ -1634,7 +2246,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # 4. The Lethal Payload
         # We return exactly the defender's current HP to guarantee a faint, unless a
         # Focus Sash or Endure clamps it. (Sturdy already returned outright above.)
-        lethal_damage, survival_msg = apply_survival_floor(defender, defender['current_hp'])
+        lethal_damage, survival_msg = apply_survival_floor(defender, defender['current_hp'], magic_room)
 
         if survival_msg:
             return lethal_damage, survival_msg.strip(), 'none', [], 0
@@ -1658,13 +2270,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # stat stages, Wonder Room and Assault Vest. `effective_class` is what the move
         # actually resolved as, which can differ from its stored category for Photon
         # Geyser and Shell Side Arm.
-        a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room)
+        a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room, magic_room)
 
         # A critical hit reads the same stats with unfavourable stages stripped out. We
         # resolve that variant up front and express it as a ratio, so the multi-strike loop
         # can apply it per hit without recomputing the whole base damage.
         a_crit, d_crit, _ = resolve_combat_stats(move_name, move_class, attacker, defender,
-                                                 wonder_room, ignore_boosts=True)
+                                                 wonder_room, magic_room, ignore_boosts=True)
 
         # Choice items reinforce the offensive stat the move ended up swinging with
         if effective_class == 'physical':
@@ -1764,9 +2376,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
         # KNOCK OFF KINETIC AMPLIFIER
         # Checks if the item exists and isn't a symbiotic un-removable item!
-        is_removable = defender_item not in ['none', 'red-orb', 'blue-orb'] and not defender_item.endswith('ite') and not defender_item.endswith('ium-z')
-        
-        if move_name == 'knock-off' and is_removable:
+        if move_name == 'knock-off' and is_transferable_item(get_stored_item(defender)):
             move_power = math.floor(move_power * 1.5)
         
         # (Defensive stats were already resolved above - Wonder Room and Assault Vest
@@ -1987,6 +2597,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 if move_type == protected_type and (type_multiplier > 1.0 or protected_type == 'normal'):
                     hit_damage = math.floor(hit_damage * 0.5)
                     defender['held_item'] = 'none'
+                    defender['_ate_berry'] = True
+                    mark_item_consumed(defender, defender_item)
                     defender_item = 'none' 
                     msg += f" 🛡️ {defender['name'].capitalize()}'s {protected_type.title()}-Resistance Berry weakened the damage! "
                     
@@ -2195,7 +2807,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 # 🚨 CONTRARY ABILITY INTERCEPTOR
                 active_ability = atk_ability if target == 'attacker' else def_ability
                 if active_ability == 'contrary':
-                    s_change *= -1 
+                    s_change *= -1
+                elif active_ability == 'simple':
+                    s_change *= 2
                 stat_changes.append((target, s_name, s_change))
                 
     # 2. Standard Single-Stat Moves (From the database payload)
@@ -2220,7 +2834,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 active_ability = atk_ability if target == 'attacker' else def_ability
                 if active_ability == 'contrary':
                     stat_change *= -1
-                    
+                elif active_ability == 'simple':
+                    stat_change *= 2
+
                 stat_changes.append((target, stat_name, stat_change))
 
     # ==========================================
@@ -2238,23 +2854,63 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
     # 2. Ecological Equipment Destruction (Knock Off)
     elif move_name == 'knock-off' and damage > 0:
-        target_item_check = (defender.get('held_item') or "").lower().replace(' ', '-')
-        is_removable = target_item_check not in ['none', 'red-orb', 'blue-orb', None] and not target_item_check.endswith('ite') and not target_item_check.endswith('ium-z')
-        
-        if is_removable:
+        target_item_check = get_stored_item(defender)
+
+        if is_transferable_item(target_item_check):
             defender['held_item'] = 'none'
             msg += f" 💥 {attacker['name'].capitalize()} knocked off {defender['name'].capitalize()}'s {target_item_check.replace('-', ' ').title()}!"
 
     # 3. Biological Theft (Thief / Covet)
     elif move_name in ['thief', 'covet'] and damage > 0:
-        atk_item = (attacker.get('held_item') or "none").lower()
-        def_item = (defender.get('held_item') or "none").lower()
+        atk_item = get_stored_item(attacker)
+        def_item = get_stored_item(defender)
         
         # Can only steal if the attacker's hands are empty and the defender's item is removable!
-        if atk_item == 'none' and def_item not in ['none', 'red-orb', 'blue-orb'] and not def_item.endswith('ite') and not def_item.endswith('ium-z'):
+        if atk_item == 'none' and is_transferable_item(def_item):
             attacker['held_item'] = defender.get('held_item')
             defender['held_item'] = 'none'
             msg += f" 🥷 {attacker['name'].capitalize()} stole the target's {def_item.replace('-', ' ').title()}!"
+
+    # 4. Thrown Equipment (Fling) - the item is gone whether or not it did anything
+    elif move_name == 'fling' and damage > 0:
+        thrown = get_stored_item(attacker)
+        attacker['held_item'] = 'none'
+        mark_item_consumed(attacker, thrown)
+        msg += f" 🤾 {attacker['name'].capitalize()} flung its {pretty_item(thrown)}!"
+
+        if is_berry(thrown):
+            # A flung berry is eaten by whoever it hits
+            eaten = apply_berry_effect(defender, thrown, ignore_threshold=True)
+            if eaten:
+                msg += " " + eaten.strip()
+        elif thrown in FLING_AILMENTS:
+            payload = FLING_AILMENTS[thrown]
+            if payload == 'flinch':
+                defender.setdefault('volatile_statuses', {})['flinch'] = True
+                msg += f" {defender['name'].capitalize()} flinched!"
+            elif not (defender.get('status_condition') or {}).get('name'):
+                inflicted_status = payload
+
+    # 5. Scorched Provisions (Incinerate) - burns the berry off the target
+    elif move_name == 'incinerate' and damage > 0:
+        target_item = get_stored_item(defender)
+        if is_berry(target_item) and is_transferable_item(target_item):
+            defender['held_item'] = 'none'
+            mark_item_consumed(defender, target_item)
+            msg += (f" 🔥 {defender['name'].capitalize()}'s {pretty_item(target_item)} "
+                    f"was burnt to a crisp!")
+
+    # 6. Stolen Provisions (Bug Bite / Pluck) - the ATTACKER gets the berry's effect
+    elif move_name in BERRY_EATING_MOVES and damage > 0:
+        target_item = get_stored_item(defender)
+        if is_berry(target_item) and is_transferable_item(target_item):
+            defender['held_item'] = 'none'
+            mark_item_consumed(defender, target_item)
+            snack = apply_berry_effect(attacker, target_item, ignore_threshold=True)
+            msg += (f" 😋 {attacker['name'].capitalize()} ate "
+                    f"{defender['name'].capitalize()}'s {pretty_item(target_item)}!")
+            if snack:
+                msg += " " + snack.strip()
 
     # ==========================================
     # PHASE 4: CELLULAR REGENERATION & KINETIC RECOIL
@@ -2300,6 +2956,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         inflicted_status = None
         msg += f" {defender['name'].capitalize()}'s Ice typing makes it immune to freezing!"
 
+    # Worry Seed's whole purpose is to staple this on, so the sleep lock it grants has to
+    # actually hold. Vital Spirit is the same trait under a different name.
+    if inflicted_status == 'sleep' and def_ability in ['insomnia', 'vital-spirit']:
+        inflicted_status = None
+        msg += (f" {defender['name'].capitalize()}'s {pretty_ability(def_ability)} "
+                f"keeps it wide awake!")
+
     # ==========================================
     # PHASE 6: THERMODYNAMIC REACTIONS
     # ==========================================
@@ -2315,6 +2978,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name in ['explosion', 'self-destruct', 'memento', 'final-gambit']:
         attacker['current_hp'] = 0
         msg += f" {attacker['name'].capitalize()} sacrificed itself!"
+
+    # 🚨 CORE ENFORCER: only bites if the target has already taken its turn. Moving second
+    # is the price of the suppression, so a slower Core Enforcer is the one that lands it.
+    if move_name == 'core-enforcer' and damage > 0 and defender.get('acted_this_turn'):
+        worked, detail = suppress_ability(defender)
+        if worked:
+            msg += (f" 🧬 {defender['name'].capitalize()}'s {pretty_ability(detail)} "
+                    f"was shut down by the Core Enforcer!")
 
     # 🚨 BURN UP / DOUBLE SHOCK: the element is spent powering the attack
     if move_name in TYPE_SHEDDING_MOVES and damage > 0:
@@ -2412,14 +3083,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # This acts as the absolute final filter before damage is returned!
     # ==========================================
     if damage >= defender['current_hp']:
-        def_item = (defender.get('held_item') or "").lower().replace(' ', '-')
-        def_ability = (defender.get('ability') or "").lower().replace(' ', '-')
+        def_item = get_active_item(defender, magic_room)
+        def_ability = get_active_ability(defender)
         
         # 1. Focus Sash
         if def_item == 'focus-sash' and defender['current_hp'] == defender.get('max_hp', 100):
             # Cap the damage so it leaves exactly 1 HP!
             damage = defender['current_hp'] - 1
             defender['held_item'] = 'none' # The item disintegrates!
+            mark_item_consumed(defender, def_item)
             msg += " It hung on using its Focus Sash!"
             
         # 2. Sturdy Ability
