@@ -373,8 +373,8 @@ GMAX_MOVES = {
     'alcremie-gmax': {'type': 'fairy', 'name': 'G-Max Finale', 'healing': 16.5,'target': 'user-and-allies'},
     'copperajah-gmax': {'type': 'steel', 'name': 'G-Max Steelsurge'},
     'duraludon-gmax': {'type': 'dragon', 'name': 'G-Max Depletion'},
-    'urshifu-single-strike-gmax': {'type': 'dark', 'name': 'G-Max Max One Blow'},
-    'urshifu-rapid-strike-gmax': {'type': 'dark', 'name': 'G-Max Max Rapid Flow'}
+    'urshifu-single-strike-gmax': {'type': 'dark', 'name': 'G-Max One Blow'},
+    'urshifu-rapid-strike-gmax': {'type': 'dark', 'name': 'G-Max Rapid Flow'}
 }
 
 # The Biological Payload for Dynamax Particles
@@ -3015,7 +3015,7 @@ class BattleDashboard(discord.ui.View):
                                     p_move_stats['ailment_chance'] = 100
                                     
                                 # Persistent Ecological Disasters
-                                elif p_z_display in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Vocalith']:
+                                elif p_z_display in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Volcalith']:
                                     p_move_stats['status_type'] = p_z_display.lower().replace('g-max ', '')
                                     p_move_stats['status_chance'] = 100
                                     
@@ -6591,7 +6591,7 @@ class Combat(commands.Cog):
                                             # ==========================================
                                             # PERSISTENT ECOLOGICAL DISASTERS
                                             # ==========================================
-                                            elif move['name'] in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max volcalith']:
+                                            elif move['name'] in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Volcalith']:
                                                 # Smuggle the unique effect into the status_type column!
                                                 move['status_type'] = move['name'].lower().replace('g-max ', '')
                                                 move['status_chance'] = 100
