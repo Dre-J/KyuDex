@@ -3637,10 +3637,10 @@ class BattleDashboard(discord.ui.View):
                         if raw_move_name == 'wish':
                             wish_slot = 'player_wish' if is_player else 'npc_wish'
                             if state.get(wish_slot):
-                                combat_log += "⚠️ But it failed! A wish is already pending!" + chr(92) + "n"
+                                combat_log += "⚠️ But it failed! A wish is already pending!\n"
                             else:
                                 state[wish_slot] = snapshot_wish(attacker)
-                                combat_log += f"⭐ {owner_prefix.strip()} **{attacker['name'].capitalize()}** made a wish!" + chr(92) + "n"
+                                combat_log += f"⭐ {owner_prefix.strip()} **{attacker['name'].capitalize()}** made a wish!\n"
                             continue
 
                         if raw_move_name in DELAYED_ATTACK_MOVES:
@@ -4758,7 +4758,7 @@ class BattleDashboard(discord.ui.View):
                     combatant['volatile_statuses']['fairy_lock'] -= 1
                     if combatant['volatile_statuses']['fairy_lock'] <= 0:
                         del combatant['volatile_statuses']['fairy_lock']
-                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!" + chr(92) + "n"
+                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!\n"
 
                 if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
                     # Traps deal exactly 1/8th of Maximum HP per turn
@@ -7324,7 +7324,7 @@ class Combat(commands.Cog):
                     combatant['volatile_statuses']['fairy_lock'] -= 1
                     if combatant['volatile_statuses']['fairy_lock'] <= 0:
                         del combatant['volatile_statuses']['fairy_lock']
-                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!" + chr(92) + "n"
+                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!\n"
 
                 if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
                     # Traps deal exactly 1/8th of Maximum HP per turn
