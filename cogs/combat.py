@@ -3355,6 +3355,11 @@ class BattleDashboard(discord.ui.View):
                 n_speed = get_true_speed(n_active)
 
                 
+                # Sucker Punch reads these: the queue already knows both moves, so the
+                # class of whatever each side locked in is available before either lands.
+                p_active['_committed_move'] = (p_move_stats or {}).get('class')
+                n_active['_committed_move'] = (n_move_stats or {}).get('class')
+
                 player_action = (p_active, n_active, p_move_stats, move_name, True, p_z_display, is_z_move, is_max_move)
                 
                 # The NPC doesn't use gimmicks yet, so we pass False for both
@@ -4745,6 +4750,10 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"🎵 **{combatant['name'].capitalize()}**'s Perish count fell to {count}.\n"
 
                 # MULTI-HIT TRAP DAMAGE
+                # One more turn survived out here, which is what disarms Fake Out
+                if combatant['current_hp'] > 0:
+                    combatant['turns_on_field'] = combatant.get('turns_on_field', 0) + 1
+
                 if combatant['current_hp'] > 0 and combatant.get('volatile_statuses', {}).get('fairy_lock'):
                     combatant['volatile_statuses']['fairy_lock'] -= 1
                     if combatant['volatile_statuses']['fairy_lock'] <= 0:
@@ -6197,6 +6206,10 @@ class Combat(commands.Cog):
                     
                 return int(final_spd) # Ensure we return a clean integer!
 
+            # Sucker Punch reads these - see the PvE side for the reasoning
+            p1_active['_committed_move'] = (c1.get('data') or {}).get('class') if c1.get('type') == 'attack' else None
+            p2_active['_committed_move'] = (c2.get('data') or {}).get('class') if c2.get('type') == 'attack' else None
+
             p1_prio = get_action_priority(c1, p2_is_swapping, p1_active)
             p2_prio = get_action_priority(c2, p1_is_swapping, p2_active)
 
@@ -7303,6 +7316,10 @@ class Combat(commands.Cog):
                         combat_log += f"🎵 **{owner_str} {combatant['name'].capitalize()}**'s Perish count fell to {count}.\n"
 
                 # MULTI-HIT TRAP DAMAGE
+                # One more turn survived out here, which is what disarms Fake Out
+                if combatant['current_hp'] > 0:
+                    combatant['turns_on_field'] = combatant.get('turns_on_field', 0) + 1
+
                 if combatant['current_hp'] > 0 and combatant.get('volatile_statuses', {}).get('fairy_lock'):
                     combatant['volatile_statuses']['fairy_lock'] -= 1
                     if combatant['volatile_statuses']['fairy_lock'] <= 0:

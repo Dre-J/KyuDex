@@ -831,6 +831,39 @@ def drain_move_pp(pokemon, move_name, amount=None):
 
 
 # ==========================================
+# ⚡ PRIORITY-CONDITIONAL MOVES
+# ==========================================
+# Only usable the moment their user arrives on the field.
+FIRST_TURN_MOVES = {'fake-out', 'first-impression'}
+
+# Moves that reorder a SIDE rather than targeting anyone. This engine fields exactly one
+# specimen per side, so there is no third party to shuffle - they are kept here so the
+# behaviour is stated in one place rather than silently doing nothing.
+TURN_ORDER_MOVES = {'quash', 'after-you'}
+
+
+def is_first_turn_out(pokemon):
+    """Whether the specimen has yet to finish a turn on the field."""
+    if pokemon is None:
+        return False
+    return (pokemon.get('turns_on_field') or 0) == 0
+
+
+def is_readying_attack(pokemon):
+    """
+    Whether this specimen is winding up an attack it has not yet thrown - which is the
+    only thing Sucker Punch can interrupt.
+
+    The engines stamp '_committed_move' with the class of whatever was locked in for the
+    turn, so the queue's knowledge of both moves is available before either resolves.
+    """
+    if pokemon is None or pokemon.get('acted_this_turn'):
+        return False
+    committed = pokemon.get('_committed_move')
+    return bool(committed) and committed != 'status'
+
+
+# ==========================================
 # 🛑 TRAPPING
 # ==========================================
 # Moves that pin the target in place until it faints or the trapper leaves.
@@ -1455,6 +1488,9 @@ def break_stale_charge(pokemon):
 
 def leave_field(pokemon):
     """Everything that comes off a specimen when it is withdrawn."""
+    if pokemon is not None:
+        # Coming back in counts as arriving fresh, which is what re-arms Fake Out
+        pokemon['turns_on_field'] = 0
     reset_stat_stages(pokemon)
     restore_base_stats(pokemon)
     restore_base_ability(pokemon)
@@ -2452,6 +2488,26 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                    f"grudge!"), 'none', [], 0
 
     # ==========================================
+    # ==========================================
+    # ⚡ PRIORITY-CONDITIONAL MOVES
+    # ==========================================
+    if move_name in FIRST_TURN_MOVES and not is_first_turn_out(attacker):
+        return 0, (f"But it failed! {attacker['name'].capitalize()} has been out too "
+                   f"long for that!"), 'none', [], 0
+
+    if move_name == 'sucker-punch' and not is_readying_attack(defender):
+        return 0, "But it failed! The target was not winding up an attack!", 'none', [], 0
+
+    # Quash, After You and Instruct all shuffle one SIDE's turn order, and this engine
+    # only ever fields a single specimen per side. There is nobody to move around, so they
+    # say so rather than burning a turn on a silent no-op.
+    if move_name == 'instruct':
+        return 0, "But it failed! There is no ally to instruct!", 'none', [], 0
+
+    if move_name in TURN_ORDER_MOVES:
+        return 0, ("But it failed! With one specimen per side there is no turn order "
+                   "left to rearrange!"), 'none', [], 0
+
     # ==========================================
     # 🪆 SUBSTITUTE
     # ==========================================
@@ -3557,6 +3613,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         swirled = cure_party_status(user_party, attacker)
         if swirled:
             msg += f" 🌸 The swirl cleansed {', '.join(swirled)}!"
+
+    # 🚨 FAKE OUT: the flinch is the whole point, so it is certain rather than a roll
+    if move_name == 'fake-out' and damage > 0:
+        defender.setdefault('volatile_statuses', {})['flinch'] = True
+        msg += f" {defender['name'].capitalize()} flinched!"
 
     # 🚨 EERIE SPELL: saps the move the target last reached for
     if move_name == 'eerie-spell' and damage > 0:
