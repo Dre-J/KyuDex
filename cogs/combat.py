@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -3569,7 +3569,7 @@ class BattleDashboard(discord.ui.View):
                                 attacker['held_item'] = 'none' 
                             else:
                                 # 2. Lock in the Charge state!
-                                attacker['volatile_statuses']['charging'] = raw_move_name
+                                begin_charge(attacker, raw_move_name, charge_data.get('invuln'))
                                 combat_log += f"⏳ {owner_prefix.strip()} **{attacker['name'].capitalize()}** {charge_data['msg']}\n"
                                 
                                 # 3. Apply Turn-1 Stat Boosts (Meteor Beam / Skull Bash)
@@ -3579,10 +3579,8 @@ class BattleDashboard(discord.ui.View):
                                     attacker['stat_stages'][stat_name] = min(6, attacker['stat_stages'].get(stat_name, 0) + amt)
                                     combat_log += f"📈 **{attacker['name'].capitalize()}**'s {stat_name.replace('_', ' ')} rose!\n"
                                     
-                                # 4. Apply Semi-Invulnerability (Dig / Fly)
-                                if 'invuln' in charge_data:
-                                    attacker['volatile_statuses']['semi_invulnerable'] = charge_data['invuln']
-                                
+                                # (Semi-invulnerability for Dig / Fly is applied by begin_charge)
+
                                 # 🚨 ABORT THE REST OF THE TURN!
                                 continue 
                                 
@@ -3615,9 +3613,7 @@ class BattleDashboard(discord.ui.View):
 
                         # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                         if is_currently_charging:
-                            del attacker['volatile_statuses']['charging']
-                            if 'semi_invulnerable' in attacker.get('volatile_statuses', {}):
-                                del attacker['volatile_statuses']['semi_invulnerable']
+                            end_charge(attacker)
                         # ==========================================
                         
                         # ==========================================
@@ -4025,9 +4021,8 @@ class BattleDashboard(discord.ui.View):
                                 
                                 # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
                                 for p in [attacker, defender]:
-                                    if 'semi_invulnerable' in p.get('volatile_statuses', {}) and p['volatile_statuses']['semi_invulnerable'] == 'air':
-                                        del p['volatile_statuses']['semi_invulnerable']
-                                        if 'charging' in p['volatile_statuses']: del p['volatile_statuses']['charging']
+                                    if p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
+                                        end_charge(p)
                                         combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
                                         
                         # ==========================================
@@ -4195,8 +4190,7 @@ class BattleDashboard(discord.ui.View):
                 # The charge is spent either way. Even if the locked move has no PP left and
                 # the NPC falls back to something else, the flags must not survive the swing.
                 if npc_is_charging:
-                    retaliation_volatiles.pop('charging', None)
-                    retaliation_volatiles.pop('semi_invulnerable', None)
+                    end_charge(n_active)
 
                 if not available_moves:
                     npc_move_name = 'struggle'
@@ -4797,9 +4791,11 @@ class BattleDashboard(discord.ui.View):
                             del combatant['volatile_statuses']['embargo']
                             combat_log += f"✨ **{combatant['name'].capitalize()}** is free of its Embargo!\n"
 
-                    # Only wipe it if they are NOT currently charging a two-turn move!
-                    if not combatant['volatile_statuses'].get('charging'):
-                        combatant['volatile_statuses'].pop('semi_invulnerable', None)
+                    # A charge that was pending and did NOT fire this turn means the
+                    # user was stopped, so the move fails and it comes back down.
+                    broken = break_stale_charge(combatant)
+                    if broken:
+                        combat_log += f"✨ **{combatant['name'].capitalize()}**'s {broken.replace('-', ' ').title()} was interrupted!\n"
                     
             print("DEBUG 8: Entering Phase 4 (Survival & Swap Checks)")
 
@@ -6446,7 +6442,7 @@ class Combat(commands.Cog):
                             attacker['held_item'] = 'none'
                         else:
                             # 2. Lock in the Charge state!
-                            attacker['volatile_statuses']['charging'] = raw_move_name
+                            begin_charge(attacker, raw_move_name, charge_data.get('invuln'))
                             combat_log += f"⏳ **{owner_name}'s** {attacker['name'].capitalize()} {charge_data['msg']}\n"
                             
                             # 3. Apply Turn-1 Stat Boosts
@@ -6456,10 +6452,8 @@ class Combat(commands.Cog):
                                 attacker['stat_stages'][stat_name] = min(6, attacker['stat_stages'].get(stat_name, 0) + amt)
                                 combat_log += f"📈 **{owner_name}'s** {attacker['name'].capitalize()}'s {stat_name.replace('_', ' ')} rose!\n"
                                 
-                            # 4. Apply Semi-Invulnerability
-                            if 'invuln' in charge_data:
-                                attacker['volatile_statuses']['semi_invulnerable'] = charge_data['invuln']
-                            
+                            # (Semi-invulnerability for Dig / Fly is applied by begin_charge)
+
                             # 🚨 ABORT THE REST OF THE TURN!
                             continue 
                             
@@ -6491,9 +6485,7 @@ class Combat(commands.Cog):
 
                     # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                     if is_currently_charging:
-                        del attacker['volatile_statuses']['charging']
-                        if 'semi_invulnerable' in attacker.get('volatile_statuses', {}):
-                            del attacker['volatile_statuses']['semi_invulnerable']
+                        end_charge(attacker)
                         # ==========================================
                         
                         # ==========================================
@@ -6861,9 +6853,8 @@ class Combat(commands.Cog):
                             
                             # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
                             for p in [attacker, defender]:
-                                if 'semi_invulnerable' in p.get('volatile_statuses', {}) and p['volatile_statuses']['semi_invulnerable'] == 'air':
-                                    del p['volatile_statuses']['semi_invulnerable']
-                                    if 'charging' in p['volatile_statuses']: del p['volatile_statuses']['charging']
+                                if p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
+                                    end_charge(p)
                                     combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
 
             # ==========================================
@@ -7254,6 +7245,13 @@ class Combat(commands.Cog):
                     p_active['volatile_statuses'].pop('destiny-bond', None)
                     p_active['volatile_statuses'].pop('is_switching', None)
                     p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
+
+                    # A charge that was pending and did NOT fire this turn means the user
+                    # was stopped, so the move fails and it comes back down. PvP had no
+                    # sweep for this at all.
+                    broken = break_stale_charge(p_active)
+                    if broken:
+                        combat_log += f"✨ **{p_active['name'].capitalize()}**'s {broken.replace('-', ' ').title()} was interrupted!\n"
 
                     # Embargo runs on its own five-turn clock rather than being wiped
                     if p_active['volatile_statuses'].get('embargo'):

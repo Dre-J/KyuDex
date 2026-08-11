@@ -1100,11 +1100,79 @@ def restore_base_stats(pokemon):
     if pokemon is not None and '_base_stats' in pokemon:
         pokemon['stats'] = dict(pokemon.pop('_base_stats'))
 
+# ==========================================
+# ⏳ TWO-TURN CHARGE LIFECYCLE
+# ==========================================
+# A charge has exactly three ends: it fires, something cancels it, or the user is stopped
+# from firing it. The engines used to handle only the first two inline, so any path that
+# skipped a charging specimen's action - paralysis, sleep, freeze, flinch, a confusion
+# self-hit, or a target that fainted first - left 'charging' set forever. That in turn
+# stranded 'semi_invulnerable', because the end-of-turn sweep only drops that flag while
+# nothing is charging, and a specimen stuck underground can only be reached by the handful
+# of moves that bypass it (and by Max moves). Routing all three ends through here is what
+# stops the next new skip-path from reintroducing the bug.
+
+def begin_charge(pokemon, move_name, invulnerability=None):
+    """
+    Start a two-turn move. Marked fresh so the end-of-turn sweep knows this charge has not
+    had its chance to fire yet and must be left alone.
+    """
+    if pokemon is None:
+        return
+    volatiles = pokemon.setdefault('volatile_statuses', {})
+    volatiles['charging'] = move_name
+    volatiles['charge_fresh'] = True
+    if invulnerability:
+        volatiles['semi_invulnerable'] = invulnerability
+
+
+def end_charge(pokemon):
+    """
+    Drop a charge and any invulnerability with it - used both when the charged move fires
+    and when something cancels it outright, such as Gravity slamming a flier down.
+    """
+    if pokemon is None:
+        return
+    volatiles = pokemon.get('volatile_statuses') or {}
+    volatiles.pop('charging', None)
+    volatiles.pop('charge_fresh', None)
+    volatiles.pop('semi_invulnerable', None)
+
+
+def break_stale_charge(pokemon):
+    """
+    End-of-turn housekeeping for two-turn moves.
+
+    A charge started THIS turn is left alone. A charge that was already pending and did
+    not fire means the user was stopped, so the move fails and it comes back down - which
+    is what the games do when a Pokemon cannot execute the second turn of Fly.
+
+    Returns the name of the broken move, or None if there was nothing to break.
+    """
+    if pokemon is None:
+        return None
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+    charging = volatiles.get('charging')
+    if not charging:
+        volatiles.pop('charge_fresh', None)
+        volatiles.pop('semi_invulnerable', None)
+        return None
+
+    if volatiles.pop('charge_fresh', None):
+        # Turn one. It still has its shot next turn.
+        return None
+
+    end_charge(pokemon)
+    return charging
+
+
 def leave_field(pokemon):
     """Everything that comes off a specimen when it is withdrawn."""
     reset_stat_stages(pokemon)
     restore_base_stats(pokemon)
     restore_base_ability(pokemon)
+    end_charge(pokemon)
 
 def baton_pass_state(outgoing, incoming):
     """
