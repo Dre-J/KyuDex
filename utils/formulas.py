@@ -1375,6 +1375,72 @@ def snapshot_delayed_attack(move_name, attacker, move, owner_label):
         'just_queued': True,
     }
 
+# ==========================================
+# 💊 PARTY HEALS AND CLEANSES
+# ==========================================
+# Moves that scrub status off the WHOLE party, bench included. That is the entire point
+# of them, so they are the one family that needs to reach past the two specimens on the
+# field - hence the user_party argument threaded into calculate_damage.
+PARTY_CURE_MOVES = {'heal-bell', 'aromatherapy', 'sparkly-swirl'}
+
+# Restore a quarter of maximum HP and scrub status off the user's side. With one specimen
+# per side on this field, "the user's side" is the user.
+SIDE_RESTORE_MOVES = {'jungle-healing', 'lunar-blessing'}
+
+
+def cure_party_status(party, fallback=None):
+    """
+    Clear every major status across a whole party.
+
+    Returns the names actually cured so the caller can report them and can treat an empty
+    result as "but it failed". Falls back to a single specimen when no roster was handed
+    in, which keeps the move working rather than silently doing nothing.
+    """
+    roster = [m for m in (party or []) if m is not None]
+    if not roster and fallback is not None:
+        roster = [fallback]
+
+    cured = []
+    for member in roster:
+        if (member.get('status_condition') or {}).get('name'):
+            member['status_condition'] = None
+            cured.append(member.get('name', 'a specimen').capitalize())
+    return cured
+
+
+def snapshot_wish(attacker):
+    """
+    Wish banks HALF THE WISHER'S maximum HP and pays it out a turn later to whoever is
+    standing in the slot - which is what makes it a switch-in heal rather than a
+    self-heal. Mirrors the delayed-strike queue.
+    """
+    return {
+        'heal': max(1, math.floor(attacker.get('max_hp', 100) / 2)),
+        'name': attacker.get('name', 'a specimen'),
+        'turns': 1,
+        'just_queued': True,
+    }
+
+
+def resolve_wish(pending, occupant):
+    """Pay out a queued Wish to whoever now holds the slot. Returns (healed, message)."""
+    if not pending or occupant is None or occupant.get('current_hp', 0) <= 0:
+        return 0, ""
+
+    wisher = str(pending.get('name', 'a specimen')).capitalize()
+    max_hp = occupant.get('max_hp', 100)
+    before = occupant.get('current_hp', 0)
+
+    if before >= max_hp:
+        return 0, (f"💫 {wisher}'s wish came true, but "
+                   f"{occupant['name'].capitalize()} was already at full health!")
+
+    occupant['current_hp'] = min(max_hp, before + pending.get('heal', 0))
+    gained = occupant['current_hp'] - before
+    return gained, (f"💫 {wisher}'s wish came true! "
+                    f"{occupant['name'].capitalize()} restored {gained} HP!")
+
+
 def resolve_delayed_strike(pending, defender, weather='none', terrain='none'):
     """
     Fires a queued strike at whoever now occupies the target slot. Uses the launcher's
@@ -1646,7 +1712,7 @@ def apply_survival_floor(defender, damage, magic_room=False):
 
     return damage, ""
 
-def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False):
+def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False, user_party=None):
     """
     Acts as the central physics and biology engine for field combat.
     Processes raw damage, parasitic drains, status afflictions, and hybrid field hazards.
@@ -2211,6 +2277,65 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
     # ==========================================
     # ==========================================
+    # 💊 PARTY HEALS AND CLEANSES
+    # ==========================================
+    # These sit ahead of the generic healing block because several of them carry a
+    # database healing percentage aimed at the wrong specimen - Purify's 50% belongs to
+    # the USER, not the target it is curing.
+    if move_name in PARTY_CURE_MOVES and move_class == 'status':
+        cured = cure_party_status(user_party, attacker)
+        if not cured:
+            return 0, "But it failed! Nobody had anything to cure!", 'none', [], 0
+
+        chime = "🔔" if move_name == 'heal-bell' else "🌸"
+        return 0, (f"{chime} A soothing wave washed over the party - "
+                   f"{', '.join(cured)} recovered!"), 'none', [], 0
+
+    if move_name in SIDE_RESTORE_MOVES:
+        max_hp = attacker.get('max_hp', 100)
+        before = attacker.get('current_hp', 0)
+        had_status = (attacker.get('status_condition') or {}).get('name')
+
+        if before >= max_hp and not had_status:
+            return 0, "But it failed! There was nothing to mend!", 'none', [], 0
+
+        attacker['current_hp'] = min(max_hp, before + max(1, math.floor(max_hp * 0.25)))
+        attacker['status_condition'] = None
+        gained = attacker['current_hp'] - before
+
+        note = f"🌿 {attacker['name'].capitalize()} restored {gained} HP"
+        note += f" and shook off its {had_status}!" if had_status else "!"
+        return 0, note, 'none', [], 0
+
+    if move_name == 'take-heart':
+        # Never fails: even at full health with no status it still steels the user.
+        had_status = (attacker.get('status_condition') or {}).get('name')
+        attacker['status_condition'] = None
+
+        note = f"💗 {attacker['name'].capitalize()} took heart"
+        note += f" and shook off its {had_status}!" if had_status else "!"
+        return 0, note, 'none', [('attacker', 'special-attack', 1),
+                                 ('attacker', 'special-defense', 1)], 0
+
+    if move_name == 'purify':
+        if not (defender.get('status_condition') or {}).get('name'):
+            return 0, "But it failed! There was nothing to purify!", 'none', [], 0
+
+        cleansed = defender['status_condition']['name']
+        defender['status_condition'] = None
+
+        # The user is repaid with half its own maximum HP - the database's 50% is aimed
+        # at the target, which would otherwise heal the wrong specimen entirely.
+        max_hp = attacker.get('max_hp', 100)
+        before = attacker.get('current_hp', 0)
+        attacker['current_hp'] = min(max_hp, before + max(1, math.floor(max_hp * 0.5)))
+        gained = attacker['current_hp'] - before
+
+        note = (f"💜 {attacker['name'].capitalize()} purified "
+                f"{defender['name'].capitalize()}'s {cleansed}")
+        note += f" and restored {gained} HP!" if gained else "!"
+        return 0, note, 'none', [], 0
+
     # ==========================================
     # 🚨 RESTORATIVE MOVES
     # ==========================================
@@ -2237,6 +2362,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif weather in ['rain', 'heavy-rain', 'sandstorm', 'hail', 'snow']:
                 fraction = 0.25
         elif move_name == 'shore-up' and weather == 'sandstorm':
+            fraction = 2.0 / 3.0
+        # Floral Healing draws on the ground it is standing on rather than the sky
+        elif move_name == 'floral-healing' and terrain == 'grassy':
             fraction = 2.0 / 3.0
 
         # A few of these mend the opponent rather than the user
@@ -3224,6 +3352,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name in ['explosion', 'self-destruct', 'memento', 'final-gambit']:
         attacker['current_hp'] = 0
         msg += f" {attacker['name'].capitalize()} sacrificed itself!"
+
+    # 🚨 SPARKLY SWIRL: an attack that also scrubs the user's own party clean
+    if move_name == 'sparkly-swirl' and damage > 0:
+        swirled = cure_party_status(user_party, attacker)
+        if swirled:
+            msg += f" 🌸 The swirl cleansed {', '.join(swirled)}!"
 
     # 🚨 EERIE SPELL: saps the move the target last reached for
     if move_name == 'eerie-spell' and damage > 0:

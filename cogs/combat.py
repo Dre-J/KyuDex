@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1991,6 +1991,7 @@ class SwapMenu(discord.ui.View):
                                     weather=state.get('weather', {'type': 'none'})['type'], 
                                     target_hazards=state['player_hazards'], # The NPC attacks the Player's habitat
                                     user_hazards=state['npc_hazards'],
+                                    user_party=state['npc_team'],
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                     gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -3080,6 +3081,7 @@ class BattleDashboard(discord.ui.View):
                                             weather=state.get('weather', {'type': 'none'})['type'],
                                             target_hazards=state['npc_hazards'],
                                             user_hazards=state['player_hazards'],
+                                            user_party=state['player_team'],
                                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                             gravity=state.get('field', {}).get('gravity', 0) > 0,
                                             magic_room=state.get('field', {}).get('magic_room', 0) > 0
@@ -3465,6 +3467,7 @@ class BattleDashboard(discord.ui.View):
                                 weather=state.get('weather', {'type': 'none'})['type'],
                                 target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
                                 user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                            user_party=state['player_team'] if is_player else state['npc_team'],
                                 terrain=state.get('terrain', {'type': 'none'})['type'],
                                 wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                 gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -3619,6 +3622,15 @@ class BattleDashboard(discord.ui.View):
                                 combat_log += f"👏 **{defender['name'].capitalize()}** received an encore and must repeat **{copied.replace('-', ' ').title()}**!\n"
                             continue
 
+                        if raw_move_name == 'wish':
+                            wish_slot = 'player_wish' if is_player else 'npc_wish'
+                            if state.get(wish_slot):
+                                combat_log += "⚠️ But it failed! A wish is already pending!" + chr(92) + "n"
+                            else:
+                                state[wish_slot] = snapshot_wish(attacker)
+                                combat_log += f"⭐ {owner_prefix.strip()} **{attacker['name'].capitalize()}** made a wish!" + chr(92) + "n"
+                            continue
+
                         if raw_move_name in DELAYED_ATTACK_MOVES:
                             target_slot = 'npc_future' if is_player else 'player_future'
                             launcher = owner_prefix.strip() or ("Your" if is_player else "The rival's")
@@ -3697,6 +3709,7 @@ class BattleDashboard(discord.ui.View):
                             weather=state.get('weather', {'type': 'none'})['type'],
                             target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
                             user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                            user_party=state['player_team'] if is_player else state['npc_team'],
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                             gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -4312,6 +4325,7 @@ class BattleDashboard(discord.ui.View):
                                     weather=state.get('weather', {'type': 'none'})['type'], 
                                     target_hazards=state['player_hazards'], # NPC attacks the player's side
                                     user_hazards=state['npc_hazards'],
+                                    user_party=state['npc_team'],
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                     gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -4376,6 +4390,7 @@ class BattleDashboard(discord.ui.View):
                             weather=state.get('weather', {'type': 'none'})['type'],
                             target_hazards=state['player_hazards'], # NPC attacks the player's side
                             user_hazards=state['npc_hazards'],       # NPC's own side
+                            user_party=state['npc_team'],
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                             gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -4481,6 +4496,30 @@ class BattleDashboard(discord.ui.View):
                 combat_log += f"🔮 {victim_label} **{victim['name'].capitalize()}** took the {pending['move'].replace('-', ' ').title()} attack! (-{strike_dmg} HP)\n"
                 if strike_msg:
                     combat_log += f"*{strike_msg}*\n"
+
+            # ==========================================
+            # 🚨 WISHES COMING TRUE - PvE
+            # ==========================================
+            # Banked on the wisher, paid out to whoever holds the slot a turn later, so a
+            # Wish passed to a switch-in heals the replacement rather than the wisher.
+            for wish_key, patient in [('player_wish', p_active), ('npc_wish', n_active)]:
+                pending_wish = state.get(wish_key)
+                if not pending_wish:
+                    continue
+
+                # Skip the tick on the turn it was made so a full turn elapses
+                if pending_wish.get('just_queued'):
+                    pending_wish['just_queued'] = False
+                    continue
+
+                pending_wish['turns'] -= 1
+                if pending_wish['turns'] > 0:
+                    continue
+
+                state[wish_key] = None
+                _, wish_msg = resolve_wish(pending_wish, patient)
+                if wish_msg:
+                    combat_log += wish_msg + "\n"
 
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
             weather = state.get('weather', {'type': 'none', 'duration': 0})
@@ -5780,7 +5819,11 @@ class Combat(commands.Cog):
 
                 # Pending Future Sight / Doom Desire strikes, keyed by the side they will HIT
                 'p1_future': None,
-                'p2_future': None
+                'p2_future': None,
+
+                # Pending Wishes, keyed by the side they will HEAL
+                'p1_wish': None,
+                'p2_wish': None
             }
 
             # 3. Map BOTH players to the exact same dictionary in RAM!
@@ -6512,6 +6555,15 @@ class Combat(commands.Cog):
                             combat_log += f"👏 **{opp_name}'s** {defender['name'].capitalize()} received an encore and must repeat **{copied.replace('-', ' ').title()}**!\n"
                         continue
 
+                    if raw_move_name == 'wish':
+                        wish_slot = f"{player_tag}_wish"
+                        if state.get(wish_slot):
+                            combat_log += "⚠️ But it failed! A wish is already pending!\n"
+                        else:
+                            state[wish_slot] = snapshot_wish(attacker)
+                            combat_log += f"⭐ **{owner_name}'s** {attacker['name'].capitalize()} made a wish!\n"
+                        continue
+
                     if raw_move_name in DELAYED_ATTACK_MOVES:
                         target_slot = f"{opp_tag}_future"
 
@@ -6589,6 +6641,7 @@ class Combat(commands.Cog):
                         weather=state['weather']['type'], 
                         target_hazards=state[f"{opp_tag}_hazards"],
                         user_hazards=state[f"{player_tag}_hazards"],
+                        user_party=state[f"{player_tag}_team"],
                         terrain=state.get('terrain', {'type': 'none'})['type'],
                         wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                         gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -6984,6 +7037,30 @@ class Combat(commands.Cog):
                 combat_log += f"🔮 **{victim['name'].capitalize()}** took the {pending['move'].replace('-', ' ').title()} attack! (-{strike_dmg} HP)\n"
                 if strike_msg:
                     combat_log += f"↳ {strike_msg}\n"
+
+            # ==========================================
+            # 🚨 WISHES COMING TRUE - PvP
+            # ==========================================
+            # Banked on the wisher, paid out to whoever holds the slot a turn later, so a
+            # Wish passed to a switch-in heals the replacement rather than the wisher.
+            for wish_tag, patient in [('p1', new_p1_active), ('p2', new_p2_active)]:
+                pending_wish = state.get(f"{wish_tag}_wish")
+                if not pending_wish:
+                    continue
+
+                # Skip the tick on the turn it was made so a full turn elapses
+                if pending_wish.get('just_queued'):
+                    pending_wish['just_queued'] = False
+                    continue
+
+                pending_wish['turns'] -= 1
+                if pending_wish['turns'] > 0:
+                    continue
+
+                state[f"{wish_tag}_wish"] = None
+                _, wish_msg = resolve_wish(pending_wish, patient)
+                if wish_msg:
+                    combat_log += wish_msg + "\n"
 
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
             if state['weather']['type'] != 'none':
