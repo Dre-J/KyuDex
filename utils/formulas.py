@@ -831,6 +831,134 @@ def drain_move_pp(pokemon, move_name, amount=None):
 
 
 # ==========================================
+# 🎭 COPY AND MIMICRY MOVES
+# ==========================================
+# These do not resolve themselves - they name a DIFFERENT move, which the engines then
+# fetch and run in their place. Resolution is kept here, pure and testable; the engines
+# only have to hydrate the payload and re-dispatch.
+COPY_MOVES = {'mirror-move', 'copycat', 'me-first', 'assist', 'metronome'}
+
+# Nothing in the mimicry family can copy another member of it, or Struggle - both would
+# either recurse or have nothing behind them to copy.
+UNCOPYABLE_MOVES = {
+    'assist', 'copycat', 'me-first', 'metronome', 'mimic', 'mirror-move', 'sketch',
+    'sleep-talk', 'nature-power', 'struggle', 'transform',
+}
+
+# Me First rewards going first with half again the power.
+ME_FIRST_MULTIPLIER = 1.5
+
+
+def can_be_copied(move_name):
+    """Whether the mimicry family is allowed to reach for this move."""
+    return bool(move_name) and move_name not in UNCOPYABLE_MOVES
+
+
+def resolve_copied_move(move_name, attacker, defender, party=None,
+                        last_move_overall=None, pool=None):
+    """
+    Which move a copy move actually performs.
+
+    Returns (chosen_move, reason). `chosen_move` is None when the copy fails, and
+    `reason` is the line to print in that case.
+
+    Each member reaches somewhere different:
+      * Mirror Move - whatever the target last threw
+      * Copycat     - the last move used by ANYONE, which the engines track on the battle
+      * Me First    - what the target is winding up RIGHT NOW, so it needs to move first
+      * Assist      - a random move off the rest of the party
+      * Metronome   - anything at all
+    """
+    if move_name == 'mirror-move':
+        copied = defender.get('last_move_used')
+        if not can_be_copied(copied):
+            return None, "But it failed! There was no move to mirror!"
+        return copied, ""
+
+    if move_name == 'copycat':
+        if not can_be_copied(last_move_overall):
+            return None, "But it failed! There was nothing to copy!"
+        return last_move_overall, ""
+
+    if move_name == 'me-first':
+        # Only works while the target is still winding up, and never on a status move
+        if defender.get('acted_this_turn'):
+            return None, "But it failed! The target has already moved!"
+        incoming = defender.get('_committed_move_name')
+        if defender.get('_committed_move') == 'status':
+            return None, "But it failed! Me First cannot steal a status move!"
+        if not can_be_copied(incoming):
+            return None, "But it failed! There was nothing to take!"
+        return incoming, ""
+
+    if move_name == 'assist':
+        # Every move the REST of the party knows - the user's own are not eligible
+        borrowed = [m.get('name')
+                    for mate in (party or []) if mate is not None and mate is not attacker
+                    for m in (mate.get('moves') or [])
+                    if can_be_copied(m.get('name'))]
+        if not borrowed:
+            return None, "But it failed! There was no ally move to borrow!"
+        return random.choice(borrowed), ""
+
+    if move_name == 'metronome':
+        options = list(pool or [])
+        if not options:
+            return None, "But it failed! Its finger would not budge!"
+        return random.choice(options), ""
+
+    return None, ""
+
+
+def apply_sketch(attacker, defender):
+    """
+    Sketch overwrites its own slot with the target's last move PERMANENTLY.
+
+    The in-memory half happens here; the specimen is stamped with '_sketched' so the
+    engine knows to write the new movelist back to caught_pokemon. Doing the database
+    work here would put I/O inside the damage formula, which nothing else does.
+    """
+    copied = defender.get('last_move_used')
+    if not can_be_copied(copied):
+        return False, "But it failed! There was no move to sketch!"
+
+    slot = find_move_slot(attacker, 'sketch')
+    if slot is None:
+        return False, "But it failed! There was no slot to overwrite!"
+    if find_move_slot(attacker, copied) is not None:
+        return False, "But it failed! It already knows that move!"
+
+    slot['name'] = copied
+    attacker['_sketched'] = copied
+    return True, (f"✏️ {attacker['name'].capitalize()} sketched "
+                  f"{copied.replace('-', ' ').title()} - and will not forget it!")
+
+
+def apply_mimic(attacker, defender):
+    """
+    Mimic overwrites its own slot with the target's last move for the rest of the battle.
+
+    Returns (worked, message). The replacement carries 5 PP rather than the copied move's
+    own, and the original comes back when the specimen is withdrawn, which is why the
+    engines never persist it.
+    """
+    copied = defender.get('last_move_used')
+    if not can_be_copied(copied):
+        return False, "But it failed! There was no move to mimic!"
+
+    slot = find_move_slot(attacker, 'mimic')
+    if slot is None:
+        return False, "But it failed! There was no slot to overwrite!"
+    if find_move_slot(attacker, copied) is not None:
+        return False, "But it failed! It already knows that move!"
+
+    slot['name'] = copied
+    slot['pp'] = slot['max_pp'] = 5
+    return True, (f"🎭 {attacker['name'].capitalize()} mimicked "
+                  f"{copied.replace('-', ' ').title()}!")
+
+
+# ==========================================
 # ⚡ PRIORITY-CONDITIONAL MOVES
 # ==========================================
 # Only usable the moment their user arrives on the field.
@@ -2488,6 +2616,19 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                    f"grudge!"), 'none', [], 0
 
     # ==========================================
+    # ==========================================
+    # 🎭 COPY AND MIMICRY MOVES
+    # ==========================================
+    # The five that PERFORM another move are re-dispatched by the engines before they
+    # ever reach here, so anything arriving with one of those names failed to resolve.
+    if move_name == 'mimic':
+        worked, note = apply_mimic(attacker, defender)
+        return 0, note, 'none', [], 0
+
+    if move_name == 'sketch':
+        worked, note = apply_sketch(attacker, defender)
+        return 0, note, 'none', [], 0
+
     # ==========================================
     # ⚡ PRIORITY-CONDITIONAL MOVES
     # ==========================================
