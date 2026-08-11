@@ -831,6 +831,63 @@ def drain_move_pp(pokemon, move_name, amount=None):
 
 
 # ==========================================
+# 🛑 TRAPPING
+# ==========================================
+# Moves that pin the target in place until it faints or the trapper leaves.
+HARD_TRAP_MOVES = {'anchor-shot', 'block', 'mean-look', 'spider-web',
+                   'spirit-shackle', 'thousand-waves'}
+
+# Fairy Lock binds the WHOLE field rather than one target, and only for the next turn.
+FAIRY_LOCK_TURNS = 2
+
+
+def can_be_trapped(pokemon):
+    """
+    Ghost-types walk straight through anything that would hold them.
+
+    The engines already honoured this for Shadow Tag but not for the trapping MOVES,
+    which set their flag unconditionally - so a Spider Web used to pin a Gengar.
+    """
+    if pokemon is None:
+        return False
+    return 'ghost' not in (pokemon.get('types') or [])
+
+
+def apply_trap(pokemon):
+    """Pin a specimen in place. Returns whether it actually took hold."""
+    if not can_be_trapped(pokemon):
+        return False
+    pokemon.setdefault('volatile_statuses', {})['hard_trapped'] = True
+    return True
+
+
+def is_trapped(pokemon, opponent=None):
+    """
+    Whether this specimen is barred from switching out.
+
+    One home for what the engines had copy-pasted at three sites, so the Ghost exemption
+    cannot apply to some trapping sources and not others. Fairy Lock is deliberately
+    outside that exemption: it pins the whole field rather than targeting anybody.
+    """
+    if pokemon is None:
+        return False
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+    if volatiles.get('fairy_lock'):
+        return True
+
+    if not can_be_trapped(pokemon):
+        return False
+
+    if volatiles.get('partially_trapped', 0) > 0 or volatiles.get('hard_trapped'):
+        return True
+    if opponent is not None and get_active_ability(opponent) == 'shadow-tag':
+        return True
+
+    return False
+
+
+# ==========================================
 # 🪆 SUBSTITUTE
 # ==========================================
 # A decoy that soaks hits until its own HP runs out. Built here because Shed Tail is
@@ -3218,13 +3275,23 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # These only apply if the move is a status move, or if the kinetic strike dealt damage!
     if damage > 0 or move.get('class') == 'status':
-        if move_name in ['anchor-shot', 'spirit-shackle', 'block', 'mean-look', 'spider-web']:
-            defender['volatile_statuses']['hard_trapped'] = True
-            msg += f" 🛑 {defender['name'].capitalize()} can no longer escape!"
-            
+        if move_name in HARD_TRAP_MOVES:
+            if apply_trap(defender):
+                msg += f" 🛑 {defender['name'].capitalize()} can no longer escape!"
+            else:
+                msg += f" 👻 {defender['name'].capitalize()} slipped free - Ghosts cannot be held!"
+
+        elif move_name == 'fairy-lock':
+            # Binds the whole field for the following turn rather than targeting anyone,
+            # so it is the one trap a Ghost cannot walk out of.
+            for bound in (attacker, defender):
+                bound.setdefault('volatile_statuses', {})['fairy_lock'] = FAIRY_LOCK_TURNS
+            msg += " 🔒 No one will be able to run away next turn!"
+
         elif move_name == 'jaw-lock':
-            attacker['volatile_statuses']['hard_trapped'] = True
-            defender['volatile_statuses']['hard_trapped'] = True
+            # Binds them together - but only whoever can actually be bound
+            apply_trap(attacker)
+            apply_trap(defender)
             msg += " 🛑 Neither Pokémon can run away!"
 
         elif move_name == 'no-retreat':

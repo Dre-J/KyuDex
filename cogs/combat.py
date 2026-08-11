@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1018,11 +1018,7 @@ class PvPDashboard(discord.ui.View):
         volatiles = active_poke.get('volatile_statuses', {})
         
         # 🚨 THE ULTIMATE SPATIAL LOCK (PvP)
-        is_trapped = (
-            volatiles.get('partially_trapped', 0) > 0 or 
-            volatiles.get('hard_trapped') or
-            (opp_ability == 'shadow-tag' and 'ghost' not in my_types) # Ghost-types are immune to trapping!
-        )
+        is_trapped = specimen_is_trapped(active_poke, opp_poke)
         if is_trapped:
             return await interaction.response.send_message("⚠️ Your active specimen is trapped and cannot be withdrawn!", ephemeral=True)
         # ==========================================
@@ -2620,11 +2616,7 @@ class BattleDashboard(discord.ui.View):
             my_types = p_active.get('types', [])
             volatiles = p_active.get('volatile_statuses', {})
 
-            is_trapped = (
-                volatiles.get('partially_trapped', 0) > 0 or 
-                volatiles.get('hard_trapped') or
-                (opp_ability == 'shadow-tag' and 'ghost' not in my_types) # Ghost-types are immune!
-            )
+            is_trapped = specimen_is_trapped(p_active, n_active)
             swap_btn = discord.ui.Button(label="🔄 Swap Specimen", style=discord.ButtonStyle.secondary, custom_id="action_swap", row=1)
             swap_btn.disabled = len(healthy_bench) == 0 or is_trapped
             swap_btn.callback = self.handle_swap
@@ -3014,11 +3006,7 @@ class BattleDashboard(discord.ui.View):
                     npc_types = n_active.get('types', [])
                     npc_volatiles = n_active.get('volatile_statuses', {})
 
-                    npc_is_trapped = (
-                        npc_volatiles.get('partially_trapped', 0) > 0 or 
-                        npc_volatiles.get('hard_trapped') or
-                        (opp_ability == 'shadow-tag' and 'ghost' not in npc_types)
-                    )
+                    npc_is_trapped = specimen_is_trapped(n_active, p_active)
                     # --- PHASE 2 - VOLUNTARY FLIGHT AI ---
                     # 1. Gather the benched team
                     alive_bench = [i for i, p in enumerate(state['npc_team']) if p['current_hp'] > 0 and i != state['active_npc_index']]
@@ -4757,6 +4745,12 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"🎵 **{combatant['name'].capitalize()}**'s Perish count fell to {count}.\n"
 
                 # MULTI-HIT TRAP DAMAGE
+                if combatant['current_hp'] > 0 and combatant.get('volatile_statuses', {}).get('fairy_lock'):
+                    combatant['volatile_statuses']['fairy_lock'] -= 1
+                    if combatant['volatile_statuses']['fairy_lock'] <= 0:
+                        del combatant['volatile_statuses']['fairy_lock']
+                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!" + chr(92) + "n"
+
                 if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
                     # Traps deal exactly 1/8th of Maximum HP per turn
                     trap_dmg = max(1, math.floor(combatant.get('max_hp', 100) / 8))
@@ -7309,6 +7303,12 @@ class Combat(commands.Cog):
                         combat_log += f"🎵 **{owner_str} {combatant['name'].capitalize()}**'s Perish count fell to {count}.\n"
 
                 # MULTI-HIT TRAP DAMAGE
+                if combatant['current_hp'] > 0 and combatant.get('volatile_statuses', {}).get('fairy_lock'):
+                    combatant['volatile_statuses']['fairy_lock'] -= 1
+                    if combatant['volatile_statuses']['fairy_lock'] <= 0:
+                        del combatant['volatile_statuses']['fairy_lock']
+                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!" + chr(92) + "n"
+
                 if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
                     # Traps deal exactly 1/8th of Maximum HP per turn
                     trap_dmg = max(1, math.floor(combatant.get('max_hp', 100) / 8))
