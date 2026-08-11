@@ -490,7 +490,7 @@ SPREAD_TARGETS = ['all-opponents', 'all-other-pokemon', 'all-pokemon']
 
 PROTECT_MOVES = STANDARD_SHIELDS + list(SELECTIVE_GUARDS)
 
-def shield_blocks(protect_type, move_class, move_priority, move_target):
+def shield_blocks(protect_type, move_class, move_priority, move_target, move_name=None):
     """
     Decides whether an active shield actually stops this particular move.
 
@@ -498,6 +498,10 @@ def shield_blocks(protect_type, move_class, move_priority, move_target):
     Quick Guard does nothing against a normal-priority attack and a Crafty Shield does
     nothing against a damaging one.
     """
+    # Urshifu's pair break through everything, Max Guard included
+    if move_name in GMAX_SHIELD_BREAKERS:
+        return False
+
     if protect_type in SELECTIVE_GUARDS:
         kind = SELECTIVE_GUARDS[protect_type]
         if kind == 'status':
@@ -828,6 +832,264 @@ def drain_move_pp(pokemon, move_name, amount=None):
     taken = current if amount is None else min(current, amount)
     slot['pp'] = current - taken
     return taken
+
+
+# ==========================================
+# 🌪️ G-MAX SIGNATURE EFFECTS
+# ==========================================
+# Most of the G-Max roster expresses itself through the ordinary move payload - an
+# ailment, a stat drop, a lingering hazard - and the engines already inject those. The
+# ones gathered here cannot: their signature is a mechanic rather than a payload, so each
+# reaches for machinery built elsewhere in this file.
+GMAX_EFFECTS = {
+    'G-Max Chi Strike':  'crit_boost',
+    'G-Max Depletion':   'sap_pp',
+    'G-Max Finale':      'heal_party',
+    'G-Max Meltdown':    'torment',
+    'G-Max Replenish':   'recycle',
+    'G-Max Resonance':   'aurora_veil',
+    'G-Max Sandblast':   'bind',
+    'G-Max Sweetness':   'cure_party',
+    'G-Max Terror':      'trap',
+    'G-Max Wind Rage':   'clear_hazards',
+}
+
+# The three that hit for a flat 160 and shrug off the target's ability entirely.
+GMAX_FIXED_POWER = {
+    'G-Max Drum Solo': 160, 'G-Max Fireball': 160, 'G-Max Hydrosnipe': 160,
+}
+
+# Urshifu's pair go straight through Protect, Detect and Max Guard.
+GMAX_SHIELD_BREAKERS = {'G-Max One Blow', 'G-Max Rapid Flow'}
+
+# What Depletion takes, and how long Sandblast holds on for.
+GMAX_PP_DRAIN = 2
+GMAX_BIND_TURNS = (4, 5)
+
+
+def gmax_ignores_ability(move_name):
+    """Whether this G-Max move pays no attention to the target's ability."""
+    return move_name in GMAX_FIXED_POWER
+
+
+def apply_gmax_effect(move_name, attacker, defender, user_party=None,
+                      user_hazards=None, target_hazards=None, held_item='none'):
+    """
+    Fire a G-Max move's signature effect. Returns a log fragment, or '' when there is
+    nothing to say.
+
+    Deliberately reuses the mechanics built for ordinary moves - the trap helper, the PP
+    drain, the party cleanse, the screen dictionary - rather than growing a parallel set.
+    """
+    effect = GMAX_EFFECTS.get(move_name)
+    if not effect:
+        return ""
+
+    name = defender['name'].capitalize() if defender else 'the target'
+    mine = attacker['name'].capitalize() if attacker else 'the user'
+
+    if effect == 'crit_boost':
+        attacker.setdefault('volatile_statuses', {})['focus_energy'] = True
+        return f" 🥊 {mine} is fired up - its critical hit ratio rose!"
+
+    if effect == 'sap_pp':
+        sapped = defender.get('last_move_used')
+        taken = drain_move_pp(defender, sapped, GMAX_PP_DRAIN) if sapped else 0
+        if not taken:
+            return ""
+        return (f" 🔻 {name}'s {sapped.replace('-', ' ').title()} lost {taken} PP!")
+
+    if effect == 'heal_party':
+        mended = []
+        for member in (user_party or [attacker]):
+            if member is None or member.get('current_hp', 0) <= 0:
+                continue
+            max_hp = member.get('max_hp', 100)
+            if member['current_hp'] >= max_hp:
+                continue
+            member['current_hp'] = min(max_hp, member['current_hp'] + max(1, math.floor(max_hp / 6)))
+            mended.append(member['name'].capitalize())
+        return f" 🍰 The whole party shared the treat - {', '.join(mended)} recovered!" if mended else ""
+
+    if effect == 'torment':
+        if (defender.get('volatile_statuses') or {}).get('torment'):
+            return ""
+        defender.setdefault('volatile_statuses', {})['torment'] = True
+        return f" 🔩 {name} cannot use the same move twice in a row!"
+
+    if effect == 'recycle':
+        # The item-persistence work already records exactly what was used up
+        spent = sorted(attacker.get('_consumed_items') or [])
+        if not spent or get_stored_item(attacker) != 'none':
+            return ""
+        restored = spent[0]
+        attacker['held_item'] = restored
+        attacker['_consumed_items'].discard(restored)
+        return f" 🫐 {mine} found its {pretty_item(restored)} again!"
+
+    if effect == 'aurora_veil':
+        if user_hazards is None or user_hazards.get('aurora-veil', 0) > 0:
+            return ""
+        # Unlike the ordinary move, this one needs no hail behind it
+        user_hazards['aurora-veil'] = 8 if held_item == 'light-clay' else 5
+        return f" 🌌 An aurora rose to shield {mine}'s team!"
+
+    if effect == 'bind':
+        volatiles = defender.setdefault('volatile_statuses', {})
+        if volatiles.get('partially_trapped', 0) > 0:
+            return ""
+        volatiles['partially_trapped'] = random.randint(*GMAX_BIND_TURNS)
+        return f" 🌪️ {name} was caught in a swirl of sand!"
+
+    if effect == 'cure_party':
+        cured = cure_party_status(user_party, attacker)
+        return f" 🍏 The sweetness revived {', '.join(cured)}!" if cured else ""
+
+    if effect == 'trap':
+        if apply_trap(defender):
+            return f" 👻 {name} was gripped by fear and cannot escape!"
+        return f" 👻 {name} shrugged off the terror!"
+
+    if effect == 'clear_hazards':
+        swept = 0
+        for side in (user_hazards, target_hazards):
+            if side is None:
+                continue
+            for hazard in ['stealth-rock', 'spikes', 'toxic-spikes', 'sticky-web', 'steelsurge']:
+                if side.get(hazard):
+                    side[hazard] = False if isinstance(side.get(hazard), bool) else 0
+                    swept += 1
+        return " 🌀 The gale swept the battlefield clean!" if swept else ""
+
+    return ""
+
+
+# ==========================================
+# 🎭 COPY AND MIMICRY MOVES
+# ==========================================
+# These do not resolve themselves - they name a DIFFERENT move, which the engines then
+# fetch and run in their place. Resolution is kept here, pure and testable; the engines
+# only have to hydrate the payload and re-dispatch.
+COPY_MOVES = {'mirror-move', 'copycat', 'me-first', 'assist', 'metronome'}
+
+# Nothing in the mimicry family can copy another member of it, or Struggle - both would
+# either recurse or have nothing behind them to copy.
+UNCOPYABLE_MOVES = {
+    'assist', 'copycat', 'me-first', 'metronome', 'mimic', 'mirror-move', 'sketch',
+    'sleep-talk', 'nature-power', 'struggle', 'transform',
+}
+
+# Me First rewards going first with half again the power.
+ME_FIRST_MULTIPLIER = 1.5
+
+
+def can_be_copied(move_name):
+    """Whether the mimicry family is allowed to reach for this move."""
+    return bool(move_name) and move_name not in UNCOPYABLE_MOVES
+
+
+def resolve_copied_move(move_name, attacker, defender, party=None,
+                        last_move_overall=None, pool=None):
+    """
+    Which move a copy move actually performs.
+
+    Returns (chosen_move, reason). `chosen_move` is None when the copy fails, and
+    `reason` is the line to print in that case.
+
+    Each member reaches somewhere different:
+      * Mirror Move - whatever the target last threw
+      * Copycat     - the last move used by ANYONE, which the engines track on the battle
+      * Me First    - what the target is winding up RIGHT NOW, so it needs to move first
+      * Assist      - a random move off the rest of the party
+      * Metronome   - anything at all
+    """
+    if move_name == 'mirror-move':
+        copied = defender.get('last_move_used')
+        if not can_be_copied(copied):
+            return None, "But it failed! There was no move to mirror!"
+        return copied, ""
+
+    if move_name == 'copycat':
+        if not can_be_copied(last_move_overall):
+            return None, "But it failed! There was nothing to copy!"
+        return last_move_overall, ""
+
+    if move_name == 'me-first':
+        # Only works while the target is still winding up, and never on a status move
+        if defender.get('acted_this_turn'):
+            return None, "But it failed! The target has already moved!"
+        incoming = defender.get('_committed_move_name')
+        if defender.get('_committed_move') == 'status':
+            return None, "But it failed! Me First cannot steal a status move!"
+        if not can_be_copied(incoming):
+            return None, "But it failed! There was nothing to take!"
+        return incoming, ""
+
+    if move_name == 'assist':
+        # Every move the REST of the party knows - the user's own are not eligible
+        borrowed = [m.get('name')
+                    for mate in (party or []) if mate is not None and mate is not attacker
+                    for m in (mate.get('moves') or [])
+                    if can_be_copied(m.get('name'))]
+        if not borrowed:
+            return None, "But it failed! There was no ally move to borrow!"
+        return random.choice(borrowed), ""
+
+    if move_name == 'metronome':
+        options = list(pool or [])
+        if not options:
+            return None, "But it failed! Its finger would not budge!"
+        return random.choice(options), ""
+
+    return None, ""
+
+
+def apply_sketch(attacker, defender):
+    """
+    Sketch overwrites its own slot with the target's last move PERMANENTLY.
+
+    The in-memory half happens here; the specimen is stamped with '_sketched' so the
+    engine knows to write the new movelist back to caught_pokemon. Doing the database
+    work here would put I/O inside the damage formula, which nothing else does.
+    """
+    copied = defender.get('last_move_used')
+    if not can_be_copied(copied):
+        return False, "But it failed! There was no move to sketch!"
+
+    slot = find_move_slot(attacker, 'sketch')
+    if slot is None:
+        return False, "But it failed! There was no slot to overwrite!"
+    if find_move_slot(attacker, copied) is not None:
+        return False, "But it failed! It already knows that move!"
+
+    slot['name'] = copied
+    attacker['_sketched'] = copied
+    return True, (f"✏️ {attacker['name'].capitalize()} sketched "
+                  f"{copied.replace('-', ' ').title()} - and will not forget it!")
+
+
+def apply_mimic(attacker, defender):
+    """
+    Mimic overwrites its own slot with the target's last move for the rest of the battle.
+
+    Returns (worked, message). The replacement carries 5 PP rather than the copied move's
+    own, and the original comes back when the specimen is withdrawn, which is why the
+    engines never persist it.
+    """
+    copied = defender.get('last_move_used')
+    if not can_be_copied(copied):
+        return False, "But it failed! There was no move to mimic!"
+
+    slot = find_move_slot(attacker, 'mimic')
+    if slot is None:
+        return False, "But it failed! There was no slot to overwrite!"
+    if find_move_slot(attacker, copied) is not None:
+        return False, "But it failed! It already knows that move!"
+
+    slot['name'] = copied
+    slot['pp'] = slot['max_pp'] = 5
+    return True, (f"🎭 {attacker['name'].capitalize()} mimicked "
+                  f"{copied.replace('-', ' ').title()}!")
 
 
 # ==========================================
@@ -2035,7 +2297,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # 2. CONTAINMENT FIELD COLLISION
     # ==========================================
     active_shield = defender['volatile_statuses'].get('protect_type', 'protect')
-    shield_stops_this = shield_blocks(active_shield, move_class, move.get('priority'), move_target)
+    shield_stops_this = shield_blocks(active_shield, move_class, move.get('priority'), move_target,
+                                      move.get('name'))
 
     if defender['volatile_statuses'].get('protected') and shield_stops_this and 'user' not in move_target:
         BYPASS_MOVES = ['feint', 'phantom-force', 'shadow-force', 'hyperspace-fury', 'hyperspace-hole']
@@ -2082,6 +2345,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Safely catch SQLite NULL values before running string methods!
     atk_ability = get_active_ability(attacker)
     def_ability = get_active_ability(defender)
+
+    # Drum Solo, Fireball and Hydrosnipe pay no attention to what is defending them
+    if gmax_ignores_ability(move.get('name')):
+        def_ability = 'none'
 
     if move.get('name') == 'confusion-snap':
         level = attacker.get('level', 50)
@@ -2488,6 +2755,19 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                    f"grudge!"), 'none', [], 0
 
     # ==========================================
+    # ==========================================
+    # 🎭 COPY AND MIMICRY MOVES
+    # ==========================================
+    # The five that PERFORM another move are re-dispatched by the engines before they
+    # ever reach here, so anything arriving with one of those names failed to resolve.
+    if move_name == 'mimic':
+        worked, note = apply_mimic(attacker, defender)
+        return 0, note, 'none', [], 0
+
+    if move_name == 'sketch':
+        worked, note = apply_sketch(attacker, defender)
+        return 0, note, 'none', [], 0
+
     # ==========================================
     # ⚡ PRIORITY-CONDITIONAL MOVES
     # ==========================================
@@ -2918,6 +3198,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # them respond to the battle state.
         if dynamic_power is not None:
             move_power = dynamic_power
+
+        # A handful of G-Max moves have a fixed power that outranks the engines' 140
+        if move.get('name') in GMAX_FIXED_POWER:
+            move_power = GMAX_FIXED_POWER[move['name']]
 
         # ==========================================
         # 🚨 CONDITIONAL POWER MULTIPLIERS
@@ -3618,6 +3902,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name == 'fake-out' and damage > 0:
         defender.setdefault('volatile_statuses', {})['flinch'] = True
         msg += f" {defender['name'].capitalize()} flinched!"
+
+    # 🚨 G-MAX SIGNATURE EFFECTS
+    # Most of the roster rides on the ordinary payload; these are the ones whose
+    # signature is a mechanic, so they fire here once the strike has actually landed.
+    if move.get('name') in GMAX_EFFECTS and (damage > 0 or move_class == 'status'):
+        msg += apply_gmax_effect(
+            move['name'], attacker, defender,
+            user_party=user_party, user_hazards=user_hazards,
+            target_hazards=target_hazards, held_item=attacker_item)
 
     # 🚨 EERIE SPELL: saps the move the target last reached for
     if move_name == 'eerie-spell' and damage > 0:

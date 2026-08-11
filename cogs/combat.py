@@ -6,8 +6,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -373,8 +373,8 @@ GMAX_MOVES = {
     'alcremie-gmax': {'type': 'fairy', 'name': 'G-Max Finale', 'healing': 16.5,'target': 'user-and-allies'},
     'copperajah-gmax': {'type': 'steel', 'name': 'G-Max Steelsurge'},
     'duraludon-gmax': {'type': 'dragon', 'name': 'G-Max Depletion'},
-    'urshifu-single-strike-gmax': {'type': 'dark', 'name': 'G-Max Max One Blow'},
-    'urshifu-rapid-strike-gmax': {'type': 'dark', 'name': 'G-Max Max Rapid Flow'}
+    'urshifu-single-strike-gmax': {'type': 'dark', 'name': 'G-Max One Blow'},
+    'urshifu-rapid-strike-gmax': {'type': 'dark', 'name': 'G-Max Rapid Flow'}
 }
 
 # The Biological Payload for Dynamax Particles
@@ -462,6 +462,56 @@ TWO_TURN_MOVES = {
                             'freeze-shock': {'msg': "became cloaked in a freezing light!"},
                             'ice-burn': {'msg': "became cloaked in freezing air!"}
                         }
+
+async def persist_sketch(db, pokemon):
+    """
+    Write a sketched move back to caught_pokemon.
+
+    Sketch is the only move here that survives the battle, so the new movelist has to
+    reach the database rather than living in the combat state. The slot is found by
+    position so the other three moves are left exactly as they were.
+    """
+    if not pokemon.get('_sketched') or 'instance_id' not in pokemon:
+        return None
+
+    learned = pokemon.pop('_sketched')
+    for index, slot in enumerate((pokemon.get('moves') or [])[:4], start=1):
+        if slot.get('name') == learned:
+            await db.execute(
+                "UPDATE caught_pokemon SET move_%d = ? WHERE instance_id = ?" % index,
+                (learned, pokemon['instance_id']))
+            return learned
+    return None
+
+
+async def fetch_move_payload(move_name):
+    """
+    Hydrate a move straight from base_moves, in the shape calculate_damage expects.
+
+    Used by the copy family, which only learns which move it is performing partway
+    through a turn and so cannot have its payload prepared up front like the rest.
+    """
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("""
+            SELECT name, type, power, accuracy, damage_class, pp, priority,
+                target, ailment, ailment_chance, stat_name, stat_change, stat_chance,
+                status_type, status_chance, healing, drain
+            FROM base_moves WHERE name = ?
+        """, (move_name,)) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return None
+
+    return {
+        'name': row[0], 'base_name': row[0], 'type': row[1], 'power': row[2] or 0,
+        'accuracy': row[3] or 100, 'class': row[4], 'pp': row[5], 'max_pp': row[5],
+        'priority': row[6] or 0, 'target': row[7], 'ailment': row[8],
+        'ailment_chance': row[9] or 0, 'stat_name': row[10], 'stat_change': row[11] or 0,
+        'stat_chance': row[12] or 0, 'status_type': row[13], 'status_chance': row[14] or 0,
+        'healing': row[15] or 0, 'drain': row[16] or 0,
+    }
+
 
 pivot_moves = ['u-turn', 'volt-switch', 'flip-turn', 'baton-pass', 'parting-shot',
                'chilly-reception', 'shed-tail']
@@ -2965,7 +3015,7 @@ class BattleDashboard(discord.ui.View):
                                     p_move_stats['ailment_chance'] = 100
                                     
                                 # Persistent Ecological Disasters
-                                elif p_z_display in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Vocalith']:
+                                elif p_z_display in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Volcalith']:
                                     p_move_stats['status_type'] = p_z_display.lower().replace('g-max ', '')
                                     p_move_stats['status_chance'] = 100
                                     
@@ -3359,6 +3409,9 @@ class BattleDashboard(discord.ui.View):
                 # class of whatever each side locked in is available before either lands.
                 p_active['_committed_move'] = (p_move_stats or {}).get('class')
                 n_active['_committed_move'] = (n_move_stats or {}).get('class')
+                # Me First needs the name too, not just the class
+                p_active['_committed_move_name'] = move_name
+                n_active['_committed_move_name'] = npc_move_name
 
                 player_action = (p_active, n_active, p_move_stats, move_name, True, p_z_display, is_z_move, is_max_move)
                 
@@ -3578,6 +3631,33 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         
                         # ==========================================
+                        # 🎭 COPY MOVES: perform something else entirely
+                        # ==========================================
+                        if raw_move_name in COPY_MOVES:
+                            own_party = state['player_team'] if is_player else state['npc_team']
+                            chosen, why = resolve_copied_move(
+                                raw_move_name, attacker, defender,
+                                party=own_party,
+                                last_move_overall=state.get('last_move_overall'),
+                                pool=METRONOME_POOL)
+
+                            if not chosen:
+                                combat_log += f"⚠️ {why}\n"
+                                continue
+
+                            copied_stats = await fetch_move_payload(chosen)
+                            if not copied_stats:
+                                combat_log += "⚠️ But it failed! The copied move fizzled out!\n"
+                                continue
+
+                            if raw_move_name == 'me-first':
+                                copied_stats['power'] = math.floor(copied_stats['power'] * ME_FIRST_MULTIPLIER)
+
+                            combat_log += f"🎭 It became **{chosen.replace('-', ' ').title()}**!\n"
+                            raw_move_name = chosen
+                            move_stats = copied_stats
+
+                        # ==========================================
                         # 🚨 TWO-TURN CHARGING & INVULNERABILITY LOGIC (PvE)
                         # ==========================================
 
@@ -3637,10 +3717,10 @@ class BattleDashboard(discord.ui.View):
                         if raw_move_name == 'wish':
                             wish_slot = 'player_wish' if is_player else 'npc_wish'
                             if state.get(wish_slot):
-                                combat_log += "⚠️ But it failed! A wish is already pending!" + chr(92) + "n"
+                                combat_log += "⚠️ But it failed! A wish is already pending!\n"
                             else:
                                 state[wish_slot] = snapshot_wish(attacker)
-                                combat_log += f"⭐ {owner_prefix.strip()} **{attacker['name'].capitalize()}** made a wish!" + chr(92) + "n"
+                                combat_log += f"⭐ {owner_prefix.strip()} **{attacker['name'].capitalize()}** made a wish!\n"
                             continue
 
                         if raw_move_name in DELAYED_ATTACK_MOVES:
@@ -3784,6 +3864,7 @@ class BattleDashboard(discord.ui.View):
                         # reads the element off it.
                         attacker['last_move_used'] = raw_move_name
                         attacker['last_move_type'] = move_stats.get('type')
+                        state['last_move_overall'] = raw_move_name   # Copycat reads this
 
                         # Grudge: if that blow was the one that finished the target, the
                         # move that did it loses every last PP.
@@ -4758,7 +4839,7 @@ class BattleDashboard(discord.ui.View):
                     combatant['volatile_statuses']['fairy_lock'] -= 1
                     if combatant['volatile_statuses']['fairy_lock'] <= 0:
                         del combatant['volatile_statuses']['fairy_lock']
-                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!" + chr(92) + "n"
+                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!\n"
 
                 if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
                     # Traps deal exactly 1/8th of Maximum HP per turn
@@ -5145,6 +5226,10 @@ class BattleDashboard(discord.ui.View):
                                     SET level = ?, experience = ?, held_item = ?
                                     WHERE instance_id = ?
                                 """, (p['level'], p['experience'], resolve_persisted_item(p), p['instance_id']))
+
+                                sketched = await persist_sketch(db, p)
+                                if sketched:
+                                    rewards_log += f"\n✏️ **{p['name'].capitalize()}** permanently learned {sketched.replace('-', ' ').title()}!"
 
                         # ==========================================
                         # DIRECTIVE TRACKER: INVASIVE CULLING
@@ -6209,6 +6294,9 @@ class Combat(commands.Cog):
             # Sucker Punch reads these - see the PvE side for the reasoning
             p1_active['_committed_move'] = (c1.get('data') or {}).get('class') if c1.get('type') == 'attack' else None
             p2_active['_committed_move'] = (c2.get('data') or {}).get('class') if c2.get('type') == 'attack' else None
+            # Me First needs the name too, not just the class
+            p1_active['_committed_move_name'] = (c1.get('data') or {}).get('base_name') if c1.get('type') == 'attack' else None
+            p2_active['_committed_move_name'] = (c2.get('data') or {}).get('base_name') if c2.get('type') == 'attack' else None
 
             p1_prio = get_action_priority(c1, p2_is_swapping, p1_active)
             p2_prio = get_action_priority(c2, p1_is_swapping, p2_active)
@@ -6503,7 +6591,7 @@ class Combat(commands.Cog):
                                             # ==========================================
                                             # PERSISTENT ECOLOGICAL DISASTERS
                                             # ==========================================
-                                            elif move['name'] in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max volcalith']:
+                                            elif move['name'] in ['G-Max Wildfire', 'G-Max Vine Lash', 'G-Max Cannonade', 'G-Max Volcalith']:
                                                 # Smuggle the unique effect into the status_type column!
                                                 move['status_type'] = move['name'].lower().replace('g-max ', '')
                                                 move['status_chance'] = 100
@@ -6523,6 +6611,32 @@ class Combat(commands.Cog):
                                                 if 'healing' in g_data:
                                                     move['healing'] = g_data['healing']
                                             break
+
+                    # ==========================================
+                    # 🎭 COPY MOVES: perform something else entirely
+                    # ==========================================
+                    if raw_move_name in COPY_MOVES:
+                        chosen, why = resolve_copied_move(
+                            raw_move_name, attacker, defender,
+                            party=state[f"{player_tag}_team"],
+                            last_move_overall=state.get('last_move_overall'),
+                            pool=METRONOME_POOL)
+
+                        if not chosen:
+                            combat_log += f"⚠️ {why}\n"
+                            continue
+
+                        copied_stats = await fetch_move_payload(chosen)
+                        if not copied_stats:
+                            combat_log += "⚠️ But it failed! The copied move fizzled out!\n"
+                            continue
+
+                        if raw_move_name == 'me-first':
+                            copied_stats['power'] = math.floor(copied_stats['power'] * ME_FIRST_MULTIPLIER)
+
+                        combat_log += f"🎭 It became **{chosen.replace('-', ' ').title()}**!\n"
+                        raw_move_name = chosen
+                        move = copied_stats
 
                     # ==========================================
                     # 🚨 TWO-TURN CHARGING & INVULNERABILITY LOGIC (PvP)
@@ -6728,6 +6842,7 @@ class Combat(commands.Cog):
                     # reads the element off it.
                     attacker['last_move_used'] = raw_move_name
                     attacker['last_move_type'] = move.get('type')
+                    state['last_move_overall'] = raw_move_name   # Copycat reads this
                     # ==========================================
 
                     # --- STRUGGLE RECOIL INTERCEPTOR ---
@@ -7324,7 +7439,7 @@ class Combat(commands.Cog):
                     combatant['volatile_statuses']['fairy_lock'] -= 1
                     if combatant['volatile_statuses']['fairy_lock'] <= 0:
                         del combatant['volatile_statuses']['fairy_lock']
-                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!" + chr(92) + "n"
+                        combat_log += f"🔓 **{combatant['name'].capitalize()}** is free to move again!\n"
 
                 if combatant['current_hp'] > 0 and 'partially_trapped' in combatant.get('volatile_statuses', {}):
                     # Traps deal exactly 1/8th of Maximum HP per turn
@@ -7530,6 +7645,10 @@ class Combat(commands.Cog):
                                         SET level = ?, experience = ?, held_item = ?
                                         WHERE instance_id = ?
                                     """, (p['level'], p['experience'], resolve_persisted_item(p), p['instance_id']))
+
+                                    sketched = await persist_sketch(cursor, p)
+                                    if sketched:
+                                        rewards_log += f"\n✏️ **{p['name'].capitalize()}** permanently learned {sketched.replace('-', ' ').title()}!"
 
                         await db.commit()
 

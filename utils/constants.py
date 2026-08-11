@@ -46,6 +46,33 @@ def get_species_weight(pokemon):
     """Body mass in kilograms, falling back to a neutral default for unknown species."""
     return SPECIES_WEIGHTS.get(pokemon.get('pokedex_id'), _DEFAULT_WEIGHT_KG)
 
+# ==========================================
+# 🎲 THE METRONOME POOL
+# ==========================================
+# Every move Metronome may roll, indexed once at import rather than queried per use.
+# The exclusions are the moves that would either recurse into another random pick or
+# have nothing sensible to copy.
+METRONOME_EXCLUDED = {
+    'assist', 'copycat', 'me-first', 'metronome', 'mimic', 'mirror-move', 'sketch',
+    'sleep-talk', 'nature-power', 'struggle', 'transform', 'skill-swap', 'role-play',
+    'quash', 'after-you', 'instruct', 'baneful-bunker', 'belch', 'counter',
+    'covet', 'destiny-bond', 'detect', 'endure', 'feint', 'focus-punch', 'follow-me',
+    'helping-hand', 'mirror-coat', 'protect', 'rage-powder', 'snore', 'thief',
+}
+
+METRONOME_POOL = []
+
+try:
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(DB_FILE) as _conn:
+        METRONOME_POOL = [
+            row[0] for row in _conn.execute("SELECT name FROM base_moves ORDER BY name")
+            if row[0] and row[0] not in METRONOME_EXCLUDED
+        ]
+    print(f"🎲 Indexed {len(METRONOME_POOL)} moves for Metronome.")
+except Exception as e:
+    print(f"⚠️ WARNING: Could not index the Metronome pool ({e}). Metronome will fail.")
+
 FIELD_MISSIONS = {
     # ==========================================
     # EXPERIENCE MISSIONS (Type Bonus = +20% XP)
