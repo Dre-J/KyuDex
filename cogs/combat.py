@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1064,6 +1064,12 @@ class PvPMoveMenu(discord.ui.View):
             is_p1 = (self.player_id == self.state['p1_id'])
             adp_state = self.state['p1_adaptation'] if is_p1 else self.state['p2_adaptation']
             key_items = self.state['p1_key_items'] if is_p1 else self.state['p2_key_items']
+
+            # Imprison sits on the OPPONENT, so the button lock needs both sides
+            opp_team_key = 'p2_team' if is_p1 else 'p1_team'
+            opp_active_idx = self.state['p2_active_index'] if is_p1 else self.state['p1_active_index']
+            opp_poke = self.state[opp_team_key][opp_active_idx]
+            pvp_has_legal_move = bool(usable_moves(self.active_poke, opp_poke))
             
             held_item = (self.active_poke.get('held_item') or "").lower().replace(' ', '-')
             # THE TEMPORAL LOCK FLAG
@@ -1171,6 +1177,12 @@ class PvPMoveMenu(discord.ui.View):
                 # Calculate the lock state at the top of the loop!
                 is_disabled = (move['pp'] <= 0)
                 if has_choice_item and choice_lock_move and move['name'] != choice_lock_move:
+                    is_disabled = True
+
+                # Disable / Taunt / Torment / Imprison. Only enforced while SOMETHING is
+                # still legal: this engine has no Struggle fallback of its own, so greying
+                # out the last option would leave the player with nothing to click.
+                if pvp_has_legal_move and move_is_restricted(self.active_poke, move, opp_poke):
                     is_disabled = True
                 
                 # ---ASSAULT VEST FIREWALL ---
@@ -1946,7 +1958,7 @@ class SwapMenu(discord.ui.View):
                     print(f"DEBUG: Error applying voluntary swap hazards/abilities: {e}")
 
                 if new_active['current_hp'] > 0:
-                    available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+                    available_moves = usable_moves(n_active, p_active)
                     if available_moves:
                         chosen_move = random.choice(available_moves)
                         chosen_move['pp'] -= 1 
@@ -1979,6 +1991,7 @@ class SwapMenu(discord.ui.View):
                                     weather=state.get('weather', {'type': 'none'})['type'], 
                                     target_hazards=state['player_hazards'], # The NPC attacks the Player's habitat
                                     user_hazards=state['npc_hazards'],
+                                    user_party=state['npc_team'],
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                     gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -2452,8 +2465,10 @@ class BattleDashboard(discord.ui.View):
             recharge_btn.callback = self.handle_move
             self.add_item(recharge_btn)
             
-        elif total_pp <= 0:
-            # The Specimen is exhausted! Spawn the Struggle Button.
+        elif total_pp <= 0 or not usable_moves(p_active, n_active):
+            # Exhausted, or every move locked away by Disable / Taunt / Torment /
+            # Imprison. Either way the only thing left is Struggle - without this second
+            # case a fully restricted specimen would face a grid of dead buttons.
             struggle_btn = discord.ui.Button(
                 label="Struggle", 
                 style=discord.ButtonStyle.danger, 
@@ -2475,6 +2490,11 @@ class BattleDashboard(discord.ui.View):
                 # Calculate the lock!
                 is_disabled = (curr_pp <= 0)
                 if has_choice_item and choice_lock_move and move_name != choice_lock_move:
+                    is_disabled = True
+
+                # Disable / Taunt / Torment / Imprison
+                restriction = move_is_restricted(p_active, move_dict, n_active)
+                if restriction:
                     is_disabled = True
 
                 # --- ASSAULT VEST FIREWALL ---
@@ -2811,7 +2831,7 @@ class BattleDashboard(discord.ui.View):
                             p_active['volatile_statuses']['choice_lock'] = move_name
                     # ------------------------------------------
 
-                    p_available_moves = [m for m in p_active['moves'] if m['pp'] > 0]
+                    p_available_moves = usable_moves(p_active, n_active)
                     p_z_display = ""
                     
                     # --- STRUGGLE OVERRIDE (PLAYER) ---
@@ -2956,7 +2976,7 @@ class BattleDashboard(discord.ui.View):
                     # ==========================================
                     # 2. REGISTER THE NPC'S PAYLOAD
                     # ==========================================
-                    available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+                    available_moves = usable_moves(n_active, p_active)
                     n_move_stats = None
                     npc_move_name = None
                     
@@ -3061,6 +3081,7 @@ class BattleDashboard(discord.ui.View):
                                             weather=state.get('weather', {'type': 'none'})['type'],
                                             target_hazards=state['npc_hazards'],
                                             user_hazards=state['player_hazards'],
+                                            user_party=state['player_team'],
                                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                             gravity=state.get('field', {}).get('gravity', 0) > 0,
                                             magic_room=state.get('field', {}).get('magic_room', 0) > 0
@@ -3446,6 +3467,7 @@ class BattleDashboard(discord.ui.View):
                                 weather=state.get('weather', {'type': 'none'})['type'],
                                 target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
                                 user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                            user_party=state['player_team'] if is_player else state['npc_team'],
                                 terrain=state.get('terrain', {'type': 'none'})['type'],
                                 wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                 gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -3569,7 +3591,7 @@ class BattleDashboard(discord.ui.View):
                                 attacker['held_item'] = 'none' 
                             else:
                                 # 2. Lock in the Charge state!
-                                attacker['volatile_statuses']['charging'] = raw_move_name
+                                begin_charge(attacker, raw_move_name, charge_data.get('invuln'))
                                 combat_log += f"⏳ {owner_prefix.strip()} **{attacker['name'].capitalize()}** {charge_data['msg']}\n"
                                 
                                 # 3. Apply Turn-1 Stat Boosts (Meteor Beam / Skull Bash)
@@ -3579,10 +3601,8 @@ class BattleDashboard(discord.ui.View):
                                     attacker['stat_stages'][stat_name] = min(6, attacker['stat_stages'].get(stat_name, 0) + amt)
                                     combat_log += f"📈 **{attacker['name'].capitalize()}**'s {stat_name.replace('_', ' ')} rose!\n"
                                     
-                                # 4. Apply Semi-Invulnerability (Dig / Fly)
-                                if 'invuln' in charge_data:
-                                    attacker['volatile_statuses']['semi_invulnerable'] = charge_data['invuln']
-                                
+                                # (Semi-invulnerability for Dig / Fly is applied by begin_charge)
+
                                 # 🚨 ABORT THE REST OF THE TURN!
                                 continue 
                                 
@@ -3602,6 +3622,15 @@ class BattleDashboard(discord.ui.View):
                                 combat_log += f"👏 **{defender['name'].capitalize()}** received an encore and must repeat **{copied.replace('-', ' ').title()}**!\n"
                             continue
 
+                        if raw_move_name == 'wish':
+                            wish_slot = 'player_wish' if is_player else 'npc_wish'
+                            if state.get(wish_slot):
+                                combat_log += "⚠️ But it failed! A wish is already pending!" + chr(92) + "n"
+                            else:
+                                state[wish_slot] = snapshot_wish(attacker)
+                                combat_log += f"⭐ {owner_prefix.strip()} **{attacker['name'].capitalize()}** made a wish!" + chr(92) + "n"
+                            continue
+
                         if raw_move_name in DELAYED_ATTACK_MOVES:
                             target_slot = 'npc_future' if is_player else 'player_future'
                             launcher = owner_prefix.strip() or ("Your" if is_player else "The rival's")
@@ -3615,9 +3644,7 @@ class BattleDashboard(discord.ui.View):
 
                         # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                         if is_currently_charging:
-                            del attacker['volatile_statuses']['charging']
-                            if 'semi_invulnerable' in attacker.get('volatile_statuses', {}):
-                                del attacker['volatile_statuses']['semi_invulnerable']
+                            end_charge(attacker)
                         # ==========================================
                         
                         # ==========================================
@@ -3682,6 +3709,7 @@ class BattleDashboard(discord.ui.View):
                             weather=state.get('weather', {'type': 'none'})['type'],
                             target_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
                             user_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                            user_party=state['player_team'] if is_player else state['npc_team'],
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                             gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -3744,6 +3772,13 @@ class BattleDashboard(discord.ui.View):
                         # reads the element off it.
                         attacker['last_move_used'] = raw_move_name
                         attacker['last_move_type'] = move_stats.get('type')
+
+                        # Grudge: if that blow was the one that finished the target, the
+                        # move that did it loses every last PP.
+                        if defender['current_hp'] <= 0:
+                            grudge_log = apply_grudge(defender, attacker)
+                            if grudge_log:
+                                combat_log += grudge_log.strip() + "\n"
 
                         if msg: combat_log += f"*{msg}*\n"
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
@@ -4025,9 +4060,8 @@ class BattleDashboard(discord.ui.View):
                                 
                                 # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
                                 for p in [attacker, defender]:
-                                    if 'semi_invulnerable' in p.get('volatile_statuses', {}) and p['volatile_statuses']['semi_invulnerable'] == 'air':
-                                        del p['volatile_statuses']['semi_invulnerable']
-                                        if 'charging' in p['volatile_statuses']: del p['volatile_statuses']['charging']
+                                    if p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
+                                        end_charge(p)
                                         combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
                                         
                         # ==========================================
@@ -4118,7 +4152,7 @@ class BattleDashboard(discord.ui.View):
 
         try:
             # --- 1. NPC THREAT ASSESSMENT ---
-            available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+            available_moves = usable_moves(n_active, p_active)
             n_move_stats = None
             npc_move_name = None
             is_swapping = False
@@ -4195,8 +4229,7 @@ class BattleDashboard(discord.ui.View):
                 # The charge is spent either way. Even if the locked move has no PP left and
                 # the NPC falls back to something else, the flags must not survive the swing.
                 if npc_is_charging:
-                    retaliation_volatiles.pop('charging', None)
-                    retaliation_volatiles.pop('semi_invulnerable', None)
+                    end_charge(n_active)
 
                 if not available_moves:
                     npc_move_name = 'struggle'
@@ -4292,6 +4325,7 @@ class BattleDashboard(discord.ui.View):
                                     weather=state.get('weather', {'type': 'none'})['type'], 
                                     target_hazards=state['player_hazards'], # NPC attacks the player's side
                                     user_hazards=state['npc_hazards'],
+                                    user_party=state['npc_team'],
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                     gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -4356,6 +4390,7 @@ class BattleDashboard(discord.ui.View):
                             weather=state.get('weather', {'type': 'none'})['type'],
                             target_hazards=state['player_hazards'], # NPC attacks the player's side
                             user_hazards=state['npc_hazards'],       # NPC's own side
+                            user_party=state['npc_team'],
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                             gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -4408,6 +4443,19 @@ class BattleDashboard(discord.ui.View):
                         del mon['volatile_statuses']['encore']
                         combat_log += f"👏 {owner_str} **{mon['name'].capitalize()}**'s encore ended!\n"
 
+                dis = (mon.get('volatile_statuses') or {}).get('disable')
+                if dis:
+                    dis['turns'] -= 1
+                    if dis['turns'] <= 0:
+                        del mon['volatile_statuses']['disable']
+                        combat_log += f"🔓 {owner_str} **{mon['name'].capitalize()}** is no longer disabled!\n"
+
+                if (mon.get('volatile_statuses') or {}).get('taunt'):
+                    mon['volatile_statuses']['taunt'] -= 1
+                    if mon['volatile_statuses']['taunt'] <= 0:
+                        del mon['volatile_statuses']['taunt']
+                        combat_log += f"😌 {owner_str} **{mon['name'].capitalize()}**'s taunt wore off!\n"
+
             # An active Uproar jolts anything already asleep back awake
             if is_uproar_active(p_active, n_active):
                 for mon, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
@@ -4448,6 +4496,30 @@ class BattleDashboard(discord.ui.View):
                 combat_log += f"🔮 {victim_label} **{victim['name'].capitalize()}** took the {pending['move'].replace('-', ' ').title()} attack! (-{strike_dmg} HP)\n"
                 if strike_msg:
                     combat_log += f"*{strike_msg}*\n"
+
+            # ==========================================
+            # 🚨 WISHES COMING TRUE - PvE
+            # ==========================================
+            # Banked on the wisher, paid out to whoever holds the slot a turn later, so a
+            # Wish passed to a switch-in heals the replacement rather than the wisher.
+            for wish_key, patient in [('player_wish', p_active), ('npc_wish', n_active)]:
+                pending_wish = state.get(wish_key)
+                if not pending_wish:
+                    continue
+
+                # Skip the tick on the turn it was made so a full turn elapses
+                if pending_wish.get('just_queued'):
+                    pending_wish['just_queued'] = False
+                    continue
+
+                pending_wish['turns'] -= 1
+                if pending_wish['turns'] > 0:
+                    continue
+
+                state[wish_key] = None
+                _, wish_msg = resolve_wish(pending_wish, patient)
+                if wish_msg:
+                    combat_log += wish_msg + "\n"
 
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
             weather = state.get('weather', {'type': 'none', 'duration': 0})
@@ -4797,9 +4869,11 @@ class BattleDashboard(discord.ui.View):
                             del combatant['volatile_statuses']['embargo']
                             combat_log += f"✨ **{combatant['name'].capitalize()}** is free of its Embargo!\n"
 
-                    # Only wipe it if they are NOT currently charging a two-turn move!
-                    if not combatant['volatile_statuses'].get('charging'):
-                        combatant['volatile_statuses'].pop('semi_invulnerable', None)
+                    # A charge that was pending and did NOT fire this turn means the
+                    # user was stopped, so the move fails and it comes back down.
+                    broken = break_stale_charge(combatant)
+                    if broken:
+                        combat_log += f"✨ **{combatant['name'].capitalize()}**'s {broken.replace('-', ' ').title()} was interrupted!\n"
                     
             print("DEBUG 8: Entering Phase 4 (Survival & Swap Checks)")
 
@@ -5745,7 +5819,11 @@ class Combat(commands.Cog):
 
                 # Pending Future Sight / Doom Desire strikes, keyed by the side they will HIT
                 'p1_future': None,
-                'p2_future': None
+                'p2_future': None,
+
+                # Pending Wishes, keyed by the side they will HEAL
+                'p1_wish': None,
+                'p2_wish': None
             }
 
             # 3. Map BOTH players to the exact same dictionary in RAM!
@@ -6446,7 +6524,7 @@ class Combat(commands.Cog):
                             attacker['held_item'] = 'none'
                         else:
                             # 2. Lock in the Charge state!
-                            attacker['volatile_statuses']['charging'] = raw_move_name
+                            begin_charge(attacker, raw_move_name, charge_data.get('invuln'))
                             combat_log += f"⏳ **{owner_name}'s** {attacker['name'].capitalize()} {charge_data['msg']}\n"
                             
                             # 3. Apply Turn-1 Stat Boosts
@@ -6456,10 +6534,8 @@ class Combat(commands.Cog):
                                 attacker['stat_stages'][stat_name] = min(6, attacker['stat_stages'].get(stat_name, 0) + amt)
                                 combat_log += f"📈 **{owner_name}'s** {attacker['name'].capitalize()}'s {stat_name.replace('_', ' ')} rose!\n"
                                 
-                            # 4. Apply Semi-Invulnerability
-                            if 'invuln' in charge_data:
-                                attacker['volatile_statuses']['semi_invulnerable'] = charge_data['invuln']
-                            
+                            # (Semi-invulnerability for Dig / Fly is applied by begin_charge)
+
                             # 🚨 ABORT THE REST OF THE TURN!
                             continue 
                             
@@ -6479,6 +6555,15 @@ class Combat(commands.Cog):
                             combat_log += f"👏 **{opp_name}'s** {defender['name'].capitalize()} received an encore and must repeat **{copied.replace('-', ' ').title()}**!\n"
                         continue
 
+                    if raw_move_name == 'wish':
+                        wish_slot = f"{player_tag}_wish"
+                        if state.get(wish_slot):
+                            combat_log += "⚠️ But it failed! A wish is already pending!\n"
+                        else:
+                            state[wish_slot] = snapshot_wish(attacker)
+                            combat_log += f"⭐ **{owner_name}'s** {attacker['name'].capitalize()} made a wish!\n"
+                        continue
+
                     if raw_move_name in DELAYED_ATTACK_MOVES:
                         target_slot = f"{opp_tag}_future"
 
@@ -6491,9 +6576,7 @@ class Combat(commands.Cog):
 
                     # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                     if is_currently_charging:
-                        del attacker['volatile_statuses']['charging']
-                        if 'semi_invulnerable' in attacker.get('volatile_statuses', {}):
-                            del attacker['volatile_statuses']['semi_invulnerable']
+                        end_charge(attacker)
                         # ==========================================
                         
                         # ==========================================
@@ -6558,6 +6641,7 @@ class Combat(commands.Cog):
                         weather=state['weather']['type'], 
                         target_hazards=state[f"{opp_tag}_hazards"],
                         user_hazards=state[f"{player_tag}_hazards"],
+                        user_party=state[f"{player_tag}_team"],
                         terrain=state.get('terrain', {'type': 'none'})['type'],
                         wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                         gravity=state.get('field', {}).get('gravity', 0) > 0,
@@ -6625,6 +6709,13 @@ class Combat(commands.Cog):
                     if heal > 0:
                         attacker['current_hp'] = min(attacker.get('max_hp', 100), attacker['current_hp'] + heal)
                        
+                    # Grudge: if that blow was the one that finished the target, the move
+                    # that did it loses every last PP.
+                    if defender['current_hp'] <= 0:
+                        grudge_log = apply_grudge(defender, attacker)
+                        if grudge_log:
+                            combat_log += grudge_log.strip() + "\n"
+
                     # Print out the damage and physics engine messages!
                     if msg: combat_log += f"↳ {msg}\n"
                     if dmg > 0: combat_log += f"↳ Dealt **{dmg}** damage.\n"
@@ -6861,9 +6952,8 @@ class Combat(commands.Cog):
                             
                             # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
                             for p in [attacker, defender]:
-                                if 'semi_invulnerable' in p.get('volatile_statuses', {}) and p['volatile_statuses']['semi_invulnerable'] == 'air':
-                                    del p['volatile_statuses']['semi_invulnerable']
-                                    if 'charging' in p['volatile_statuses']: del p['volatile_statuses']['charging']
+                                if p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
+                                    end_charge(p)
                                     combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
 
             # ==========================================
@@ -6892,6 +6982,19 @@ class Combat(commands.Cog):
                     if enc['turns'] <= 0:
                         del mon['volatile_statuses']['encore']
                         combat_log += f"👏 {owner_str} **{mon['name'].capitalize()}**'s encore ended!\n"
+
+                dis = (mon.get('volatile_statuses') or {}).get('disable')
+                if dis:
+                    dis['turns'] -= 1
+                    if dis['turns'] <= 0:
+                        del mon['volatile_statuses']['disable']
+                        combat_log += f"🔓 {owner_str} **{mon['name'].capitalize()}** is no longer disabled!\n"
+
+                if (mon.get('volatile_statuses') or {}).get('taunt'):
+                    mon['volatile_statuses']['taunt'] -= 1
+                    if mon['volatile_statuses']['taunt'] <= 0:
+                        del mon['volatile_statuses']['taunt']
+                        combat_log += f"😌 {owner_str} **{mon['name'].capitalize()}**'s taunt wore off!\n"
 
             # An active Uproar jolts anything already asleep back awake
             if is_uproar_active(new_p1_active, new_p2_active):
@@ -6934,6 +7037,30 @@ class Combat(commands.Cog):
                 combat_log += f"🔮 **{victim['name'].capitalize()}** took the {pending['move'].replace('-', ' ').title()} attack! (-{strike_dmg} HP)\n"
                 if strike_msg:
                     combat_log += f"↳ {strike_msg}\n"
+
+            # ==========================================
+            # 🚨 WISHES COMING TRUE - PvP
+            # ==========================================
+            # Banked on the wisher, paid out to whoever holds the slot a turn later, so a
+            # Wish passed to a switch-in heals the replacement rather than the wisher.
+            for wish_tag, patient in [('p1', new_p1_active), ('p2', new_p2_active)]:
+                pending_wish = state.get(f"{wish_tag}_wish")
+                if not pending_wish:
+                    continue
+
+                # Skip the tick on the turn it was made so a full turn elapses
+                if pending_wish.get('just_queued'):
+                    pending_wish['just_queued'] = False
+                    continue
+
+                pending_wish['turns'] -= 1
+                if pending_wish['turns'] > 0:
+                    continue
+
+                state[f"{wish_tag}_wish"] = None
+                _, wish_msg = resolve_wish(pending_wish, patient)
+                if wish_msg:
+                    combat_log += wish_msg + "\n"
 
             # 1. Global Biome Effects (Weather Expiration & Chip Damage)
             if state['weather']['type'] != 'none':
@@ -7254,6 +7381,13 @@ class Combat(commands.Cog):
                     p_active['volatile_statuses'].pop('destiny-bond', None)
                     p_active['volatile_statuses'].pop('is_switching', None)
                     p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
+
+                    # A charge that was pending and did NOT fire this turn means the user
+                    # was stopped, so the move fails and it comes back down. PvP had no
+                    # sweep for this at all.
+                    broken = break_stale_charge(p_active)
+                    if broken:
+                        combat_log += f"✨ **{p_active['name'].capitalize()}**'s {broken.replace('-', ' ').title()} was interrupted!\n"
 
                     # Embargo runs on its own five-turn clock rather than being wiped
                     if p_active['volatile_statuses'].get('embargo'):

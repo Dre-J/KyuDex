@@ -793,6 +793,116 @@ FLING_AILMENTS = {
 # Moves that read the target's berry rather than destroying it outright
 BERRY_EATING_MOVES = {'bug-bite', 'pluck'}
 
+# ==========================================
+# 🚫 MOVE RESTRICTIONS
+# ==========================================
+# Four separate ways a move can be locked out. They are gathered behind one predicate
+# because a restriction has to be honoured in three places at once - the player's move
+# buttons, the NPC's move selection, and the turn itself - and any of the three drifting
+# out of step means the restriction is either invisible or unenforceable.
+
+def find_move_slot(pokemon, move_name):
+    """The live move dict on a specimen, so PP can be read or spent. None if absent."""
+    if pokemon is None or not move_name:
+        return None
+    for slot in (pokemon.get('moves') or []):
+        if slot.get('name') == move_name:
+            return slot
+    return None
+
+
+def drain_move_pp(pokemon, move_name, amount=None):
+    """
+    Spend PP off one specific move. amount=None empties it outright, which is what Grudge
+    does. Returns how much was actually taken, so callers can report it and can treat 0 as
+    "there was nothing to drain".
+    """
+    slot = find_move_slot(pokemon, move_name)
+    if not slot:
+        return 0
+
+    current = slot.get('pp', 0)
+    if current <= 0:
+        return 0
+
+    taken = current if amount is None else min(current, amount)
+    slot['pp'] = current - taken
+    return taken
+
+
+def move_is_restricted(pokemon, move, opponent=None):
+    """
+    Why this move cannot be chosen right now, or None if it is free to use.
+
+    Returns a short human-readable reason so the same call can drive a disabled button,
+    an AI filter and a "but it failed" line without three different vocabularies.
+
+    Imprison is the odd one out: it lives on the OPPONENT and seals whatever moves that
+    specimen knows, so the check needs both sides of the field.
+    """
+    if pokemon is None or move is None:
+        return None
+
+    if isinstance(move, dict):
+        name = move.get('name')
+        move_class = move.get('class')
+    else:
+        name = move
+        move_class = None
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+
+    disabled = volatiles.get('disable') or {}
+    if disabled.get('move') and disabled['move'] == name:
+        return "disabled"
+
+    if volatiles.get('taunt') and move_class == 'status':
+        return "taunted"
+
+    # Torment blocks an immediate repeat, not the move forever
+    if volatiles.get('torment') and name and pokemon.get('last_move_used') == name:
+        return "tormented"
+
+    if opponent is not None:
+        sealed = (opponent.get('volatile_statuses') or {}).get('imprison') or []
+        if name in sealed:
+            return "sealed by Imprison"
+
+    return None
+
+
+def usable_moves(pokemon, opponent=None):
+    """
+    Every move a specimen may legally pick this turn: has PP and is not restricted.
+
+    The NPC AI selects from this rather than from a bare PP filter, so it cannot pick a
+    taunted status move or a disabled attack and waste its turn.
+    """
+    return [m for m in (pokemon.get('moves') or [])
+            if m.get('pp', 0) > 0 and move_is_restricted(pokemon, m, opponent) is None]
+
+
+def apply_grudge(fainted, attacker):
+    """
+    Grudge: when the user is knocked out, the move that finished it loses all its PP.
+
+    Returns a log fragment, or '' when there was no grudge set or nothing left to drain.
+    """
+    if fainted is None or attacker is None:
+        return ""
+
+    volatiles = fainted.get('volatile_statuses') or {}
+    if not volatiles.get('grudge'):
+        return ""
+
+    volatiles.pop('grudge', None)
+    killer_move = attacker.get('last_move_used')
+    if not drain_move_pp(attacker, killer_move, None):
+        return ""
+
+    return (f" 👻 {fainted['name'].capitalize()}'s grudge drained all the PP from "
+            f"{attacker['name'].capitalize()}'s {killer_move.replace('-', ' ').title()}!")
+
 # Item moves that can fail outright, and so are worth scoring before they are picked.
 # Incinerate, Bug Bite and Pluck are deliberately absent: they still land their damage
 # when the target has no berry, so there is nothing for the AI to avoid.
@@ -1100,11 +1210,79 @@ def restore_base_stats(pokemon):
     if pokemon is not None and '_base_stats' in pokemon:
         pokemon['stats'] = dict(pokemon.pop('_base_stats'))
 
+# ==========================================
+# ⏳ TWO-TURN CHARGE LIFECYCLE
+# ==========================================
+# A charge has exactly three ends: it fires, something cancels it, or the user is stopped
+# from firing it. The engines used to handle only the first two inline, so any path that
+# skipped a charging specimen's action - paralysis, sleep, freeze, flinch, a confusion
+# self-hit, or a target that fainted first - left 'charging' set forever. That in turn
+# stranded 'semi_invulnerable', because the end-of-turn sweep only drops that flag while
+# nothing is charging, and a specimen stuck underground can only be reached by the handful
+# of moves that bypass it (and by Max moves). Routing all three ends through here is what
+# stops the next new skip-path from reintroducing the bug.
+
+def begin_charge(pokemon, move_name, invulnerability=None):
+    """
+    Start a two-turn move. Marked fresh so the end-of-turn sweep knows this charge has not
+    had its chance to fire yet and must be left alone.
+    """
+    if pokemon is None:
+        return
+    volatiles = pokemon.setdefault('volatile_statuses', {})
+    volatiles['charging'] = move_name
+    volatiles['charge_fresh'] = True
+    if invulnerability:
+        volatiles['semi_invulnerable'] = invulnerability
+
+
+def end_charge(pokemon):
+    """
+    Drop a charge and any invulnerability with it - used both when the charged move fires
+    and when something cancels it outright, such as Gravity slamming a flier down.
+    """
+    if pokemon is None:
+        return
+    volatiles = pokemon.get('volatile_statuses') or {}
+    volatiles.pop('charging', None)
+    volatiles.pop('charge_fresh', None)
+    volatiles.pop('semi_invulnerable', None)
+
+
+def break_stale_charge(pokemon):
+    """
+    End-of-turn housekeeping for two-turn moves.
+
+    A charge started THIS turn is left alone. A charge that was already pending and did
+    not fire means the user was stopped, so the move fails and it comes back down - which
+    is what the games do when a Pokemon cannot execute the second turn of Fly.
+
+    Returns the name of the broken move, or None if there was nothing to break.
+    """
+    if pokemon is None:
+        return None
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+    charging = volatiles.get('charging')
+    if not charging:
+        volatiles.pop('charge_fresh', None)
+        volatiles.pop('semi_invulnerable', None)
+        return None
+
+    if volatiles.pop('charge_fresh', None):
+        # Turn one. It still has its shot next turn.
+        return None
+
+    end_charge(pokemon)
+    return charging
+
+
 def leave_field(pokemon):
     """Everything that comes off a specimen when it is withdrawn."""
     reset_stat_stages(pokemon)
     restore_base_stats(pokemon)
     restore_base_ability(pokemon)
+    end_charge(pokemon)
 
 def baton_pass_state(outgoing, incoming):
     """
@@ -1196,6 +1374,72 @@ def snapshot_delayed_attack(move_name, attacker, move, owner_label):
         'turns': 2,
         'just_queued': True,
     }
+
+# ==========================================
+# 💊 PARTY HEALS AND CLEANSES
+# ==========================================
+# Moves that scrub status off the WHOLE party, bench included. That is the entire point
+# of them, so they are the one family that needs to reach past the two specimens on the
+# field - hence the user_party argument threaded into calculate_damage.
+PARTY_CURE_MOVES = {'heal-bell', 'aromatherapy', 'sparkly-swirl'}
+
+# Restore a quarter of maximum HP and scrub status off the user's side. With one specimen
+# per side on this field, "the user's side" is the user.
+SIDE_RESTORE_MOVES = {'jungle-healing', 'lunar-blessing'}
+
+
+def cure_party_status(party, fallback=None):
+    """
+    Clear every major status across a whole party.
+
+    Returns the names actually cured so the caller can report them and can treat an empty
+    result as "but it failed". Falls back to a single specimen when no roster was handed
+    in, which keeps the move working rather than silently doing nothing.
+    """
+    roster = [m for m in (party or []) if m is not None]
+    if not roster and fallback is not None:
+        roster = [fallback]
+
+    cured = []
+    for member in roster:
+        if (member.get('status_condition') or {}).get('name'):
+            member['status_condition'] = None
+            cured.append(member.get('name', 'a specimen').capitalize())
+    return cured
+
+
+def snapshot_wish(attacker):
+    """
+    Wish banks HALF THE WISHER'S maximum HP and pays it out a turn later to whoever is
+    standing in the slot - which is what makes it a switch-in heal rather than a
+    self-heal. Mirrors the delayed-strike queue.
+    """
+    return {
+        'heal': max(1, math.floor(attacker.get('max_hp', 100) / 2)),
+        'name': attacker.get('name', 'a specimen'),
+        'turns': 1,
+        'just_queued': True,
+    }
+
+
+def resolve_wish(pending, occupant):
+    """Pay out a queued Wish to whoever now holds the slot. Returns (healed, message)."""
+    if not pending or occupant is None or occupant.get('current_hp', 0) <= 0:
+        return 0, ""
+
+    wisher = str(pending.get('name', 'a specimen')).capitalize()
+    max_hp = occupant.get('max_hp', 100)
+    before = occupant.get('current_hp', 0)
+
+    if before >= max_hp:
+        return 0, (f"💫 {wisher}'s wish came true, but "
+                   f"{occupant['name'].capitalize()} was already at full health!")
+
+    occupant['current_hp'] = min(max_hp, before + pending.get('heal', 0))
+    gained = occupant['current_hp'] - before
+    return gained, (f"💫 {wisher}'s wish came true! "
+                    f"{occupant['name'].capitalize()} restored {gained} HP!")
+
 
 def resolve_delayed_strike(pending, defender, weather='none', terrain='none'):
     """
@@ -1468,7 +1712,7 @@ def apply_survival_floor(defender, damage, magic_room=False):
 
     return damage, ""
 
-def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False):
+def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False, user_party=None):
     """
     Acts as the central physics and biology engine for field combat.
     Processes raw damage, parasitic drains, status afflictions, and hybrid field hazards.
@@ -1966,6 +2210,133 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             return 0, "But it failed! There is nothing it can fling!", 'none', [], 0
 
     # ==========================================
+    # 🚫 MOVE RESTRICTIONS
+    # ==========================================
+    # Disable and Torment both carry a database ailment ('disable' / 'torment') that the
+    # engines would otherwise hand to status_condition as a permanent bogus affliction -
+    # which also blocked every real status from landing. Returning early here keeps that
+    # payload from ever reaching the ailment stage.
+    if move_name == 'disable':
+        victim = defender.setdefault('volatile_statuses', {})
+        target_last = defender.get('last_move_used')
+
+        if victim.get('disable'):
+            return 0, "But it failed! It is already disabled!", 'none', [], 0
+        if not target_last or not find_move_slot(defender, target_last):
+            return 0, "But it failed! There was no move to disable!", 'none', [], 0
+
+        victim['disable'] = {'move': target_last, 'turns': 4}
+        return 0, (f"🚫 {defender['name'].capitalize()}'s "
+                   f"{target_last.replace('-', ' ').title()} was disabled!"), 'none', [], 0
+
+    if move_name == 'taunt':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('taunt'):
+            return 0, "But it failed! It is already taunted!", 'none', [], 0
+
+        victim['taunt'] = 3
+        return 0, (f"😤 {defender['name'].capitalize()} was taunted - it can only "
+                   f"manage attacking moves now!"), 'none', [], 0
+
+    if move_name == 'torment':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('torment'):
+            return 0, "But it failed! It is already tormented!", 'none', [], 0
+
+        victim['torment'] = True
+        return 0, (f"😖 {defender['name'].capitalize()} was tormented - it cannot use "
+                   f"the same move twice in a row!"), 'none', [], 0
+
+    if move_name == 'imprison':
+        # Storing the user's own movelist and testing membership at selection time is
+        # equivalent to the games' "moves we both know", and survives the opponent
+        # switching to something with a different set.
+        own_moves = [m.get('name') for m in (attacker.get('moves') or []) if m.get('name')]
+        if not own_moves:
+            return 0, "But it failed! There was nothing to seal!", 'none', [], 0
+        if (attacker.get('volatile_statuses') or {}).get('imprison'):
+            return 0, "But it failed! It has already sealed its moves!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})['imprison'] = own_moves
+        return 0, (f"🔒 {attacker['name'].capitalize()} sealed its own moves away - the "
+                   f"opponent cannot use them!"), 'none', [], 0
+
+    if move_name == 'spite':
+        target_last = defender.get('last_move_used')
+        taken = drain_move_pp(defender, target_last, random.randint(2, 5)) if target_last else 0
+
+        if not taken:
+            return 0, "But it failed! There was no move to sap!", 'none', [], 0
+        return 0, (f"👻 {defender['name'].capitalize()}'s "
+                   f"{target_last.replace('-', ' ').title()} lost {taken} PP!"), 'none', [], 0
+
+    if move_name == 'grudge':
+        attacker.setdefault('volatile_statuses', {})['grudge'] = True
+        return 0, (f"👻 {attacker['name'].capitalize()} wants its opponent to bear a "
+                   f"grudge!"), 'none', [], 0
+
+    # ==========================================
+    # ==========================================
+    # 💊 PARTY HEALS AND CLEANSES
+    # ==========================================
+    # These sit ahead of the generic healing block because several of them carry a
+    # database healing percentage aimed at the wrong specimen - Purify's 50% belongs to
+    # the USER, not the target it is curing.
+    if move_name in PARTY_CURE_MOVES and move_class == 'status':
+        cured = cure_party_status(user_party, attacker)
+        if not cured:
+            return 0, "But it failed! Nobody had anything to cure!", 'none', [], 0
+
+        chime = "🔔" if move_name == 'heal-bell' else "🌸"
+        return 0, (f"{chime} A soothing wave washed over the party - "
+                   f"{', '.join(cured)} recovered!"), 'none', [], 0
+
+    if move_name in SIDE_RESTORE_MOVES:
+        max_hp = attacker.get('max_hp', 100)
+        before = attacker.get('current_hp', 0)
+        had_status = (attacker.get('status_condition') or {}).get('name')
+
+        if before >= max_hp and not had_status:
+            return 0, "But it failed! There was nothing to mend!", 'none', [], 0
+
+        attacker['current_hp'] = min(max_hp, before + max(1, math.floor(max_hp * 0.25)))
+        attacker['status_condition'] = None
+        gained = attacker['current_hp'] - before
+
+        note = f"🌿 {attacker['name'].capitalize()} restored {gained} HP"
+        note += f" and shook off its {had_status}!" if had_status else "!"
+        return 0, note, 'none', [], 0
+
+    if move_name == 'take-heart':
+        # Never fails: even at full health with no status it still steels the user.
+        had_status = (attacker.get('status_condition') or {}).get('name')
+        attacker['status_condition'] = None
+
+        note = f"💗 {attacker['name'].capitalize()} took heart"
+        note += f" and shook off its {had_status}!" if had_status else "!"
+        return 0, note, 'none', [('attacker', 'special-attack', 1),
+                                 ('attacker', 'special-defense', 1)], 0
+
+    if move_name == 'purify':
+        if not (defender.get('status_condition') or {}).get('name'):
+            return 0, "But it failed! There was nothing to purify!", 'none', [], 0
+
+        cleansed = defender['status_condition']['name']
+        defender['status_condition'] = None
+
+        # The user is repaid with half its own maximum HP - the database's 50% is aimed
+        # at the target, which would otherwise heal the wrong specimen entirely.
+        max_hp = attacker.get('max_hp', 100)
+        before = attacker.get('current_hp', 0)
+        attacker['current_hp'] = min(max_hp, before + max(1, math.floor(max_hp * 0.5)))
+        gained = attacker['current_hp'] - before
+
+        note = (f"💜 {attacker['name'].capitalize()} purified "
+                f"{defender['name'].capitalize()}'s {cleansed}")
+        note += f" and restored {gained} HP!" if gained else "!"
+        return 0, note, 'none', [], 0
+
+    # ==========================================
     # 🚨 RESTORATIVE MOVES
     # ==========================================
     # Rest is a special case: the database records no healing and no ailment for it, but
@@ -1991,6 +2362,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif weather in ['rain', 'heavy-rain', 'sandstorm', 'hail', 'snow']:
                 fraction = 0.25
         elif move_name == 'shore-up' and weather == 'sandstorm':
+            fraction = 2.0 / 3.0
+        # Floral Healing draws on the ground it is standing on rather than the sky
+        elif move_name == 'floral-healing' and terrain == 'grassy':
             fraction = 2.0 / 3.0
 
         # A few of these mend the opponent rather than the user
@@ -2978,6 +3352,20 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name in ['explosion', 'self-destruct', 'memento', 'final-gambit']:
         attacker['current_hp'] = 0
         msg += f" {attacker['name'].capitalize()} sacrificed itself!"
+
+    # 🚨 SPARKLY SWIRL: an attack that also scrubs the user's own party clean
+    if move_name == 'sparkly-swirl' and damage > 0:
+        swirled = cure_party_status(user_party, attacker)
+        if swirled:
+            msg += f" 🌸 The swirl cleansed {', '.join(swirled)}!"
+
+    # 🚨 EERIE SPELL: saps the move the target last reached for
+    if move_name == 'eerie-spell' and damage > 0:
+        sapped = defender.get('last_move_used')
+        taken = drain_move_pp(defender, sapped, 3) if sapped else 0
+        if taken:
+            msg += (f" 🔮 {defender['name'].capitalize()}'s "
+                    f"{sapped.replace('-', ' ').title()} lost {taken} PP!")
 
     # 🚨 CORE ENFORCER: only bites if the target has already taken its turn. Moving second
     # is the price of the suppression, so a slower Core Enforcer is the one that lands it.
