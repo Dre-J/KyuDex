@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1064,6 +1064,12 @@ class PvPMoveMenu(discord.ui.View):
             is_p1 = (self.player_id == self.state['p1_id'])
             adp_state = self.state['p1_adaptation'] if is_p1 else self.state['p2_adaptation']
             key_items = self.state['p1_key_items'] if is_p1 else self.state['p2_key_items']
+
+            # Imprison sits on the OPPONENT, so the button lock needs both sides
+            opp_team_key = 'p2_team' if is_p1 else 'p1_team'
+            opp_active_idx = self.state['p2_active_index'] if is_p1 else self.state['p1_active_index']
+            opp_poke = self.state[opp_team_key][opp_active_idx]
+            pvp_has_legal_move = bool(usable_moves(self.active_poke, opp_poke))
             
             held_item = (self.active_poke.get('held_item') or "").lower().replace(' ', '-')
             # THE TEMPORAL LOCK FLAG
@@ -1171,6 +1177,12 @@ class PvPMoveMenu(discord.ui.View):
                 # Calculate the lock state at the top of the loop!
                 is_disabled = (move['pp'] <= 0)
                 if has_choice_item and choice_lock_move and move['name'] != choice_lock_move:
+                    is_disabled = True
+
+                # Disable / Taunt / Torment / Imprison. Only enforced while SOMETHING is
+                # still legal: this engine has no Struggle fallback of its own, so greying
+                # out the last option would leave the player with nothing to click.
+                if pvp_has_legal_move and move_is_restricted(self.active_poke, move, opp_poke):
                     is_disabled = True
                 
                 # ---ASSAULT VEST FIREWALL ---
@@ -1946,7 +1958,7 @@ class SwapMenu(discord.ui.View):
                     print(f"DEBUG: Error applying voluntary swap hazards/abilities: {e}")
 
                 if new_active['current_hp'] > 0:
-                    available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+                    available_moves = usable_moves(n_active, p_active)
                     if available_moves:
                         chosen_move = random.choice(available_moves)
                         chosen_move['pp'] -= 1 
@@ -2452,8 +2464,10 @@ class BattleDashboard(discord.ui.View):
             recharge_btn.callback = self.handle_move
             self.add_item(recharge_btn)
             
-        elif total_pp <= 0:
-            # The Specimen is exhausted! Spawn the Struggle Button.
+        elif total_pp <= 0 or not usable_moves(p_active, n_active):
+            # Exhausted, or every move locked away by Disable / Taunt / Torment /
+            # Imprison. Either way the only thing left is Struggle - without this second
+            # case a fully restricted specimen would face a grid of dead buttons.
             struggle_btn = discord.ui.Button(
                 label="Struggle", 
                 style=discord.ButtonStyle.danger, 
@@ -2475,6 +2489,11 @@ class BattleDashboard(discord.ui.View):
                 # Calculate the lock!
                 is_disabled = (curr_pp <= 0)
                 if has_choice_item and choice_lock_move and move_name != choice_lock_move:
+                    is_disabled = True
+
+                # Disable / Taunt / Torment / Imprison
+                restriction = move_is_restricted(p_active, move_dict, n_active)
+                if restriction:
                     is_disabled = True
 
                 # --- ASSAULT VEST FIREWALL ---
@@ -2811,7 +2830,7 @@ class BattleDashboard(discord.ui.View):
                             p_active['volatile_statuses']['choice_lock'] = move_name
                     # ------------------------------------------
 
-                    p_available_moves = [m for m in p_active['moves'] if m['pp'] > 0]
+                    p_available_moves = usable_moves(p_active, n_active)
                     p_z_display = ""
                     
                     # --- STRUGGLE OVERRIDE (PLAYER) ---
@@ -2956,7 +2975,7 @@ class BattleDashboard(discord.ui.View):
                     # ==========================================
                     # 2. REGISTER THE NPC'S PAYLOAD
                     # ==========================================
-                    available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+                    available_moves = usable_moves(n_active, p_active)
                     n_move_stats = None
                     npc_move_name = None
                     
@@ -3741,6 +3760,13 @@ class BattleDashboard(discord.ui.View):
                         attacker['last_move_used'] = raw_move_name
                         attacker['last_move_type'] = move_stats.get('type')
 
+                        # Grudge: if that blow was the one that finished the target, the
+                        # move that did it loses every last PP.
+                        if defender['current_hp'] <= 0:
+                            grudge_log = apply_grudge(defender, attacker)
+                            if grudge_log:
+                                combat_log += grudge_log.strip() + "\n"
+
                         if msg: combat_log += f"*{msg}*\n"
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
                         
@@ -4113,7 +4139,7 @@ class BattleDashboard(discord.ui.View):
 
         try:
             # --- 1. NPC THREAT ASSESSMENT ---
-            available_moves = [m for m in n_active['moves'] if m['pp'] > 0]
+            available_moves = usable_moves(n_active, p_active)
             n_move_stats = None
             npc_move_name = None
             is_swapping = False
@@ -4401,6 +4427,19 @@ class BattleDashboard(discord.ui.View):
                     if enc['turns'] <= 0:
                         del mon['volatile_statuses']['encore']
                         combat_log += f"👏 {owner_str} **{mon['name'].capitalize()}**'s encore ended!\n"
+
+                dis = (mon.get('volatile_statuses') or {}).get('disable')
+                if dis:
+                    dis['turns'] -= 1
+                    if dis['turns'] <= 0:
+                        del mon['volatile_statuses']['disable']
+                        combat_log += f"🔓 {owner_str} **{mon['name'].capitalize()}** is no longer disabled!\n"
+
+                if (mon.get('volatile_statuses') or {}).get('taunt'):
+                    mon['volatile_statuses']['taunt'] -= 1
+                    if mon['volatile_statuses']['taunt'] <= 0:
+                        del mon['volatile_statuses']['taunt']
+                        combat_log += f"😌 {owner_str} **{mon['name'].capitalize()}**'s taunt wore off!\n"
 
             # An active Uproar jolts anything already asleep back awake
             if is_uproar_active(p_active, n_active):
@@ -6617,6 +6656,13 @@ class Combat(commands.Cog):
                     if heal > 0:
                         attacker['current_hp'] = min(attacker.get('max_hp', 100), attacker['current_hp'] + heal)
                        
+                    # Grudge: if that blow was the one that finished the target, the move
+                    # that did it loses every last PP.
+                    if defender['current_hp'] <= 0:
+                        grudge_log = apply_grudge(defender, attacker)
+                        if grudge_log:
+                            combat_log += grudge_log.strip() + "\n"
+
                     # Print out the damage and physics engine messages!
                     if msg: combat_log += f"↳ {msg}\n"
                     if dmg > 0: combat_log += f"↳ Dealt **{dmg}** damage.\n"
@@ -6883,6 +6929,19 @@ class Combat(commands.Cog):
                     if enc['turns'] <= 0:
                         del mon['volatile_statuses']['encore']
                         combat_log += f"👏 {owner_str} **{mon['name'].capitalize()}**'s encore ended!\n"
+
+                dis = (mon.get('volatile_statuses') or {}).get('disable')
+                if dis:
+                    dis['turns'] -= 1
+                    if dis['turns'] <= 0:
+                        del mon['volatile_statuses']['disable']
+                        combat_log += f"🔓 {owner_str} **{mon['name'].capitalize()}** is no longer disabled!\n"
+
+                if (mon.get('volatile_statuses') or {}).get('taunt'):
+                    mon['volatile_statuses']['taunt'] -= 1
+                    if mon['volatile_statuses']['taunt'] <= 0:
+                        del mon['volatile_statuses']['taunt']
+                        combat_log += f"😌 {owner_str} **{mon['name'].capitalize()}**'s taunt wore off!\n"
 
             # An active Uproar jolts anything already asleep back awake
             if is_uproar_active(new_p1_active, new_p2_active):

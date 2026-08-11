@@ -793,6 +793,116 @@ FLING_AILMENTS = {
 # Moves that read the target's berry rather than destroying it outright
 BERRY_EATING_MOVES = {'bug-bite', 'pluck'}
 
+# ==========================================
+# 🚫 MOVE RESTRICTIONS
+# ==========================================
+# Four separate ways a move can be locked out. They are gathered behind one predicate
+# because a restriction has to be honoured in three places at once - the player's move
+# buttons, the NPC's move selection, and the turn itself - and any of the three drifting
+# out of step means the restriction is either invisible or unenforceable.
+
+def find_move_slot(pokemon, move_name):
+    """The live move dict on a specimen, so PP can be read or spent. None if absent."""
+    if pokemon is None or not move_name:
+        return None
+    for slot in (pokemon.get('moves') or []):
+        if slot.get('name') == move_name:
+            return slot
+    return None
+
+
+def drain_move_pp(pokemon, move_name, amount=None):
+    """
+    Spend PP off one specific move. amount=None empties it outright, which is what Grudge
+    does. Returns how much was actually taken, so callers can report it and can treat 0 as
+    "there was nothing to drain".
+    """
+    slot = find_move_slot(pokemon, move_name)
+    if not slot:
+        return 0
+
+    current = slot.get('pp', 0)
+    if current <= 0:
+        return 0
+
+    taken = current if amount is None else min(current, amount)
+    slot['pp'] = current - taken
+    return taken
+
+
+def move_is_restricted(pokemon, move, opponent=None):
+    """
+    Why this move cannot be chosen right now, or None if it is free to use.
+
+    Returns a short human-readable reason so the same call can drive a disabled button,
+    an AI filter and a "but it failed" line without three different vocabularies.
+
+    Imprison is the odd one out: it lives on the OPPONENT and seals whatever moves that
+    specimen knows, so the check needs both sides of the field.
+    """
+    if pokemon is None or move is None:
+        return None
+
+    if isinstance(move, dict):
+        name = move.get('name')
+        move_class = move.get('class')
+    else:
+        name = move
+        move_class = None
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+
+    disabled = volatiles.get('disable') or {}
+    if disabled.get('move') and disabled['move'] == name:
+        return "disabled"
+
+    if volatiles.get('taunt') and move_class == 'status':
+        return "taunted"
+
+    # Torment blocks an immediate repeat, not the move forever
+    if volatiles.get('torment') and name and pokemon.get('last_move_used') == name:
+        return "tormented"
+
+    if opponent is not None:
+        sealed = (opponent.get('volatile_statuses') or {}).get('imprison') or []
+        if name in sealed:
+            return "sealed by Imprison"
+
+    return None
+
+
+def usable_moves(pokemon, opponent=None):
+    """
+    Every move a specimen may legally pick this turn: has PP and is not restricted.
+
+    The NPC AI selects from this rather than from a bare PP filter, so it cannot pick a
+    taunted status move or a disabled attack and waste its turn.
+    """
+    return [m for m in (pokemon.get('moves') or [])
+            if m.get('pp', 0) > 0 and move_is_restricted(pokemon, m, opponent) is None]
+
+
+def apply_grudge(fainted, attacker):
+    """
+    Grudge: when the user is knocked out, the move that finished it loses all its PP.
+
+    Returns a log fragment, or '' when there was no grudge set or nothing left to drain.
+    """
+    if fainted is None or attacker is None:
+        return ""
+
+    volatiles = fainted.get('volatile_statuses') or {}
+    if not volatiles.get('grudge'):
+        return ""
+
+    volatiles.pop('grudge', None)
+    killer_move = attacker.get('last_move_used')
+    if not drain_move_pp(attacker, killer_move, None):
+        return ""
+
+    return (f" 👻 {fainted['name'].capitalize()}'s grudge drained all the PP from "
+            f"{attacker['name'].capitalize()}'s {killer_move.replace('-', ' ').title()}!")
+
 # Item moves that can fail outright, and so are worth scoring before they are picked.
 # Incinerate, Bug Bite and Pluck are deliberately absent: they still land their damage
 # when the target has no berry, so there is nothing for the AI to avoid.
@@ -2034,6 +2144,74 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             return 0, "But it failed! There is nothing it can fling!", 'none', [], 0
 
     # ==========================================
+    # 🚫 MOVE RESTRICTIONS
+    # ==========================================
+    # Disable and Torment both carry a database ailment ('disable' / 'torment') that the
+    # engines would otherwise hand to status_condition as a permanent bogus affliction -
+    # which also blocked every real status from landing. Returning early here keeps that
+    # payload from ever reaching the ailment stage.
+    if move_name == 'disable':
+        victim = defender.setdefault('volatile_statuses', {})
+        target_last = defender.get('last_move_used')
+
+        if victim.get('disable'):
+            return 0, "But it failed! It is already disabled!", 'none', [], 0
+        if not target_last or not find_move_slot(defender, target_last):
+            return 0, "But it failed! There was no move to disable!", 'none', [], 0
+
+        victim['disable'] = {'move': target_last, 'turns': 4}
+        return 0, (f"🚫 {defender['name'].capitalize()}'s "
+                   f"{target_last.replace('-', ' ').title()} was disabled!"), 'none', [], 0
+
+    if move_name == 'taunt':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('taunt'):
+            return 0, "But it failed! It is already taunted!", 'none', [], 0
+
+        victim['taunt'] = 3
+        return 0, (f"😤 {defender['name'].capitalize()} was taunted - it can only "
+                   f"manage attacking moves now!"), 'none', [], 0
+
+    if move_name == 'torment':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('torment'):
+            return 0, "But it failed! It is already tormented!", 'none', [], 0
+
+        victim['torment'] = True
+        return 0, (f"😖 {defender['name'].capitalize()} was tormented - it cannot use "
+                   f"the same move twice in a row!"), 'none', [], 0
+
+    if move_name == 'imprison':
+        # Storing the user's own movelist and testing membership at selection time is
+        # equivalent to the games' "moves we both know", and survives the opponent
+        # switching to something with a different set.
+        own_moves = [m.get('name') for m in (attacker.get('moves') or []) if m.get('name')]
+        if not own_moves:
+            return 0, "But it failed! There was nothing to seal!", 'none', [], 0
+        if (attacker.get('volatile_statuses') or {}).get('imprison'):
+            return 0, "But it failed! It has already sealed its moves!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})['imprison'] = own_moves
+        return 0, (f"🔒 {attacker['name'].capitalize()} sealed its own moves away - the "
+                   f"opponent cannot use them!"), 'none', [], 0
+
+    if move_name == 'spite':
+        target_last = defender.get('last_move_used')
+        taken = drain_move_pp(defender, target_last, random.randint(2, 5)) if target_last else 0
+
+        if not taken:
+            return 0, "But it failed! There was no move to sap!", 'none', [], 0
+        return 0, (f"👻 {defender['name'].capitalize()}'s "
+                   f"{target_last.replace('-', ' ').title()} lost {taken} PP!"), 'none', [], 0
+
+    if move_name == 'grudge':
+        attacker.setdefault('volatile_statuses', {})['grudge'] = True
+        return 0, (f"👻 {attacker['name'].capitalize()} wants its opponent to bear a "
+                   f"grudge!"), 'none', [], 0
+
+    # ==========================================
+    # ==========================================
+    # ==========================================
     # 🚨 RESTORATIVE MOVES
     # ==========================================
     # Rest is a special case: the database records no healing and no ailment for it, but
@@ -3046,6 +3224,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name in ['explosion', 'self-destruct', 'memento', 'final-gambit']:
         attacker['current_hp'] = 0
         msg += f" {attacker['name'].capitalize()} sacrificed itself!"
+
+    # 🚨 EERIE SPELL: saps the move the target last reached for
+    if move_name == 'eerie-spell' and damage > 0:
+        sapped = defender.get('last_move_used')
+        taken = drain_move_pp(defender, sapped, 3) if sapped else 0
+        if taken:
+            msg += (f" 🔮 {defender['name'].capitalize()}'s "
+                    f"{sapped.replace('-', ' ').title()} lost {taken} PP!")
 
     # 🚨 CORE ENFORCER: only bites if the target has already taken its turn. Moving second
     # is the price of the suppression, so a slower Core Enforcer is the one that lands it.
