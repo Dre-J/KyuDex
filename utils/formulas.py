@@ -830,6 +830,215 @@ def drain_move_pp(pokemon, move_name, amount=None):
     return taken
 
 
+# ==========================================
+# ⚡ PRIORITY-CONDITIONAL MOVES
+# ==========================================
+# Only usable the moment their user arrives on the field.
+FIRST_TURN_MOVES = {'fake-out', 'first-impression'}
+
+# Moves that reorder a SIDE rather than targeting anyone. This engine fields exactly one
+# specimen per side, so there is no third party to shuffle - they are kept here so the
+# behaviour is stated in one place rather than silently doing nothing.
+TURN_ORDER_MOVES = {'quash', 'after-you'}
+
+
+def is_first_turn_out(pokemon):
+    """Whether the specimen has yet to finish a turn on the field."""
+    if pokemon is None:
+        return False
+    return (pokemon.get('turns_on_field') or 0) == 0
+
+
+def is_readying_attack(pokemon):
+    """
+    Whether this specimen is winding up an attack it has not yet thrown - which is the
+    only thing Sucker Punch can interrupt.
+
+    The engines stamp '_committed_move' with the class of whatever was locked in for the
+    turn, so the queue's knowledge of both moves is available before either resolves.
+    """
+    if pokemon is None or pokemon.get('acted_this_turn'):
+        return False
+    committed = pokemon.get('_committed_move')
+    return bool(committed) and committed != 'status'
+
+
+# ==========================================
+# 🛑 TRAPPING
+# ==========================================
+# Moves that pin the target in place until it faints or the trapper leaves.
+HARD_TRAP_MOVES = {'anchor-shot', 'block', 'mean-look', 'spider-web',
+                   'spirit-shackle', 'thousand-waves'}
+
+# Fairy Lock binds the WHOLE field rather than one target, and only for the next turn.
+FAIRY_LOCK_TURNS = 2
+
+
+def can_be_trapped(pokemon):
+    """
+    Ghost-types walk straight through anything that would hold them.
+
+    The engines already honoured this for Shadow Tag but not for the trapping MOVES,
+    which set their flag unconditionally - so a Spider Web used to pin a Gengar.
+    """
+    if pokemon is None:
+        return False
+    return 'ghost' not in (pokemon.get('types') or [])
+
+
+def apply_trap(pokemon):
+    """Pin a specimen in place. Returns whether it actually took hold."""
+    if not can_be_trapped(pokemon):
+        return False
+    pokemon.setdefault('volatile_statuses', {})['hard_trapped'] = True
+    return True
+
+
+def is_trapped(pokemon, opponent=None):
+    """
+    Whether this specimen is barred from switching out.
+
+    One home for what the engines had copy-pasted at three sites, so the Ghost exemption
+    cannot apply to some trapping sources and not others. Fairy Lock is deliberately
+    outside that exemption: it pins the whole field rather than targeting anybody.
+    """
+    if pokemon is None:
+        return False
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+    if volatiles.get('fairy_lock'):
+        return True
+
+    if not can_be_trapped(pokemon):
+        return False
+
+    if volatiles.get('partially_trapped', 0) > 0 or volatiles.get('hard_trapped'):
+        return True
+    if opponent is not None and get_active_ability(opponent) == 'shadow-tag':
+        return True
+
+    return False
+
+
+# ==========================================
+# 🪆 SUBSTITUTE
+# ==========================================
+# A decoy that soaks hits until its own HP runs out. Built here because Shed Tail is
+# meaningless without it - the move's whole purpose is to hand a live substitute to the
+# replacement. The stored value IS the decoy's remaining HP.
+#
+# Each move pays for a decoy worth exactly what it cost the user.
+SUBSTITUTE_MOVES = {'substitute': 0.25, 'shed-tail': 0.5}
+
+# Sound goes straight through a substitute, as does Infiltrator.
+SOUND_MOVES = {
+    'boomburst', 'bug-buzz', 'chatter', 'clanging-scales', 'clangorous-soul',
+    'clangorous-soulblaze', 'confide', 'disarming-voice', 'echoed-voice', 'eerie-spell',
+    'grass-whistle', 'growl', 'heal-bell', 'howl', 'hyper-voice', 'metal-sound',
+    'noble-roar', 'overdrive', 'parting-shot', 'perish-song', 'psychic-noise',
+    'relic-song', 'roar', 'round', 'screech', 'shadow-panic', 'sing', 'snarl',
+    'snore', 'sparkling-aria', 'supersonic', 'torch-song', 'uproar',
+}
+
+
+def substitute_hp(pokemon):
+    """Remaining HP on the specimen's decoy, or 0 when it has none."""
+    if pokemon is None:
+        return 0
+    return (pokemon.get('volatile_statuses') or {}).get('substitute', 0) or 0
+
+
+def create_substitute(pokemon, fraction):
+    """
+    Spend HP to put up a decoy. Returns (worked, message).
+
+    The user must have MORE than the cost - paying exactly its remaining HP would be
+    suicide, and the games refuse it rather than allowing that.
+    """
+    if pokemon is None:
+        return False, "But it failed!"
+    if substitute_hp(pokemon):
+        return False, "But it failed! It already has a substitute!"
+
+    max_hp = pokemon.get('max_hp', 100)
+    cost = max(1, math.floor(max_hp * fraction))
+    if pokemon.get('current_hp', 0) <= cost:
+        return False, "But it failed! It does not have the health to spare!"
+
+    pokemon['current_hp'] -= cost
+    pokemon.setdefault('volatile_statuses', {})['substitute'] = cost
+    return True, (f"🪆 {pokemon['name'].capitalize()} put up a substitute! "
+                  f"(-{cost} HP)")
+
+
+def substitute_intercepts(defender, move, attacker=None):
+    """Whether the target's decoy takes this hit rather than the target itself."""
+    if not substitute_hp(defender):
+        return False
+
+    name = (move.get('name') or '').lower().replace(' ', '-') if isinstance(move, dict) else str(move)
+    if name in SOUND_MOVES:
+        return False
+    if attacker is not None and get_active_ability(attacker) == 'infiltrator':
+        return False
+    return True
+
+
+def absorb_with_substitute(defender, damage):
+    """
+    Pour damage into the decoy. Returns (damage_that_reaches_the_specimen, message).
+
+    Overflow is thrown away rather than carrying through - a substitute that breaks
+    absorbs the whole blow, however big it was.
+    """
+    volatiles = defender.setdefault('volatile_statuses', {})
+    remaining = volatiles.get('substitute', 0) or 0
+    if remaining <= 0:
+        return damage, ""
+
+    if damage < remaining:
+        volatiles['substitute'] = remaining - damage
+        return 0, " 🪆 The substitute took the hit!"
+
+    volatiles.pop('substitute', None)
+    return 0, " 🪆 The substitute broke!"
+
+
+# ==========================================
+# 💢 STRUGGLE
+# ==========================================
+# The last resort, for a specimen with no legal move left - out of PP, or locked out by
+# Disable, Taunt, Torment and Imprison between them.
+STRUGGLE_RECOIL_FRACTION = 0.25
+
+
+def struggle_move():
+    """
+    A fresh Struggle payload, built rather than read from base_moves.
+
+    The stored row is Normal-type, which would let a Ghost shrug Struggle off entirely -
+    the one thing it must never do. It is returned as a new dict each call so callers can
+    mutate it without poisoning the next one.
+    """
+    return {
+        'name': 'struggle', 'base_name': 'struggle',
+        'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
+        'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
+        'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
+        'status_type': 'none', 'status_chance': 0,
+        'healing': 0, 'drain': 0, 'priority': 0, 'pp': 1, 'max_pp': 1,
+    }
+
+
+def apply_struggle_recoil(attacker):
+    """Struggle costs the user a quarter of its maximum HP. Returns the damage taken."""
+    if attacker is None:
+        return 0
+    recoil = max(1, math.floor(attacker.get('max_hp', 100) * STRUGGLE_RECOIL_FRACTION))
+    attacker['current_hp'] = max(0, attacker.get('current_hp', 0) - recoil)
+    return recoil
+
+
 def move_is_restricted(pokemon, move, opponent=None):
     """
     Why this move cannot be chosen right now, or None if it is free to use.
@@ -1279,6 +1488,9 @@ def break_stale_charge(pokemon):
 
 def leave_field(pokemon):
     """Everything that comes off a specimen when it is withdrawn."""
+    if pokemon is not None:
+        # Coming back in counts as arriving fresh, which is what re-arms Fake Out
+        pokemon['turns_on_field'] = 0
     reset_stat_stages(pokemon)
     restore_base_stats(pokemon)
     restore_base_ability(pokemon)
@@ -2277,6 +2489,35 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
     # ==========================================
     # ==========================================
+    # ⚡ PRIORITY-CONDITIONAL MOVES
+    # ==========================================
+    if move_name in FIRST_TURN_MOVES and not is_first_turn_out(attacker):
+        return 0, (f"But it failed! {attacker['name'].capitalize()} has been out too "
+                   f"long for that!"), 'none', [], 0
+
+    if move_name == 'sucker-punch' and not is_readying_attack(defender):
+        return 0, "But it failed! The target was not winding up an attack!", 'none', [], 0
+
+    # Quash, After You and Instruct all shuffle one SIDE's turn order, and this engine
+    # only ever fields a single specimen per side. There is nobody to move around, so they
+    # say so rather than burning a turn on a silent no-op.
+    if move_name == 'instruct':
+        return 0, "But it failed! There is no ally to instruct!", 'none', [], 0
+
+    if move_name in TURN_ORDER_MOVES:
+        return 0, ("But it failed! With one specimen per side there is no turn order "
+                   "left to rearrange!"), 'none', [], 0
+
+    # ==========================================
+    # 🪆 SUBSTITUTE
+    # ==========================================
+    # Shed Tail pays double for its decoy and then pivots out; the switch itself is the
+    # engines' pivot handling, which only needs the decoy to exist first.
+    if move_name in SUBSTITUTE_MOVES:
+        worked, note = create_substitute(attacker, SUBSTITUTE_MOVES[move_name])
+        return 0, note, 'none', [], 0
+
+    # ==========================================
     # 💊 PARTY HEALS AND CLEANSES
     # ==========================================
     # These sit ahead of the generic healing block because several of them carry a
@@ -3090,13 +3331,23 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # These only apply if the move is a status move, or if the kinetic strike dealt damage!
     if damage > 0 or move.get('class') == 'status':
-        if move_name in ['anchor-shot', 'spirit-shackle', 'block', 'mean-look', 'spider-web']:
-            defender['volatile_statuses']['hard_trapped'] = True
-            msg += f" 🛑 {defender['name'].capitalize()} can no longer escape!"
-            
+        if move_name in HARD_TRAP_MOVES:
+            if apply_trap(defender):
+                msg += f" 🛑 {defender['name'].capitalize()} can no longer escape!"
+            else:
+                msg += f" 👻 {defender['name'].capitalize()} slipped free - Ghosts cannot be held!"
+
+        elif move_name == 'fairy-lock':
+            # Binds the whole field for the following turn rather than targeting anyone,
+            # so it is the one trap a Ghost cannot walk out of.
+            for bound in (attacker, defender):
+                bound.setdefault('volatile_statuses', {})['fairy_lock'] = FAIRY_LOCK_TURNS
+            msg += " 🔒 No one will be able to run away next turn!"
+
         elif move_name == 'jaw-lock':
-            attacker['volatile_statuses']['hard_trapped'] = True
-            defender['volatile_statuses']['hard_trapped'] = True
+            # Binds them together - but only whoever can actually be bound
+            apply_trap(attacker)
+            apply_trap(defender)
             msg += " 🛑 Neither Pokémon can run away!"
 
         elif move_name == 'no-retreat':
@@ -3138,6 +3389,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # A localized dictionary to handle moves that alter multiple biological stats at once!
     COMPLEX_STAT_MOVES = {
+        # --- Parting Shot drops BOTH offences before pivoting out. The database row only
+        # carries the Attack half, so left to the generic path it would land half a move.
+        'parting-shot': [('defender', 'attack', -1), ('defender', 'special-attack', -1)],
+
         # --- The Grand Boosters ---
         'quiver-dance': [('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
         'shell-smash': [('attacker', 'defense', -1), ('attacker', 'special-defense', -1), ('attacker', 'attack', 2), ('attacker', 'special-attack', 2), ('attacker', 'speed', 2)],
@@ -3359,6 +3614,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if swirled:
             msg += f" 🌸 The swirl cleansed {', '.join(swirled)}!"
 
+    # 🚨 FAKE OUT: the flinch is the whole point, so it is certain rather than a roll
+    if move_name == 'fake-out' and damage > 0:
+        defender.setdefault('volatile_statuses', {})['flinch'] = True
+        msg += f" {defender['name'].capitalize()} flinched!"
+
     # 🚨 EERIE SPELL: saps the move the target last reached for
     if move_name == 'eerie-spell' and damage > 0:
         sapped = defender.get('last_move_used')
@@ -3503,6 +3763,23 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif move_name == 'smelling-salts' and defender.get('status_condition', {}).get('name') == 'paralysis':
             defender['status_condition'] = None
             msg += f" {defender['name'].capitalize()}'s paralysis was completely cured by the shock!"
+
+    # ==========================================
+    # 🪆 SUBSTITUTE INTERCEPTOR
+    # ==========================================
+    # Sits at the very end so it sees the final damage, status and stat payload together.
+    # A decoy eats all three: the specimen behind it takes nothing, catches nothing, and
+    # keeps its stat stages. Anything aimed at the ATTACKER (recoil, self-boosts, drain)
+    # is deliberately left alone.
+    if substitute_intercepts(defender, move, attacker):
+        if damage > 0:
+            damage, sub_note = absorb_with_substitute(defender, damage)
+            msg += sub_note
+        elif move_class == 'status' and 'selected-pokemon' in str(move.get('target', '')):
+            return 0, "But it failed! The substitute took it instead!", 'none', [], healing_amount
+
+        inflicted_status = None
+        stat_changes = [c for c in stat_changes if c[0] != 'defender']
 
     return damage, msg.strip(), inflicted_status, stat_changes, healing_amount
 
