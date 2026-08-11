@@ -405,6 +405,7 @@ WEATHER_MOVES = {
     'sandstorm': 'sand',
     'hail': 'hail',
     'snowscape': 'hail',
+    'chilly-reception': 'hail',
     'Max Flare': 'sun', 
     'Max Geyser': 'rain', 
     'Max Hailstorm': 'hail', 
@@ -462,7 +463,8 @@ TWO_TURN_MOVES = {
                             'ice-burn': {'msg': "became cloaked in freezing air!"}
                         }
 
-pivot_moves = ['u-turn', 'volt-switch', 'flip-turn', 'baton-pass', 'parting-shot', 'chilly-reception']
+pivot_moves = ['u-turn', 'volt-switch', 'flip-turn', 'baton-pass', 'parting-shot',
+               'chilly-reception', 'shed-tail']
 
 phaze_moves = ['roar', 'whirlwind', 'dragon-tail', 'circle-throw']
 

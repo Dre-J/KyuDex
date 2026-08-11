@@ -831,6 +831,90 @@ def drain_move_pp(pokemon, move_name, amount=None):
 
 
 # ==========================================
+# 🪆 SUBSTITUTE
+# ==========================================
+# A decoy that soaks hits until its own HP runs out. Built here because Shed Tail is
+# meaningless without it - the move's whole purpose is to hand a live substitute to the
+# replacement. The stored value IS the decoy's remaining HP.
+#
+# Each move pays for a decoy worth exactly what it cost the user.
+SUBSTITUTE_MOVES = {'substitute': 0.25, 'shed-tail': 0.5}
+
+# Sound goes straight through a substitute, as does Infiltrator.
+SOUND_MOVES = {
+    'boomburst', 'bug-buzz', 'chatter', 'clanging-scales', 'clangorous-soul',
+    'clangorous-soulblaze', 'confide', 'disarming-voice', 'echoed-voice', 'eerie-spell',
+    'grass-whistle', 'growl', 'heal-bell', 'howl', 'hyper-voice', 'metal-sound',
+    'noble-roar', 'overdrive', 'parting-shot', 'perish-song', 'psychic-noise',
+    'relic-song', 'roar', 'round', 'screech', 'shadow-panic', 'sing', 'snarl',
+    'snore', 'sparkling-aria', 'supersonic', 'torch-song', 'uproar',
+}
+
+
+def substitute_hp(pokemon):
+    """Remaining HP on the specimen's decoy, or 0 when it has none."""
+    if pokemon is None:
+        return 0
+    return (pokemon.get('volatile_statuses') or {}).get('substitute', 0) or 0
+
+
+def create_substitute(pokemon, fraction):
+    """
+    Spend HP to put up a decoy. Returns (worked, message).
+
+    The user must have MORE than the cost - paying exactly its remaining HP would be
+    suicide, and the games refuse it rather than allowing that.
+    """
+    if pokemon is None:
+        return False, "But it failed!"
+    if substitute_hp(pokemon):
+        return False, "But it failed! It already has a substitute!"
+
+    max_hp = pokemon.get('max_hp', 100)
+    cost = max(1, math.floor(max_hp * fraction))
+    if pokemon.get('current_hp', 0) <= cost:
+        return False, "But it failed! It does not have the health to spare!"
+
+    pokemon['current_hp'] -= cost
+    pokemon.setdefault('volatile_statuses', {})['substitute'] = cost
+    return True, (f"🪆 {pokemon['name'].capitalize()} put up a substitute! "
+                  f"(-{cost} HP)")
+
+
+def substitute_intercepts(defender, move, attacker=None):
+    """Whether the target's decoy takes this hit rather than the target itself."""
+    if not substitute_hp(defender):
+        return False
+
+    name = (move.get('name') or '').lower().replace(' ', '-') if isinstance(move, dict) else str(move)
+    if name in SOUND_MOVES:
+        return False
+    if attacker is not None and get_active_ability(attacker) == 'infiltrator':
+        return False
+    return True
+
+
+def absorb_with_substitute(defender, damage):
+    """
+    Pour damage into the decoy. Returns (damage_that_reaches_the_specimen, message).
+
+    Overflow is thrown away rather than carrying through - a substitute that breaks
+    absorbs the whole blow, however big it was.
+    """
+    volatiles = defender.setdefault('volatile_statuses', {})
+    remaining = volatiles.get('substitute', 0) or 0
+    if remaining <= 0:
+        return damage, ""
+
+    if damage < remaining:
+        volatiles['substitute'] = remaining - damage
+        return 0, " 🪆 The substitute took the hit!"
+
+    volatiles.pop('substitute', None)
+    return 0, " 🪆 The substitute broke!"
+
+
+# ==========================================
 # 💢 STRUGGLE
 # ==========================================
 # The last resort, for a specimen with no legal move left - out of PP, or locked out by
@@ -2312,6 +2396,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
     # ==========================================
     # ==========================================
+    # 🪆 SUBSTITUTE
+    # ==========================================
+    # Shed Tail pays double for its decoy and then pivots out; the switch itself is the
+    # engines' pivot handling, which only needs the decoy to exist first.
+    if move_name in SUBSTITUTE_MOVES:
+        worked, note = create_substitute(attacker, SUBSTITUTE_MOVES[move_name])
+        return 0, note, 'none', [], 0
+
+    # ==========================================
     # 💊 PARTY HEALS AND CLEANSES
     # ==========================================
     # These sit ahead of the generic healing block because several of them carry a
@@ -3173,6 +3266,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     # A localized dictionary to handle moves that alter multiple biological stats at once!
     COMPLEX_STAT_MOVES = {
+        # --- Parting Shot drops BOTH offences before pivoting out. The database row only
+        # carries the Attack half, so left to the generic path it would land half a move.
+        'parting-shot': [('defender', 'attack', -1), ('defender', 'special-attack', -1)],
+
         # --- The Grand Boosters ---
         'quiver-dance': [('attacker', 'special-attack', 1), ('attacker', 'special-defense', 1), ('attacker', 'speed', 1)],
         'shell-smash': [('attacker', 'defense', -1), ('attacker', 'special-defense', -1), ('attacker', 'attack', 2), ('attacker', 'special-attack', 2), ('attacker', 'speed', 2)],
@@ -3538,6 +3635,23 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif move_name == 'smelling-salts' and defender.get('status_condition', {}).get('name') == 'paralysis':
             defender['status_condition'] = None
             msg += f" {defender['name'].capitalize()}'s paralysis was completely cured by the shock!"
+
+    # ==========================================
+    # 🪆 SUBSTITUTE INTERCEPTOR
+    # ==========================================
+    # Sits at the very end so it sees the final damage, status and stat payload together.
+    # A decoy eats all three: the specimen behind it takes nothing, catches nothing, and
+    # keeps its stat stages. Anything aimed at the ATTACKER (recoil, self-boosts, drain)
+    # is deliberately left alone.
+    if substitute_intercepts(defender, move, attacker):
+        if damage > 0:
+            damage, sub_note = absorb_with_substitute(defender, damage)
+            msg += sub_note
+        elif move_class == 'status' and 'selected-pokemon' in str(move.get('target', '')):
+            return 0, "But it failed! The substitute took it instead!", 'none', [], healing_amount
+
+        inflicted_status = None
+        stat_changes = [c for c in stat_changes if c[0] != 'defender']
 
     return damage, msg.strip(), inflicted_status, stat_changes, healing_amount
 
