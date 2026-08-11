@@ -830,6 +830,41 @@ def drain_move_pp(pokemon, move_name, amount=None):
     return taken
 
 
+# ==========================================
+# 💢 STRUGGLE
+# ==========================================
+# The last resort, for a specimen with no legal move left - out of PP, or locked out by
+# Disable, Taunt, Torment and Imprison between them.
+STRUGGLE_RECOIL_FRACTION = 0.25
+
+
+def struggle_move():
+    """
+    A fresh Struggle payload, built rather than read from base_moves.
+
+    The stored row is Normal-type, which would let a Ghost shrug Struggle off entirely -
+    the one thing it must never do. It is returned as a new dict each call so callers can
+    mutate it without poisoning the next one.
+    """
+    return {
+        'name': 'struggle', 'base_name': 'struggle',
+        'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
+        'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
+        'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
+        'status_type': 'none', 'status_chance': 0,
+        'healing': 0, 'drain': 0, 'priority': 0, 'pp': 1, 'max_pp': 1,
+    }
+
+
+def apply_struggle_recoil(attacker):
+    """Struggle costs the user a quarter of its maximum HP. Returns the damage taken."""
+    if attacker is None:
+        return 0
+    recoil = max(1, math.floor(attacker.get('max_hp', 100) * STRUGGLE_RECOIL_FRACTION))
+    attacker['current_hp'] = max(0, attacker.get('current_hp', 0) - recoil)
+    return recoil
+
+
 def move_is_restricted(pokemon, move, opponent=None):
     """
     Why this move cannot be chosen right now, or None if it is free to use.

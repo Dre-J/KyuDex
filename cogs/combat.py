@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS
 from utils import checks
 import aiohttp
@@ -1069,7 +1069,7 @@ class PvPMoveMenu(discord.ui.View):
             opp_team_key = 'p2_team' if is_p1 else 'p1_team'
             opp_active_idx = self.state['p2_active_index'] if is_p1 else self.state['p1_active_index']
             opp_poke = self.state[opp_team_key][opp_active_idx]
-            pvp_has_legal_move = bool(usable_moves(self.active_poke, opp_poke))
+            pvp_can_act = bool(usable_moves(self.active_poke, opp_poke))
             
             held_item = (self.active_poke.get('held_item') or "").lower().replace(' ', '-')
             # THE TEMPORAL LOCK FLAG
@@ -1169,6 +1169,24 @@ class PvPMoveMenu(discord.ui.View):
 
 
             print(f"DEBUG UI BUILD: Lock Move is '{choice_lock_move}', Has Choice Item: {has_choice_item}") # Tripwire 4
+
+            # ==========================================
+            # 💢 STRUGGLE FALLBACK (PvP)
+            # ==========================================
+            # Out of PP, or locked out by Disable / Taunt / Torment / Imprison between
+            # them. Either way every move button would be dead, so offer the only thing
+            # left rather than stranding the player with nothing to click.
+            if not pvp_can_act and not is_recharging:
+                struggle_btn = discord.ui.Button(
+                    label="💢 Struggle",
+                    style=discord.ButtonStyle.danger,
+                    row=1
+                )
+                struggle_btn.callback = self.create_move_callback(
+                    {'name': 'struggle', 'pp': 1, 'max_pp': 1}, override_name="Struggle"
+                )
+                self.add_item(struggle_btn)
+
             for move in self.active_poke['moves']:
                 m_type = move.get('type', 'normal')
                 move_class = move.get('class')
@@ -1179,10 +1197,8 @@ class PvPMoveMenu(discord.ui.View):
                 if has_choice_item and choice_lock_move and move['name'] != choice_lock_move:
                     is_disabled = True
 
-                # Disable / Taunt / Torment / Imprison. Only enforced while SOMETHING is
-                # still legal: this engine has no Struggle fallback of its own, so greying
-                # out the last option would leave the player with nothing to click.
-                if pvp_has_legal_move and move_is_restricted(self.active_poke, move, opp_poke):
+                # Disable / Taunt / Torment / Imprison
+                if move_is_restricted(self.active_poke, move, opp_poke):
                     is_disabled = True
                 
                 # ---ASSAULT VEST FIREWALL ---
@@ -1375,6 +1391,19 @@ class PvPMoveMenu(discord.ui.View):
                     search_name = is_charging # Force the engine to use the charging move!
                     display_name = is_charging.replace('-', ' ').title()
                 # ==========================================
+
+                # ==========================================
+                # 💢 STRUGGLE
+                # ==========================================
+                # Built rather than fetched: the stored row is Normal-type, which would
+                # let a Ghost shrug Struggle off entirely.
+                if search_name == 'struggle':
+                    self.state['commits'][self.player_id] = {
+                        'type': 'attack', 'data': struggle_move(), 'transform': None
+                    }
+                    await interaction.response.edit_message(
+                        content="🔒 Locked in: **Struggle**!", view=None)
+                    return await self.cog.check_pvp_commits(self.state)
 
                 # ==========================================
                 # THE 17-VARIABLE PAYLOAD HYDRATION
@@ -2837,13 +2866,7 @@ class BattleDashboard(discord.ui.View):
                     # --- STRUGGLE OVERRIDE (PLAYER) ---
                     if not p_available_moves:
                         move_name = 'struggle'
-                        p_move_stats = {
-                            'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
-                            'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
-                            'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
-                            'healing': 0, 'drain': 0, 'name': 'struggle', 
-                            'priority': 0 
-                        }
+                        p_move_stats = struggle_move()
                         combat_log += f"⚠️ Your **{p_active['name'].capitalize()}** has no energy left!\n"
                     else:
                         for m in p_active['moves']:
@@ -3145,13 +3168,7 @@ class BattleDashboard(discord.ui.View):
                             # --- STRUGGLE OVERRIDE ---
                             if not available_moves:
                                 npc_move_name = 'struggle'
-                                n_move_stats = {
-                                    'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical',
-                                    'target': 'defender', 'ailment': 'none', 'ailment_chance': 0,
-                                    'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0,
-                                    'healing': 0, 'drain': 0, 'name': 'struggle',
-                                    'priority': 0 
-                                }
+                                n_move_stats = struggle_move()
                                 combat_log += f"⚠️ The rival's **{n_active['name'].capitalize()}** has no energy left!\n"
                             else:
                                 # --- TACTICAL PRIORITY FILTER (PHASE 3 UTILITY AI) ---
@@ -3793,9 +3810,7 @@ class BattleDashboard(discord.ui.View):
                             
                         # --- STRUGGLE RECOIL INTERCEPTOR ---
                         if raw_move_name == 'struggle':
-                            # Recoil is exactly 25% of the user's maximum HP!
-                            recoil_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 4))
-                            attacker['current_hp'] = max(0, attacker['current_hp'] - recoil_dmg)
+                            recoil_dmg = apply_struggle_recoil(attacker)
                             combat_log += f"💥 **{attacker['name'].capitalize()}** took recoil damage from thrashing about! (-{recoil_dmg} HP)\n"
                         
                         # ==========================================
@@ -4233,7 +4248,7 @@ class BattleDashboard(discord.ui.View):
 
                 if not available_moves:
                     npc_move_name = 'struggle'
-                    n_move_stats = {'type': 'typeless', 'power': 50, 'accuracy': 1000, 'class': 'physical', 'target': 'defender', 'ailment': 'none', 'ailment_chance': 0, 'stat_name': 'none', 'stat_change': 0, 'stat_chance': 0, 'healing': 0, 'drain': 0, 'name': 'struggle'}
+                    n_move_stats = struggle_move()
                 else:
                     async with aiosqlite.connect(DB_FILE) as db:
                         best_moves = []
@@ -6705,6 +6720,11 @@ class Combat(commands.Cog):
                     attacker['last_move_used'] = raw_move_name
                     attacker['last_move_type'] = move.get('type')
                     # ==========================================
+
+                    # --- STRUGGLE RECOIL INTERCEPTOR ---
+                    if raw_move_name == 'struggle':
+                        recoil_dmg = apply_struggle_recoil(attacker)
+                        combat_log += f"💥 **{attacker['name'].capitalize()}** took recoil damage from thrashing about! (-{recoil_dmg} HP)\n"
 
                     if heal > 0:
                         attacker['current_hp'] = min(attacker.get('max_hp', 100), attacker['current_hp'] + heal)
