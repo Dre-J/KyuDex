@@ -990,6 +990,72 @@ def apply_gmax_effect(move_name, attacker, defender, user_party=None,
     return ""
 
 
+# 💗 RESTORATION AND SACRIFICE
+# ==========================================
+# Aqua Ring trickles back a sixteenth each turn, the same share Ingrain does.
+AQUA_RING_FRACTION = 16
+
+# Refresh scrubs the three conditions that wear off on their own, and deliberately not
+# sleep or freeze - those have their own timers and countering them is the point of Rest.
+REFRESH_CURES = {'paralysis', 'poison', 'burn'}
+
+# The user faints outright; the replacement arrives whole. Lunar Dance also refills PP,
+# which is the only thing separating the two.
+SACRIFICE_MOVES = {'healing-wish': False, 'lunar-dance': True}
+
+REVIVAL_BLESSING_FRACTION = 0.5
+
+
+def apply_healing_wish(incoming, restores_pp=False):
+    """
+    Pay out a banked Healing Wish to whoever takes the vacated slot.
+
+    Returns a log fragment, or '' when the replacement needed nothing.
+    """
+    if incoming is None or incoming.get('current_hp', 0) <= 0:
+        return ""
+
+    max_hp = incoming.get('max_hp', 100)
+    mended = incoming['current_hp'] < max_hp
+    had_status = (incoming.get('status_condition') or {}).get('name')
+
+    refilled = False
+    if restores_pp:
+        for slot in (incoming.get('moves') or []):
+            if slot.get('pp', 0) < slot.get('max_pp', 0):
+                slot['pp'] = slot['max_pp']
+                refilled = True
+
+    if not (mended or had_status or refilled):
+        return ""
+
+    incoming['current_hp'] = max_hp
+    incoming['status_condition'] = None
+
+    note = f"💗 The departed's wish restored {incoming['name'].capitalize()} completely"
+    return note + (" - and refreshed its moves!" if refilled else "!")
+
+
+def revive_fallen(party, exclude=None):
+    """
+    Bring one fainted party member back at half health. Returns (name, healed) so the
+    caller can report it, or (None, 0) when there is nobody to revive.
+    """
+    for member in (party or []):
+        if member is None or member is exclude:
+            continue
+        if member.get('current_hp', 0) > 0:
+            continue
+
+        max_hp = member.get('max_hp', 100)
+        member['current_hp'] = max(1, math.floor(max_hp * REVIVAL_BLESSING_FRACTION))
+        member['status_condition'] = None
+        return member.get('name', 'a specimen').capitalize(), member['current_hp']
+
+    return None, 0
+
+
+# ==========================================
 # 🪞 REDIRECTION AND INTERCEPTION
 # ==========================================
 # Four of these arm an interceptor that changes how the OPPONENT'S next move resolves,
@@ -2873,6 +2939,43 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         attacker.setdefault('volatile_statuses', {})['grudge'] = True
         return 0, (f"👻 {attacker['name'].capitalize()} wants its opponent to bear a "
                    f"grudge!"), 'none', [], 0
+
+    # ==========================================
+    # 💗 RESTORATION AND SACRIFICE
+    # ==========================================
+    if move_name == 'aqua-ring':
+        if (attacker.get('volatile_statuses') or {}).get('aqua_ring'):
+            return 0, "But it failed! It is already veiled in water!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})['aqua_ring'] = True
+        return 0, (f"💧 {attacker['name'].capitalize()} veiled itself in water - "
+                   f"it will recover a little each turn!"), 'none', [], 0
+
+    if move_name == 'refresh':
+        current = (attacker.get('status_condition') or {}).get('name')
+        if current not in REFRESH_CURES:
+            return 0, "But it failed! There was nothing it could shake off!", 'none', [], 0
+
+        attacker['status_condition'] = None
+        return 0, (f"✨ {attacker['name'].capitalize()} refreshed itself and shook "
+                   f"off its {current}!"), 'none', [], 0
+
+    if move_name in SACRIFICE_MOVES:
+        # The engines read this off the state and pay it to whoever takes the slot
+        attacker['current_hp'] = 0
+        attacker['_sacrifice_wish'] = SACRIFICE_MOVES[move_name]
+        flavour = ("danced and faded away" if move_name == 'lunar-dance'
+                   else "gave itself up")
+        return 0, (f"💗 {attacker['name'].capitalize()} {flavour} so its "
+                   f"replacement can arrive whole!"), 'none', [], 0
+
+    if move_name == 'revival-blessing':
+        name, healed = revive_fallen(user_party, exclude=attacker)
+        if not name:
+            return 0, "But it failed! Nobody had fallen!", 'none', [], 0
+
+        return 0, (f"🕊️ {name} was revived and is ready to fight again! "
+                   f"({healed} HP)"), 'none', [], 0
 
     # ==========================================
     # 🪞 REDIRECTION AND INTERCEPTION
