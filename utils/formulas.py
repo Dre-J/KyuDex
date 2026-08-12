@@ -479,6 +479,75 @@ def spend_stockpile(pokemon):
 
 
 # ==========================================
+# 🎁 ITEM-DRIVEN DAMAGE
+# ==========================================
+# Natural Gift takes its element and its power from the berry being held, and spends it.
+# Exactly the 41 berries this game actually stocks are tabled - the wider series has
+# more, but a berry that cannot be obtained here would only be dead weight.
+#
+# Powers are the Gen VI values: the status and resist berries throw for 80, the stat
+# berries for 100. (The 90-power middle tier is all berries this game does not stock.)
+NATURAL_GIFT_BERRIES = {
+    # --- Status-curing berries ---
+    'cheri-berry': ('fire', 80),     'chesto-berry': ('water', 80),
+    'pecha-berry': ('electric', 80), 'rawst-berry': ('grass', 80),
+    'aspear-berry': ('ice', 80),     'leppa-berry': ('fighting', 80),
+    'oran-berry': ('poison', 80),    'persim-berry': ('ground', 80),
+    'lum-berry': ('flying', 80),     'sitrus-berry': ('psychic', 80),
+    'figy-berry': ('bug', 80),       'wiki-berry': ('rock', 80),
+    'mago-berry': ('ghost', 80),     'aguav-berry': ('dragon', 80),
+    'iapapa-berry': ('dark', 80),
+
+    # --- Type-resisting berries ---
+    'occa-berry': ('fire', 80),      'passho-berry': ('water', 80),
+    'wacan-berry': ('electric', 80), 'rindo-berry': ('grass', 80),
+    'yache-berry': ('ice', 80),      'chople-berry': ('fighting', 80),
+    'kebia-berry': ('poison', 80),   'shuca-berry': ('ground', 80),
+    'coba-berry': ('flying', 80),    'payapa-berry': ('psychic', 80),
+    'tanga-berry': ('bug', 80),      'charti-berry': ('rock', 80),
+    'kasib-berry': ('ghost', 80),    'haban-berry': ('dragon', 80),
+    'colbur-berry': ('dark', 80),    'babiri-berry': ('steel', 80),
+    'chilan-berry': ('normal', 80),
+
+    # --- Stat-boosting berries, which throw harder ---
+    'liechi-berry': ('grass', 100),  'ganlon-berry': ('ice', 100),
+    'salac-berry': ('fighting', 100),'petaya-berry': ('poison', 100),
+    'apicot-berry': ('ground', 100), 'lansat-berry': ('flying', 100),
+    'starf-berry': ('psychic', 100), 'micle-berry': ('rock', 100),
+    'custap-berry': ('ghost', 100),
+}
+
+# Present is a gamble: four in ten it is a feeble tap, two in ten it HEALS the target
+# instead. Weights are out of ten so the roll stays readable.
+PRESENT_OUTCOMES = [(4, 40), (3, 80), (1, 120), (2, None)]   # (weight, power); None heals
+PRESENT_HEAL_FRACTION = 0.25
+
+
+def natural_gift_payload(attacker):
+    """
+    The (type, power) a held berry throws for, or None when there is nothing to throw.
+    Reads the stored item so a suppressed-item field (Magic Room) is handled by the
+    caller rather than silently succeeding here.
+    """
+    return NATURAL_GIFT_BERRIES.get((get_stored_item(attacker) or '').lower())
+
+
+def roll_present(rng=None):
+    """
+    One draw from Present's table. Returns a power, or None when it heals instead.
+    Rolled once per use and handed straight to the damage step - deliberately not
+    routed through resolve_dynamic_power, which the move button also calls and would
+    therefore advertise a number the swing was never going to use.
+    """
+    roll = (rng or random).randint(1, sum(w for w, _ in PRESENT_OUTCOMES))
+    for weight, power in PRESENT_OUTCOMES:
+        roll -= weight
+        if roll <= 0:
+            return power
+    return PRESENT_OUTCOMES[-1][1]
+
+
+# ==========================================
 # 🃏 RESOURCE-SCALED POWER
 # ==========================================
 # Trump Card reads the PP left AFTER this use, so the engines - which spend the point
@@ -2733,6 +2802,37 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             return 0, (f"💥 The powder ignited! {attacker['name'].capitalize()} was "
                        f"caught in the blast and lost {burst} HP!"), 'none', [], 0
 
+    # ==========================================
+    # 🎁 ITEM-DRIVEN DAMAGE
+    # ==========================================
+    # Both settle their own power, which overrides the shared resolver at the damage
+    # gate far below. They sit up HERE rather than beside that gate because Natural Gift
+    # rewrites the element, and the type chart is read long before the gate - putting
+    # this any later would throw a berry that the type chart never saw.
+    item_power = None
+
+    if move_name == 'natural-gift':
+        # Magic Room seals held items away, so there is nothing to draw on.
+        payload = None if magic_room else natural_gift_payload(attacker)
+        if payload is None:
+            return 0, "But it failed! It had no berry to give!", 'none', [], 0
+
+        move_type, item_power = payload
+        # Thrown, so it is spent - and spent in the database too, the way a berry eaten
+        # mid-battle is, rather than handed back when the battle ends.
+        mark_item_consumed(attacker, get_stored_item(attacker))
+        attacker['held_item'] = None
+
+    if move_name == 'present':
+        item_power = roll_present()
+        if item_power is None:
+            mended = max(1, math.floor(defender.get('max_hp', 100) * PRESENT_HEAL_FRACTION))
+            before = defender.get('current_hp', 0)
+            defender['current_hp'] = min(defender.get('max_hp', 100), before + mended)
+            return 0, (f"🎁 {attacker['name'].capitalize()} gave a present - and it "
+                       f"restored {defender['name'].capitalize()}'s health instead! "
+                       f"(+{defender['current_hp'] - before} HP)"), 'none', [], 0
+
     # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
     if move_name == 'tera-blast' and attacker.get('tera_type'):
         move_type = attacker['tera_type']
@@ -3655,7 +3755,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name == 'spit-up' and not get_stockpile(attacker):
         return 0, "But it failed! It had nothing stockpiled!", 'none', [], 0
 
-    dynamic_power = resolve_dynamic_power(move_name, attacker, defender)
+    dynamic_power = item_power or resolve_dynamic_power(move_name, attacker, defender)
 
     if move_name == 'spit-up':
         # Emptied here rather than after the swing, so the stages Stockpile granted are
