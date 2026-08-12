@@ -3482,6 +3482,20 @@ class BattleDashboard(discord.ui.View):
                                     }
 
                 # ==========================================
+                # 🔒 HYDRATE A LOCKED-IN MOVE
+                # ==========================================
+                # The charge, Encore and rampage branches above only decide a NAME - the
+                # payload is fetched inside the ordinary-selection branch they skip past.
+                # Left unhydrated, n_move_stats stays None and the queue below drops the
+                # NPC's action entirely: it silently forfeits the turn, and a charge it
+                # was locked into is then broken by the end-of-turn sweep as though
+                # something had stopped it.
+                if npc_move_name and n_move_stats is None:
+                    n_move_stats = await fetch_move_payload(npc_move_name)
+                    if n_move_stats is None:
+                        print(f"⚠️ WARNING: locked NPC move '{npc_move_name}' not found in DB!")
+
+                # ==========================================
                 # 3. KINETIC SPEED CHECK (PvE)
                 # ==========================================
                 def get_true_speed(specimen, has_tailwind=False):
