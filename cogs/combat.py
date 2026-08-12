@@ -3878,7 +3878,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # 🚨 ACCURACY, EVASION, & OHKO BYPASS
                         # ==========================================
-                        is_ohko = raw_move_name in OHKO_MOVES
+                        is_ohko = raw_move_name in OHKO_MOVES and not attacker_is_maxed
 
                         # Shared with the physics engine so the two copies cannot drift
                         # A standing Lock-On is spent here and guarantees this one attack
@@ -3958,7 +3958,9 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # 🚨 RAMPAGE MOVES (Outrage, Petal Dance, Thrash)
                         # ==========================================
-                        if raw_move_name in RAMPAGE_MOVES:
+                        # Outrage thrown as Max Wyrmwind does not lock the user in - the
+                        # Max move keeps none of the base move's secondary effects.
+                        if raw_move_name in RAMPAGE_MOVES and not attacker_is_maxed:
                             if dmg > 0: # The attack successfully landed!
                                 if 'rampage' not in attacker['volatile_statuses']:
                                     # Start the rampage (Locks in for 2 to 3 turns)
@@ -4131,7 +4133,11 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # SYNCHRONOUS PIVOT OVERRIDE (PvE)
                         # ==========================================
-                        if effective_move_name in pivot_moves and attacker['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
+                        # A Max move carries none of the base move's secondary effects, so
+                        # U-turn thrown as Max Strike hits and stays put. Stated explicitly
+                        # rather than relying on effective_move_name being a display string
+                        # that happens not to match the list.
+                        if effective_move_name in pivot_moves and not attacker_is_maxed and attacker['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
                             
                             # Verify they actually have a living bench specimen to swap into!
                             if is_player:
@@ -4309,7 +4315,10 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # PHAZING ANOMALIES (PvE Forced Swaps)
                         # ==========================================
-                        if raw_move_name in phaze_moves and defender['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
+                        # Dragon Tail thrown as Max Wyrmwind deals its damage and nothing
+                        # else: a Max move keeps none of the base move's secondary effects,
+                        # so nobody is dragged out.
+                        if raw_move_name in phaze_moves and not attacker_is_maxed and defender['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
                             
                             # 1. Find valid benched targets for the DEFENDER
                             if is_player: # The Player is attacking the NPC
@@ -6939,7 +6948,7 @@ class Combat(commands.Cog):
                         # ==========================================
                         # 🚨 ACCURACY, EVASION, & OHKO BYPASS
                         # ==========================================
-                        is_ohko = raw_move_name in OHKO_MOVES
+                        is_ohko = raw_move_name in OHKO_MOVES and not attacker_is_maxed
 
                         # Shared with the physics engine so the two copies cannot drift
                         # A standing Lock-On is spent here and guarantees this one attack
@@ -7019,7 +7028,8 @@ class Combat(commands.Cog):
                     # ==========================================
                     # 🚨 RAMPAGE MOVES (Outrage, Petal Dance, Thrash)
                     # ==========================================
-                    if raw_move_name in RAMPAGE_MOVES:
+                    # As in PvE: a Max move does not lock the user into a rampage.
+                    if raw_move_name in RAMPAGE_MOVES and not attacker_is_maxed:
                         if dmg > 0: # The attack successfully landed!
                             if 'rampage' not in attacker['volatile_statuses']:
                                 # Start the rampage (Locks in for 2 to 3 turns)
@@ -7139,7 +7149,9 @@ class Combat(commands.Cog):
                     # SYNCHRONOUS PIVOT OVERRIDE (PvP)
                     # ==========================================
                     # Ensure the attacker survived recoil/helmets and actually dealt damage (or used a status pivot)
-                    if raw_move_name in pivot_moves and attacker['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
+                    # As in PvE: a Max move keeps none of the base move's secondary
+                    # effects, so U-turn thrown as Max Strike hits and stays put.
+                    if raw_move_name in pivot_moves and not attacker_is_maxed and attacker['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
                         
                         # Verify they actually have a living bench specimen to swap into!
                         active_idx = state[f"{player_tag}_active_index"]
@@ -7195,7 +7207,8 @@ class Combat(commands.Cog):
                     #  PHAZING ANOMALIES (Forced Swaps)
                     # ==========================================
                     # Ensure the move successfully executed (either dealing damage or landing a status)
-                    if raw_move_name in phaze_moves and defender['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
+                    # As in PvE: Dragon Tail thrown as Max Wyrmwind drags nobody out.
+                    if raw_move_name in phaze_moves and not attacker_is_maxed and defender['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
                         
                         # 1. Find valid benched targets for the DEFENDER
                         opp_active_idx = state[f"{opp_tag}_active_index"]
