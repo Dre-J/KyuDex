@@ -387,7 +387,49 @@ def get_stat_scaled_power(move_name, attacker, defender):
 
     return None
 
-def resolve_dynamic_power(move_name, attacker, defender):
+# ==========================================
+# 💞 FRIENDSHIP-SCALED POWER
+# ==========================================
+# Return and the two partner moves hit harder the more the specimen likes its trainer;
+# Frustration reads the same bond backwards. All four share one divisor, so a maxed
+# bond caps them at 102 and a bottomed one still leaves 1.
+FRIENDSHIP_MOVES = {'return', 'pika-papow', 'veevee-volley'}
+FRUSTRATION_MOVES = {'frustration'}
+
+MAX_HAPPINESS = 255
+FRIENDSHIP_DIVISOR = 2.5
+
+# What a specimen is worth when nothing recorded a bond. Wild encounters and NPC rosters
+# are built in memory and never had a happiness row, and this is where the mainline games
+# start everything, so it is the honest default rather than a stand-in for zero.
+DEFAULT_HAPPINESS = 70
+
+
+def get_happiness(pokemon):
+    """The bond a specimen carries, clamped to the range the games store."""
+    raw = (pokemon or {}).get('happiness')
+    if raw is None:
+        raw = DEFAULT_HAPPINESS
+    try:
+        return max(0, min(MAX_HAPPINESS, int(raw)))
+    except (TypeError, ValueError):
+        return DEFAULT_HAPPINESS
+
+
+def get_friendship_power(move_name, attacker):
+    """Power for the bond-scaled moves. None for everything else."""
+    if move_name in FRIENDSHIP_MOVES:
+        bond = get_happiness(attacker)
+    elif move_name in FRUSTRATION_MOVES:
+        bond = MAX_HAPPINESS - get_happiness(attacker)
+    else:
+        return None
+
+    # Floors at 1: these rows carry no stored power, so returning 0 would make the move
+    # silently do nothing rather than do very little.
+    return max(1, math.floor(bond / FRIENDSHIP_DIVISOR))
+
+# ==========================================
     """
     Single entry point for every move whose base power is computed rather than stored.
     Returns None for ordinary moves so callers can fall back to the database value.
@@ -395,6 +437,10 @@ def resolve_dynamic_power(move_name, attacker, defender):
     scaled = get_hp_scaled_power(move_name, attacker, defender)
     if scaled is not None:
         return scaled
+
+    bond = get_friendship_power(move_name, attacker)
+    if bond is not None:
+        return bond
 
     # Fling reads whatever the user is holding, so the AI and the move button both need
     # it resolved here rather than at swing time.
@@ -2295,6 +2341,12 @@ def describe_power_range(move_name):
         return "50+ (↑ 50 per ally lost)"
     if move_name == 'body-press':
         return "80 (attacks with your Defense)"
+
+    # --- Friendship family ---
+    if move_name in FRIENDSHIP_MOVES:
+        return "1-102 (↑ the more it likes you)"
+    if move_name in FRUSTRATION_MOVES:
+        return "1-102 (↑ the less it likes you)"
 
     return None
 
