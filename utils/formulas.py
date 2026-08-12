@@ -1391,18 +1391,41 @@ COIN_SCATTER_MOVES = {'pay-day', 'make-it-rain'}
 RETALIATION_MULTIPLIER = 1.5
 
 
-def scatter_coins(attacker):
-    """Add this user's coin scatter to its running total. Returns the amount added."""
+def scatter_coins(attacker, source=None):
+    """
+    Add this user's coin scatter to its running total. Returns the amount added.
+
+    `source` is the move that shook the money loose. Three different moves fill this one
+    purse, so the reward line has to be told which of them actually did it rather than
+    naming whichever was implemented first.
+    """
     if attacker is None:
         return 0
     coins = max(1, COIN_SCATTER_PER_LEVEL * attacker.get('level', 50))
     attacker['_coins_scattered'] = attacker.get('_coins_scattered', 0) + coins
+    if source:
+        credited = attacker.setdefault('_coin_sources', [])
+        if source not in credited:
+            credited.append(source)
     return coins
 
 
 def collected_coins(team):
     """Everything a team scattered over the course of a battle."""
     return sum((m.get('_coins_scattered') or 0) for m in (team or []) if m)
+
+
+def coin_sources(team):
+    """
+    Which moves filled the purse, prettified and in the order they were first used.
+    Empty when coins arrived from somewhere that did not say.
+    """
+    seen = []
+    for member in (team or []):
+        for source in ((member or {}).get('_coin_sources') or []):
+            if source not in seen:
+                seen.append(source)
+    return [name.replace('-', ' ').title().replace('G Max', 'G-Max') for name in seen]
 
 
 # The three that hit for a flat 160 and shrug off the target's ability entirely.
@@ -1464,7 +1487,7 @@ def apply_gmax_effect(move_name, attacker, defender, user_party=None,
 
     if effect == 'coins':
         # The confusion half rides on the ordinary ailment payload; this is the money
-        coins = scatter_coins(attacker)
+        coins = scatter_coins(attacker, move_name)
         return f" 🪙 Coins scattered everywhere! ({coins} to collect afterwards)"
 
     if effect == 'torment':
@@ -4277,7 +4300,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Pay Day and Make It Rain shake loose money on the way past. Scattered even when the
     # blow is shrugged off, the way the games pay out for the attempt rather than the hit.
     if move_name in COIN_SCATTER_MOVES:
-        shaken = scatter_coins(attacker)
+        shaken = scatter_coins(attacker, move_name)
         msg += f" 🪙 Coins scattered everywhere! ({shaken} to collect afterwards)"
 
     # Synchronoise only reaches something built like the user.
