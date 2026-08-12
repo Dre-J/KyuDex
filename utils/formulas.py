@@ -388,6 +388,85 @@ def get_stat_scaled_power(move_name, attacker, defender):
     return None
 
 # ==========================================
+# 🌍 FIELD-WIDE SPORTS, DELUGES AND SIDE SWAPS
+# ==========================================
+# These sit on the FIELD rather than on either side, so both players feel them. The
+# engines keep them in state['field'] alongside the rooms and Gravity, and hand the whole
+# dictionary to the damage formula rather than growing another parameter per effect.
+SPORT_MOVES = {'mud-sport': 'electric', 'water-sport': 'fire'}
+SPORT_TURNS = 5
+SPORT_MULTIPLIER = 1 / 3
+
+# Ion Deluge only lasts the rest of the turn it was used on, which is why it moves at
+# +1: used first, it catches the Normal move that was coming.
+ION_DELUGE_TURNS = 1
+
+# Every side-effect Court Change picks up and puts down on the other side: hazards,
+# screens, guards and Tailwind. Deliberately NOT Happy Hour - that is a wager on the
+# battle's takings rather than something standing on the field, and the games leave it
+# where it was set.
+COURT_CHANGE_KEYS = (
+    'stealth-rock', 'spikes', 'toxic-spikes', 'sticky-web', 'steelsurge',
+    'reflect', 'light-screen', 'aurora-veil', 'lucky-chant', 'safeguard', 'mist',
+    'tailwind',
+)
+
+# Happy Hour doubles the takings from a battle.
+PRIZE_MONEY_MULTIPLIER = 2
+
+# ==========================================
+def field_flag(field, move_name):
+    """Turns left on a field effect, keyed by move name rather than by flag spelling."""
+    return int((field or {}).get(move_name.replace('-', '_'), 0) or 0)
+
+
+def sport_multiplier(move_type, field):
+    """
+    How much the active sports damp this element. Mud Sport smothers Electric, Water
+    Sport smothers Fire, and both at once damp their own element independently.
+    """
+    mult = 1.0
+    for move, damped in SPORT_MOVES.items():
+        if move_type == damped and field_flag(field, move) > 0:
+            mult *= SPORT_MULTIPLIER
+    return mult
+
+
+def court_change(user_side, target_side):
+    """
+    Trade every side effect across the field. Returns whether anything actually moved,
+    so a Court Change into two bare sides can fail rather than claim to have done
+    something.
+    """
+    if user_side is None or target_side is None:
+        return False
+
+    moved = False
+    for key in COURT_CHANGE_KEYS:
+        mine, theirs = user_side.get(key), target_side.get(key)
+        if not mine and not theirs:
+            continue
+
+        # A side that never had this effect must be left with the same falsy shape the
+        # side dictionaries were built with - 0 for the stacking hazards, False for the
+        # flags - because the engines do arithmetic on the counters. Writing None here
+        # would break the next `spikes + 1`.
+        present = mine if mine else theirs
+        blank = 0 if isinstance(present, int) and not isinstance(present, bool) else False
+
+        user_side[key] = theirs if theirs else blank
+        target_side[key] = mine if mine else blank
+        moved = True
+
+    return moved
+
+
+def prize_multiplier(side_hazards):
+    """What a side's takings are multiplied by once the battle is settled."""
+    return PRIZE_MONEY_MULTIPLIER if (side_hazards or {}).get('happy-hour') else 1
+
+
+# ==========================================
 # 💞 FRIENDSHIP-SCALED POWER
 # ==========================================
 # Return and the two partner moves hit harder the more the specimen likes its trainer;
@@ -2594,7 +2673,7 @@ def apply_survival_floor(defender, damage, magic_room=False):
 
     return damage, ""
 
-def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False, user_party=None):
+def calculate_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False, user_party=None, field=None):
     """
     Acts as the central physics and biology engine for field combat.
     Processes raw damage, parasitic drains, status afflictions, and hybrid field hazards.
@@ -2790,6 +2869,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Electrify rewrites the element before anything reads it, so STAB, the type chart
     # and every type-keyed effect downstream all see Electric.
     if (attacker.get('volatile_statuses') or {}).get('electrified') and move_class != 'status':
+        move_type = 'electric'
+
+    # Ion Deluge does the same thing to the whole field, but only to Normal moves. Read
+    # after Electrify so the two agree rather than fighting over the element.
+    if move_type == 'normal' and move_class != 'status' and field_flag(field, 'ion-deluge') > 0:
         move_type = 'electric'
 
     # Powder detonates on any Fire move the coated specimen tries to throw, and the move
@@ -3255,6 +3339,44 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                        f"electromagnetism!"), 'none', [], 0
         return 0, (f"🌀 {defender['name'].capitalize()} was hurled into the air "
                    f"and cannot dodge!"), 'none', [], 0
+
+    # ==========================================
+    # 🌍 FIELD-WIDE SPORTS, DELUGES AND SIDE SWAPS
+    # ==========================================
+    if move_name in SPORT_MOVES or move_name == 'ion-deluge':
+        if field is None:
+            return 0, "But it failed! There was no field to change!", 'none', [], 0
+
+        flag = move_name.replace('-', '_')
+        if field.get(flag, 0) > 0:
+            return 0, "But it failed! It is already in effect!", 'none', [], 0
+
+        if move_name == 'ion-deluge':
+            field[flag] = ION_DELUGE_TURNS
+            return 0, (f"⚡ A deluge of ions showered the field - Normal moves turned "
+                       f"Electric!"), 'none', [], 0
+
+        field[flag] = SPORT_TURNS
+        damped = SPORT_MOVES[move_name].capitalize()
+        return 0, (f"🌊 {attacker['name'].capitalize()} kicked up a sport - {damped} "
+                   f"moves are weakened!"), 'none', [], 0
+
+    if move_name == 'court-change':
+        if not court_change(user_hazards, target_hazards):
+            return 0, "But it failed! There was nothing to swap!", 'none', [], 0
+
+        return 0, (f"🔄 {attacker['name'].capitalize()} swept everything across - the "
+                   f"field effects changed sides!"), 'none', [], 0
+
+    if move_name == 'happy-hour':
+        if user_hazards is None:
+            return 0, "But it failed! There was nobody to pay out!", 'none', [], 0
+        if user_hazards.get('happy-hour'):
+            return 0, "But it failed! It is already happy hour!", 'none', [], 0
+
+        user_hazards['happy-hour'] = True
+        return 0, (f"🎉 Everyone is caught up in a happy hour - the takings from this "
+                   f"battle are doubled!"), 'none', [], 0
 
     # ==========================================
     # 🍽️ STOCKPILE AND SWALLOW
@@ -3919,7 +4041,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif weather in ['rain', 'heavy-rain']:
             if move_type == 'water': weather_mod = 1.5
             elif move_type == 'fire': weather_mod = 0.5
-        
+
+        # Mud Sport and Water Sport smother their element wherever it is thrown from.
+        # Folded into the weather modifier because it is the same kind of thing: an
+        # environmental damper on one type, applied once per strike.
+        weather_mod *= sport_multiplier(move_type, field)
+
         ability_mod = 1.0
         amplifier = BIOLOGICAL_TRAITS.get('damage_multipliers', {}).get(atk_ability)
         if amplifier:
