@@ -430,6 +430,74 @@ def get_friendship_power(move_name, attacker):
     return max(1, math.floor(bond / FRIENDSHIP_DIVISOR))
 
 # ==========================================
+# 🍽️ STOCKPILE, SWALLOW AND SPIT UP
+# ==========================================
+# Stockpile banks up to three charges, each raising both defences a stage. Swallow and
+# Spit Up each cash the whole bank in - one as health, one as power - and hand back the
+# stages that were granted. Nothing else spends the counter, so the three moves are only
+# ever meaningful together.
+#
+# Stockpile's database row carries a bare 'defense +1', which is why the survey counted
+# it as finished: the generic path was raising one stat and banking nothing.
+MAX_STOCKPILE = 3
+SPIT_UP_POWER_PER_STACK = 100
+SWALLOW_HEAL_BY_STACK = {1: 0.25, 2: 0.50, 3: 1.00}
+
+STOCKPILE_STATS = ('defense', 'sp_def')
+
+
+def get_stockpile(pokemon):
+    """How many charges are banked, 0-3."""
+    return int(((pokemon or {}).get('volatile_statuses') or {}).get('stockpile', 0) or 0)
+
+
+def add_stockpile(pokemon):
+    """
+    Bank one charge. Returns (accepted, stat_changes) - refused at the cap, since the
+    games make a fourth Stockpile fail outright rather than silently waste a turn.
+    """
+    held = get_stockpile(pokemon)
+    if held >= MAX_STOCKPILE:
+        return False, []
+
+    pokemon.setdefault('volatile_statuses', {})['stockpile'] = held + 1
+    return True, [('attacker', stat, 1) for stat in STOCKPILE_STATS]
+
+
+def spend_stockpile(pokemon):
+    """
+    Empty the bank. Returns (charges_spent, stat_changes) where the changes undo exactly
+    what was granted - tracked by count rather than by reading the stages back, so an
+    unrelated boost or drop in between is left alone.
+    """
+    held = get_stockpile(pokemon)
+    if not held:
+        return 0, []
+
+    (pokemon.get('volatile_statuses') or {}).pop('stockpile', None)
+    return held, [('attacker', stat, -held) for stat in STOCKPILE_STATS]
+
+
+# ==========================================
+# 🃏 RESOURCE-SCALED POWER
+# ==========================================
+# Trump Card reads the PP left AFTER this use, so the engines - which spend the point
+# before swinging - can pass what they see. The move-button hint has not spent it yet
+# and says so with pending=True.
+TRUMP_CARD_POWER = {0: 200, 1: 80, 2: 60, 3: 50}
+TRUMP_CARD_DEFAULT = 40
+
+
+def trump_card_power(attacker, pending=False):
+    """Power for Trump Card, rising sharply as its own PP runs out."""
+    slot = find_move_slot(attacker, 'trump-card')
+    left = slot.get('pp', 0) if slot else 0
+    if pending:
+        left = max(0, left - 1)
+    return TRUMP_CARD_POWER.get(left, TRUMP_CARD_DEFAULT)
+
+
+def resolve_dynamic_power(move_name, attacker, defender, pending=False):
     """
     Single entry point for every move whose base power is computed rather than stored.
     Returns None for ordinary moves so callers can fall back to the database value.
@@ -441,6 +509,19 @@ def get_friendship_power(move_name, attacker):
     bond = get_friendship_power(move_name, attacker)
     if bond is not None:
         return bond
+
+    # --- Resource-scaled ---
+    if move_name == 'trump-card':
+        return trump_card_power(attacker, pending=pending)
+
+    if move_name == 'spit-up':
+        # Nothing banked means the move fails outright, handled in the damage engine.
+        return SPIT_UP_POWER_PER_STACK * get_stockpile(attacker) or None
+
+    if move_name == 'hard-press':
+        # Scales with how much fight the TARGET has left, unlike the Flail family.
+        max_hp = defender.get('max_hp', 100) or 100
+        return max(1, math.floor(100 * defender.get('current_hp', 0) / max_hp))
 
     # Fling reads whatever the user is holding, so the AI and the move button both need
     # it resolved here rather than at swing time.
@@ -2301,7 +2382,9 @@ def format_power_hint(move_name, attacker, defender):
     Short ' ⚡NNN' suffix showing an HP-scaled move's power *right now*, for battle
     buttons. Returns '' for every other move so callers can append it unconditionally.
     """
-    power = resolve_dynamic_power(move_name, attacker, defender)
+    # pending=True: the button is offering a move whose cost has not been paid yet, and
+    # Trump Card's power is decided by what is left once it has been.
+    power = resolve_dynamic_power(move_name, attacker, defender, pending=True)
     return f" ⚡{power}" if power is not None else ""
 
 def describe_power_range(move_name):
@@ -2341,6 +2424,14 @@ def describe_power_range(move_name):
         return "50+ (↑ 50 per ally lost)"
     if move_name == 'body-press':
         return "80 (attacks with your Defense)"
+
+    # --- Resource family ---
+    if move_name == 'trump-card':
+        return "40-200 (↑ as its own PP runs out)"
+    if move_name == 'spit-up':
+        return "100 per Stockpile charge"
+    if move_name == 'hard-press':
+        return "1-100 (↑ with target's HP)"
 
     # --- Friendship family ---
     if move_name in FRIENDSHIP_MOVES:
@@ -3066,6 +3157,31 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                    f"and cannot dodge!"), 'none', [], 0
 
     # ==========================================
+    # 🍽️ STOCKPILE AND SWALLOW
+    # ==========================================
+    # Spit Up is the third of the family, but it deals damage, so its power comes from
+    # resolve_dynamic_power and only its empty-bank failure is handled down with the
+    # other attacks.
+    if move_name == 'stockpile':
+        accepted, changes = add_stockpile(attacker)
+        if not accepted:
+            return 0, "But it failed! It cannot stockpile any more!", 'none', [], 0
+
+        return 0, (f"🍽️ {attacker['name'].capitalize()} stockpiled "
+                   f"{get_stockpile(attacker)}!"), 'none', changes, 0
+
+    if move_name == 'swallow':
+        held, changes = spend_stockpile(attacker)
+        if not held:
+            return 0, "But it failed! It had nothing stockpiled!", 'none', [], 0
+
+        share = SWALLOW_HEAL_BY_STACK[held]
+        healed = max(1, math.floor(attacker.get('max_hp', 100) * share))
+        # The engines apply the healing amount; returning it keeps that in one place.
+        return 0, (f"🍽️ {attacker['name'].capitalize()} swallowed {held} charge(s) "
+                   f"and recovered {int(share * 100)}% of its health!"), 'none', changes, healed
+
+    # ==========================================
     # 💗 RESTORATION AND SACRIFICE
     # ==========================================
     if move_name == 'aqua-ring':
@@ -3533,7 +3649,18 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Resolved before the gate below: Flail, Gyro Ball, Grass Knot, Punishment and
     # friends are all stored as 0 power in the database, so without this they'd be
     # filtered out as non-damaging and silently deal nothing.
+    # Spit Up is the damaging end of the Stockpile family: it needs a bank to spend, and
+    # empties it on the way out. Read before the power resolves, since resolving it is
+    # what the bank is for.
+    if move_name == 'spit-up' and not get_stockpile(attacker):
+        return 0, "But it failed! It had nothing stockpiled!", 'none', [], 0
+
     dynamic_power = resolve_dynamic_power(move_name, attacker, defender)
+
+    if move_name == 'spit-up':
+        # Emptied here rather than after the swing, so the stages Stockpile granted are
+        # handed back in the same breath the power is taken.
+        stat_changes.extend(spend_stockpile(attacker)[1])
 
     if move.get('class') != 'status' and (move.get('power', 0) > 0 or dynamic_power):
         level = attacker.get('level', 50)
