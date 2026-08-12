@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, magic_coat_bounces, snatch_steals, clear_interceptors
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
 from utils import checks
 import aiohttp
@@ -3694,6 +3694,28 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         
                         # ==========================================
+                        # 🪞 REDIRECTION: Magic Coat and Snatch
+                        # ==========================================
+                        # Both were set up at +4 priority, so they are already standing.
+                        # Swapping the pair here means everything downstream - accuracy,
+                        # the damage formula, the log - sees the corrected owner.
+                        if magic_coat_bounces(defender, move_stats):
+                            defender['volatile_statuses'].pop('magic_coat', None)
+                            combat_log += (f"\U0001fa9e **{defender['name'].capitalize()}** bounced "
+                                           f"back the {raw_move_name.replace('-', ' ').title()}!\n")
+                            attacker, defender = defender, attacker
+                            is_player = not is_player
+                            owner_prefix = "Your " if is_player else "The rival's "
+
+                        elif snatch_steals(defender, move_stats):
+                            defender['volatile_statuses'].pop('snatch', None)
+                            combat_log += (f"\U0001f91a **{defender['name'].capitalize()}** snatched "
+                                           f"the {raw_move_name.replace('-', ' ').title()}!\n")
+                            attacker, defender = defender, attacker
+                            is_player = not is_player
+                            owner_prefix = "Your " if is_player else "The rival's "
+
+                        # ==========================================
                         # 🎭 COPY MOVES: perform something else entirely
                         # ==========================================
                         if raw_move_name in COPY_MOVES:
@@ -5025,6 +5047,9 @@ class BattleDashboard(discord.ui.View):
                     combatant['volatile_statuses'].pop('destiny-bond', None)
                     combatant['volatile_statuses'].pop('is_switching', None)
                     combatant['volatile_statuses'].pop('stats_lowered_this_turn', None)
+                    combatant['volatile_statuses'].pop('electrified', None)
+                    clear_interceptors(combatant)
+
 
                     # Embargo runs on its own five-turn clock rather than being wiped
                     if combatant['volatile_statuses'].get('embargo'):
@@ -6682,6 +6707,21 @@ class Combat(commands.Cog):
                                             break
 
                     # ==========================================
+                    # 🪞 REDIRECTION: Magic Coat and Snatch
+                    # ==========================================
+                    if magic_coat_bounces(defender, move):
+                        defender['volatile_statuses'].pop('magic_coat', None)
+                        combat_log += (f"\U0001fa9e **{defender['name'].capitalize()}** bounced back "
+                                       f"the {raw_move_name.replace('-', ' ').title()}!\n")
+                        attacker, defender = defender, attacker
+
+                    elif snatch_steals(defender, move):
+                        defender['volatile_statuses'].pop('snatch', None)
+                        combat_log += (f"\U0001f91a **{defender['name'].capitalize()}** snatched the "
+                                       f"{raw_move_name.replace('-', ' ').title()}!\n")
+                        attacker, defender = defender, attacker
+
+                    # ==========================================
                     # 🎭 COPY MOVES: perform something else entirely
                     # ==========================================
                     if raw_move_name in COPY_MOVES:
@@ -7604,6 +7644,9 @@ class Combat(commands.Cog):
                     p_active['volatile_statuses'].pop('destiny-bond', None)
                     p_active['volatile_statuses'].pop('is_switching', None)
                     p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
+                    p_active['volatile_statuses'].pop('electrified', None)
+                    clear_interceptors(p_active)
+
 
                     # A charge that was pending and did NOT fire this turn means the user
                     # was stopped, so the move fails and it comes back down. PvP had no

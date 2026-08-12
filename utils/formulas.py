@@ -990,6 +990,74 @@ def apply_gmax_effect(move_name, attacker, defender, user_party=None,
     return ""
 
 
+# 🪞 REDIRECTION AND INTERCEPTION
+# ==========================================
+# Four of these arm an interceptor that changes how the OPPONENT'S next move resolves,
+# which is why Magic Coat and Snatch both sit at +4 priority - they have to be standing
+# before the thing they intercept arrives.
+POWDER_RECOIL_FRACTION = 0.25
+
+# Magic Coat cannot bounce a move that was itself bounced, nor the interceptors.
+BOUNCE_IMMUNE_MOVES = {
+    'magic-coat', 'snatch', 'struggle', 'sketch', 'mimic', 'transform', 'metronome',
+    'me-first', 'mirror-move', 'copycat', 'assist', 'sleep-talk',
+}
+
+# Snatch only takes what the user was doing to ITSELF; these are the self-aimed targets.
+SNATCHABLE_TARGETS = {'user', 'users-field', 'user-and-allies', 'all-allies'}
+
+
+def magic_coat_bounces(defender, move):
+    """
+    Whether the defender's Magic Coat reflects this move back at whoever threw it.
+
+    Only status moves aimed AT the coat holder bounce - a self-buff has nothing to
+    reflect, and a damaging move goes straight through.
+    """
+    if not (defender.get('volatile_statuses') or {}).get('magic_coat'):
+        return False
+    if move.get('class') != 'status':
+        return False
+
+    name = (move.get('name') or '').lower().replace(' ', '-')
+    if name in BOUNCE_IMMUNE_MOVES:
+        return False
+
+    return 'selected-pokemon' in str(move.get('target', '')) or \
+           'opponent' in str(move.get('target', ''))
+
+
+def snatch_steals(thief, move):
+    """
+    Whether the thief's Snatch takes this move and uses it instead.
+
+    Snatch is the mirror of Magic Coat: it takes what the user was doing FOR itself -
+    a boost, a heal, a screen - rather than what was being done to somebody.
+    """
+    if not (thief.get('volatile_statuses') or {}).get('snatch'):
+        return False
+    if move.get('class') != 'status':
+        return False
+
+    name = (move.get('name') or '').lower().replace(' ', '-')
+    if name in BOUNCE_IMMUNE_MOVES:
+        return False
+
+    return str(move.get('target', '')) in SNATCHABLE_TARGETS
+
+
+def clear_interceptors(pokemon):
+    """
+    Magic Coat, Snatch and Powder all last a single turn. Cleared alongside the other
+    per-turn volatiles so an unused one cannot linger into the next round.
+    """
+    if pokemon is None:
+        return
+    volatiles = pokemon.get('volatile_statuses') or {}
+    for flag in ('magic_coat', 'snatch', 'powder'):
+        volatiles.pop(flag, None)
+
+
 # ==========================================
 # 🎭 COPY AND MIMICRY MOVES
 # ==========================================
@@ -2400,6 +2468,24 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # 🚨 ITEM-DRIVEN ELEMENTS (Judgment / Techno Blast / Multi-Attack)
     move_type = resolve_item_move_type(move_name, attacker_item, move_type)
 
+    # ==========================================
+    # 🪞 INTERCEPTORS ARMED AGAINST THIS USER
+    # ==========================================
+    # Electrify rewrites the element before anything reads it, so STAB, the type chart
+    # and every type-keyed effect downstream all see Electric.
+    if (attacker.get('volatile_statuses') or {}).get('electrified') and move_class != 'status':
+        move_type = 'electric'
+
+    # Powder detonates on any Fire move the coated specimen tries to throw, and the move
+    # never happens. Checked on the ORIGINAL element as well as the rewritten one so an
+    # Electrified Fire move still fizzles rather than slipping through as Electric.
+    if (attacker.get('volatile_statuses') or {}).get('powder') and move_class != 'status':
+        if move_type == 'fire' or (move.get('type') or '').lower() == 'fire':
+            burst = max(1, math.floor(attacker.get('max_hp', 100) * POWDER_RECOIL_FRACTION))
+            attacker['current_hp'] = max(0, attacker['current_hp'] - burst)
+            return 0, (f"💥 The powder ignited! {attacker['name'].capitalize()} was "
+                       f"caught in the blast and lost {burst} HP!"), 'none', [], 0
+
     # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
     if move_name == 'tera-blast' and attacker.get('tera_type'):
         move_type = attacker['tera_type']
@@ -2522,6 +2608,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
         attacker['types'] = mirrored
         return 0, f"🪞 {attacker['name'].capitalize()} mirrored {defender['name'].capitalize()}'s typing!", 'none', [], 0
+
+    if move_name == 'magic-powder':
+        if defender.get('types') == ['psychic']:
+            return 0, "But it failed! It is already pure Psychic!", 'none', [], 0
+
+        defender['types'] = ['psychic']
+        return 0, (f"✨ {defender['name'].capitalize()} was dusted and became pure "
+                   f"Psychic!"), 'none', [], 0
 
     if move_name == 'soak':
         if defender.get('types') == ['water']:
@@ -2781,6 +2875,38 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                    f"grudge!"), 'none', [], 0
 
     # ==========================================
+    # 🪞 REDIRECTION AND INTERCEPTION
+    # ==========================================
+    if move_name in ('magic-coat', 'snatch'):
+        flag = move_name.replace('-', '_')
+        if (attacker.get('volatile_statuses') or {}).get(flag):
+            return 0, "But it failed! It is already braced!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})[flag] = True
+        if move_name == 'magic-coat':
+            return 0, (f"🪞 {attacker['name'].capitalize()} shrouded itself - "
+                       f"status moves will bounce back!"), 'none', [], 0
+        return 0, (f"🤚 {attacker['name'].capitalize()} is poised to snatch the "
+                   f"next self-serving move!"), 'none', [], 0
+
+    if move_name == 'powder':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('powder'):
+            return 0, "But it failed! It is already covered!", 'none', [], 0
+
+        victim['powder'] = True
+        return 0, (f"🟢 {defender['name'].capitalize()} was covered in a "
+                   f"combustible powder!"), 'none', [], 0
+
+    if move_name == 'electrify':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('electrified'):
+            return 0, "But it failed! It is already charged!", 'none', [], 0
+
+        victim['electrified'] = True
+        return 0, (f"⚡ {defender['name'].capitalize()} was electrified - its move "
+                   f"turned Electric!"), 'none', [], 0
+
     # ==========================================
     # 🎭 COPY AND MIMICRY MOVES
     # ==========================================
