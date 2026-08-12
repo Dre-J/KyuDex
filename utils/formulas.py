@@ -601,6 +601,57 @@ def shares_a_type(attacker, defender):
 
 
 # ==========================================
+# 💘 INFATUATION
+# ==========================================
+# Attract and G-Max Cuddle both arrive through the database's 'infatuation' ailment, so
+# the rule lives here rather than on either move.
+#
+# Infatuation is a VOLATILE in the games, not a major status: a charmed specimen can
+# still be burned or put to sleep. The database only offers it as an ailment, so it is
+# converted on arrival the same way 'trap' already is.
+INFATUATION_IMMOBILISE_CHANCE = 50
+
+# Oblivious cannot be charmed at all; Aroma Veil shields against it too.
+INFATUATION_IMMUNE_ABILITIES = {'oblivious', 'aroma-veil'}
+
+
+def can_be_infatuated(attacker, defender):
+    """
+    Whether the target can be charmed by this user.
+
+    Both sides need a KNOWN and OPPOSITE gender. A genderless specimen can neither charm
+    nor be charmed, and two of the same gender have nothing to work with - which is the
+    whole point of the move and was the part going unchecked.
+    """
+    charmer = (attacker or {}).get('gender')
+    target = (defender or {}).get('gender')
+    if charmer not in ('M', 'F') or target not in ('M', 'F'):
+        return False
+    return charmer != target
+
+
+def infatuation_blocked_by(defender):
+    """The ability shielding this target from infatuation, or None."""
+    ability = get_active_ability(defender)
+    return ability if ability in INFATUATION_IMMUNE_ABILITIES else None
+
+
+def is_infatuated(pokemon):
+    """Whether this specimen is currently charmed."""
+    return bool(((pokemon or {}).get('volatile_statuses') or {}).get('infatuation'))
+
+
+def infatuation_holds_it_back(pokemon, rng=None):
+    """
+    Whether infatuation stops this specimen acting this turn. Rolled per turn, so a
+    charmed specimen is hampered rather than disabled.
+    """
+    if not is_infatuated(pokemon):
+        return False
+    return (rng or random).randint(1, 100) <= INFATUATION_IMMOBILISE_CHANCE
+
+
+# ==========================================
 # 👻 CURSE, PSYCHO SHIFT AND THE ODDMENTS
 # ==========================================
 # Curse is two different moves wearing one name, told apart by the user's typing.
@@ -2498,6 +2549,9 @@ def leave_field(pokemon):
     if pokemon is not None:
         # Coming back in counts as arriving fresh, which is what re-arms Fake Out
         pokemon['turns_on_field'] = 0
+        # Infatuation is an attachment to the specimen that was standing opposite, so it
+        # cannot survive either of them leaving.
+        (pokemon.get('volatile_statuses') or {}).pop('infatuation', None)
     reset_stat_stages(pokemon)
     # Undone before the stat/ability restores, so those put back the specimen's OWN
     # figures rather than the borrowed ones it was wearing.
@@ -4787,6 +4841,28 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif terrain == 'electric' and inflicted_status == 'sleep':
                 inflicted_status = None
                 msg += f" ⚡ The Electric Terrain prevented {defender['name'].capitalize()} from falling asleep!"
+
+    # ==========================================
+    # 💘 THE DATABASE INFATUATION CONVERTER
+    # ==========================================
+    # Attract and G-Max Cuddle both land here as the 'infatuation' ailment. It was being
+    # written straight through as a major status, which meant it charmed regardless of
+    # gender, blocked every other status as "already afflicted", and then did nothing at
+    # all because no part of the engine read it.
+    if inflicted_status == 'infatuation':
+        shielded_by = infatuation_blocked_by(defender)
+        if shielded_by:
+            inflicted_status = None
+            msg += (f" 💗 {defender['name'].capitalize()}'s "
+                    f"{shielded_by.replace('-', ' ').title()} kept it indifferent!")
+        elif not can_be_infatuated(attacker, defender):
+            inflicted_status = None
+            msg += f" 💔 But {defender['name'].capitalize()} was unmoved!"
+        else:
+            defender.setdefault('volatile_statuses', {})['infatuation'] = True
+            msg += f" 💘 {defender['name'].capitalize()} fell head over heels in love!"
+            # Carried as a volatile, so it does not occupy the major-status slot.
+            inflicted_status = None
 
     # ==========================================
     # THE DATABASE TRAP CONVERTER
