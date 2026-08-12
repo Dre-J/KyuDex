@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
 from utils import checks
 import aiohttp
@@ -641,6 +641,15 @@ async def check_for_evolution(db, user_id, specimen, combat_log):
         return evo_msg, (new_pokedex_id, evolved_into_name)
 
     return None, None # No evolution occurred
+
+def field_of(state):
+    """
+    The field dictionary, created on first use so every path shares one rather than
+    reading a throwaway {} and quietly dropping whatever was written to it.
+    """
+    return state.setdefault('field', {'trick_room': 0, 'wonder_room': 0,
+                                      'gravity': 0, 'magic_room': 0})
+
 
 def side_of(state, specimen):
     """
@@ -2094,7 +2103,8 @@ class SwapMenu(discord.ui.View):
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                     gravity=state.get('field', {}).get('gravity', 0) > 0,
-                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                                 )
                                 new_active['current_hp'] = max(0, new_active['current_hp'] - dmg)
                                 if msg: combat_log += f"*{msg}*\n"
@@ -3232,7 +3242,8 @@ class BattleDashboard(discord.ui.View):
                                             user_party=state['player_team'],
                                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                             gravity=state.get('field', {}).get('gravity', 0) > 0,
-                                            magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                                            magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                                         )
                                         
                                         n_active['current_hp'] = max(0, n_active['current_hp'] - dmg)
@@ -3621,7 +3632,8 @@ class BattleDashboard(discord.ui.View):
                                 terrain=state.get('terrain', {'type': 'none'})['type'],
                                 wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                 gravity=state.get('field', {}).get('gravity', 0) > 0,
-                                magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                                magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                             )
                                 attacker['current_hp'] = max(0, attacker['current_hp'] - dmg)
                                 combat_log += f"💥 {msg} (Dealt **{dmg}** damage!)\n"
@@ -3917,7 +3929,8 @@ class BattleDashboard(discord.ui.View):
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                             gravity=state.get('field', {}).get('gravity', 0) > 0,
-                            magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                            magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                         )
                         print(f"DEBUG 4: Physics engine success! Damage calculated: {dmg}")
                         
@@ -4539,7 +4552,8 @@ class BattleDashboard(discord.ui.View):
                                     terrain=state.get('terrain', {'type': 'none'})['type'],
                                     wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                                     gravity=state.get('field', {}).get('gravity', 0) > 0,
-                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                                 )
                         n_active['current_hp'] = max(0, n_active['current_hp'] - dmg)
                         combat_log += f"💥 {msg} (Dealt **{dmg}** damage!)\n"
@@ -4604,7 +4618,8 @@ class BattleDashboard(discord.ui.View):
                             terrain=state.get('terrain', {'type': 'none'})['type'],
                             wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                             gravity=state.get('field', {}).get('gravity', 0) > 0,
-                            magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                            magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                         )
                         
                         p_active['current_hp'] = max(0, p_active['current_hp'] - dmg)
@@ -5122,15 +5137,22 @@ class BattleDashboard(discord.ui.View):
 
             # 🚨 FIELD STATE DECAY
             if 'field' in state:
-                for field_state in ['trick_room', 'wonder_room', 'gravity', 'magic_room']:
-                    if state['field'][field_state] > 0:
+                # The sports and the deluge are added to the field only when used, so
+                # these are read with .get rather than indexed - the dictionary is built
+                # with the four rooms alone.
+                for field_state in ['trick_room', 'wonder_room', 'gravity', 'magic_room',
+                                    'mud_sport', 'water_sport', 'ion_deluge']:
+                    if state['field'].get(field_state, 0) > 0:
                         state['field'][field_state] -= 1
                         if state['field'][field_state] == 0:
                             msgs = {
-                                'trick_room': "The twisted dimensions returned to normal!", 
-                                'wonder_room': "Wonder Room wore off, and stats returned to normal!", 
+                                'trick_room': "The twisted dimensions returned to normal!",
+                                'wonder_room': "Wonder Room wore off, and stats returned to normal!",
                                 'gravity': "Gravity returned to normal!",
-                                'magic_room': "Magic Room wore off, and held items regained their power!"
+                                'magic_room': "Magic Room wore off, and held items regained their power!",
+                                'mud_sport': "The mud washed away, and Electric moves regained their power!",
+                                'water_sport': "The water dried up, and Fire moves regained their power!",
+                                'ion_deluge': "The ion deluge cleared, and Normal moves stayed Normal!"
                             }
                             combat_log += f"✨ {msgs[field_state]}\n"
                             
@@ -5299,6 +5321,12 @@ class BattleDashboard(discord.ui.View):
                     # 1. Calculate Research Funding (Eco Tokens)
                     tokens_earned = 100 + (len(state['npc_team']) * 250)
 
+                    # Happy Hour doubles the battle's takings. Applied to the reward
+                    # itself and not to the scattered coins, which are picked up rather
+                    # than won.
+                    happy_multiplier = prize_multiplier(state.get('player_hazards'))
+                    tokens_earned *= happy_multiplier
+
                     # G-Max Gold Rush scatters coins mid-battle; they are picked up here
                     coin_bonus = collected_coins(state['player_team'])
                     tokens_earned += coin_bonus
@@ -5313,6 +5341,8 @@ class BattleDashboard(discord.ui.View):
                     rewards_log: str = f"\n\n💰 You earned **{tokens_earned} Eco Tokens** for your research!\n"
                     if coin_bonus:
                         rewards_log += f"🪙 **{coin_bonus}** of that was loose change scattered by G-Max Gold Rush!\n"
+                    if happy_multiplier > 1:
+                        rewards_log += f"🎉 Happy Hour **doubled** the reward!\n"
                     rewards_log += f"📈 Surviving team members gained **{exp_per_specimen} EXP**!\n\n"
                     
                     # 🚨 ASYNCHRONOUS DATABASE TRANSACTION
@@ -6948,7 +6978,8 @@ class Combat(commands.Cog):
                         terrain=state.get('terrain', {'type': 'none'})['type'],
                         wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
                         gravity=state.get('field', {}).get('gravity', 0) > 0,
-                        magic_room=state.get('field', {}).get('magic_room', 0) > 0
+                        magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state)
                     )
 
                     print(f"DEBUG: Result -> Dmg: {dmg}, Heal: {heal}, Stat Chgs: {stat_changes}")
@@ -7452,15 +7483,22 @@ class Combat(commands.Cog):
             
             # 🚨 FIELD STATE DECAY
             if 'field' in state:
-                for field_state in ['trick_room', 'wonder_room', 'gravity', 'magic_room']:
-                    if state['field'][field_state] > 0:
+                # The sports and the deluge are added to the field only when used, so
+                # these are read with .get rather than indexed - the dictionary is built
+                # with the four rooms alone.
+                for field_state in ['trick_room', 'wonder_room', 'gravity', 'magic_room',
+                                    'mud_sport', 'water_sport', 'ion_deluge']:
+                    if state['field'].get(field_state, 0) > 0:
                         state['field'][field_state] -= 1
                         if state['field'][field_state] == 0:
                             msgs = {
-                                'trick_room': "The twisted dimensions returned to normal!", 
-                                'wonder_room': "Wonder Room wore off, and stats returned to normal!", 
+                                'trick_room': "The twisted dimensions returned to normal!",
+                                'wonder_room': "Wonder Room wore off, and stats returned to normal!",
                                 'gravity': "Gravity returned to normal!",
-                                'magic_room': "Magic Room wore off, and held items regained their power!"
+                                'magic_room': "Magic Room wore off, and held items regained their power!",
+                                'mud_sport': "The mud washed away, and Electric moves regained their power!",
+                                'water_sport': "The water dried up, and Fire moves regained their power!",
+                                'ion_deluge': "The ion deluge cleared, and Normal moves stayed Normal!"
                             }
                             combat_log += f"✨ {msgs[field_state]}\n"
                             
