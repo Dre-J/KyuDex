@@ -87,6 +87,28 @@ def _resolve_font(role: str) -> Optional[str]:
     return None
 
 
+# A codepoint no font can define. Anything that renders identically to this is
+# being drawn as .notdef - the hollow box (often with a cross) rather than a real glyph.
+# Deliberately NOT a Private Use codepoint: symbol fonts routinely define those.
+_MISSING_SENTINEL = chr(0xFFFF)   # a permanent noncharacter; no font maps it
+
+
+@lru_cache(maxsize=None)
+def has_glyph(role: str, size: int, ch: str) -> bool:
+    """
+    Whether this role's resolved font actually carries `ch`.
+
+    Resolution only checks that a font FILE exists, never that it contains the character
+    we want - so on a host without Segoe UI Symbol or DejaVu, the Mars and Venus signs
+    came out as boxes. Callers use this to fall back to something always drawable.
+    """
+    try:
+        f = font(role, size)
+        return bytes(f.getmask(ch)) != bytes(f.getmask(_MISSING_SENTINEL))
+    except Exception:
+        return False
+
+
 @lru_cache(maxsize=None)
 def font(role: str, size: int):
     """Font at `size` output-space points (scaled up by SS internally)."""
@@ -467,7 +489,13 @@ def draw_hp_panel(img, mon, box, show_numbers):
     right = X + Wd - pad
     gender_glyph = {"M": "\u2642", "F": "\u2640"}.get(mon.gender)
     if gender_glyph:
-        f_gen = font("symbol", 13)
+        # Fall back to a plain letter when the host has no font carrying the Mars/Venus
+        # signs, rather than letting PIL draw .notdef as a coloured box.
+        if has_glyph("symbol", 13, gender_glyph):
+            f_gen = font("symbol", 13)
+        else:
+            gender_glyph = mon.gender
+            f_gen = font("bold", 11)
         gw = d.textlength(gender_glyph, font=f_gen)
         gcol = (108, 176, 240) if mon.gender == "M" else (240, 128, 176)
         d.text((right - gw, Y + 12 * SS), gender_glyph, font=f_gen, fill=gcol + (255,))

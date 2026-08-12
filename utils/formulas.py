@@ -845,6 +845,7 @@ GMAX_EFFECTS = {
     'G-Max Chi Strike':  'crit_boost',
     'G-Max Depletion':   'sap_pp',
     'G-Max Finale':      'heal_party',
+    'G-Max Gold Rush':   'coins',
     'G-Max Meltdown':    'torment',
     'G-Max Replenish':   'recycle',
     'G-Max Resonance':   'aurora_veil',
@@ -853,6 +854,26 @@ GMAX_EFFECTS = {
     'G-Max Terror':      'trap',
     'G-Max Wind Rage':   'clear_hazards',
 }
+
+# G-Max Gold Rush scatters coins that are picked up after the battle rather than paying
+# out mid-turn. The amount rides on the user, so the reward path can total it up across
+# the whole team; PvP simply never reads it, which is why the coins only cash in PvE.
+COIN_SCATTER_PER_LEVEL = 5
+
+
+def scatter_coins(attacker):
+    """Add this user's coin scatter to its running total. Returns the amount added."""
+    if attacker is None:
+        return 0
+    coins = max(1, COIN_SCATTER_PER_LEVEL * attacker.get('level', 50))
+    attacker['_coins_scattered'] = attacker.get('_coins_scattered', 0) + coins
+    return coins
+
+
+def collected_coins(team):
+    """Everything a team scattered over the course of a battle."""
+    return sum((m.get('_coins_scattered') or 0) for m in (team or []) if m)
+
 
 # The three that hit for a flat 160 and shrug off the target's ability entirely.
 GMAX_FIXED_POWER = {
@@ -910,6 +931,11 @@ def apply_gmax_effect(move_name, attacker, defender, user_party=None,
             member['current_hp'] = min(max_hp, member['current_hp'] + max(1, math.floor(max_hp / 6)))
             mended.append(member['name'].capitalize())
         return f" 🍰 The whole party shared the treat - {', '.join(mended)} recovered!" if mended else ""
+
+    if effect == 'coins':
+        # The confusion half rides on the ordinary ailment payload; this is the money
+        coins = scatter_coins(attacker)
+        return f" 🪙 Coins scattered everywhere! ({coins} to collect afterwards)"
 
     if effect == 'torment':
         if (defender.get('volatile_statuses') or {}).get('torment'):
