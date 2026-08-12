@@ -2206,6 +2206,49 @@ class ItemSelect(discord.ui.View):
         # Redraw the main battle dashboard
         await interaction.response.edit_message(view=self.main_battle_view)
 
+class ForfeitConfirm(discord.ui.View):
+    """
+    Second step on abandoning an expedition. A single mis-click on the dashboard would
+    otherwise throw away a whole battle, so the actual teardown lives behind this.
+    """
+
+    def __init__(self, dashboard):
+        super().__init__(timeout=60)
+        self.dashboard = dashboard
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if str(interaction.user.id) != self.dashboard.user_id:
+            await interaction.response.send_message(
+                "⚠️ This is not your field expedition!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="🏳️ Confirm Forfeit", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        state = self.dashboard.cog.active_battles.pop(self.dashboard.user_id, None)
+
+        for child in self.dashboard.children:
+            child.disabled = True
+        self.dashboard.stop()
+
+        # Leave the battle message on screen but visibly finished
+        try:
+            if state and state.get('message_obj'):
+                await state['message_obj'].edit(
+                    content="🏳️ **Expedition abandoned.** No research funding was recovered.",
+                    view=self.dashboard, attachments=[])
+        except Exception as e:
+            print(f"DEBUG: Could not tidy up the forfeited battle message: {e}")
+
+        await interaction.response.edit_message(
+            content="🏳️ You withdrew from the expedition.", view=None)
+
+    @discord.ui.button(label="↩️ Keep Fighting", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="💪 You stayed in the field.", view=None)
+
+
 class BattleDashboard(discord.ui.View):
     def __init__(self, cog, user_id, ctx):
         super().__init__(timeout=300)
@@ -2672,6 +2715,15 @@ class BattleDashboard(discord.ui.View):
             swap_btn.callback = self.handle_swap
             self.add_item(swap_btn)
 
+            # --- The Forfeit Button ---
+            # Wild and NPC expeditions can be walked away from; the confirmation step
+            # lives in ForfeitConfirm so a stray click cannot end the battle.
+            forfeit_btn = discord.ui.Button(label="🏳️ Forfeit",
+                                            style=discord.ButtonStyle.danger,
+                                            custom_id="action_forfeit", row=1)
+            forfeit_btn.callback = self.handle_forfeit
+            self.add_item(forfeit_btn)
+
             # ==========================================
             # 3. THE HYPER-ADAPTATION SCANNER (Row 2)
             # ==========================================
@@ -2820,6 +2872,17 @@ class BattleDashboard(discord.ui.View):
         # Randomize the filename to bust Discord's aggressive image cache!
         new_filename = f"battle_{random.randint(10000, 99999)}.png"
         return discord.File(fp=buffer, filename=new_filename)
+
+    async def handle_forfeit(self, interaction: discord.Interaction):
+        """Offer to abandon the expedition. The teardown itself is behind a confirm."""
+        if str(interaction.user.id) != self.user_id:
+            return await interaction.response.send_message(
+                "⚠️ This is not your field expedition!", ephemeral=True)
+
+        await interaction.response.send_message(
+            "🏳️ Abandon this expedition? You will not recover any research "
+            "funding or experience from it.",
+            view=ForfeitConfirm(self), ephemeral=True)
 
     async def open_bag(self, interaction: discord.Interaction):
         """Queries the user's inventory for medical supplies and opens the Dropdown UI."""
