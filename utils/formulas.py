@@ -387,7 +387,186 @@ def get_stat_scaled_power(move_name, attacker, defender):
 
     return None
 
-def resolve_dynamic_power(move_name, attacker, defender):
+# ==========================================
+# 💞 FRIENDSHIP-SCALED POWER
+# ==========================================
+# Return and the two partner moves hit harder the more the specimen likes its trainer;
+# Frustration reads the same bond backwards. All four share one divisor, so a maxed
+# bond caps them at 102 and a bottomed one still leaves 1.
+FRIENDSHIP_MOVES = {'return', 'pika-papow', 'veevee-volley'}
+FRUSTRATION_MOVES = {'frustration'}
+
+MAX_HAPPINESS = 255
+FRIENDSHIP_DIVISOR = 2.5
+
+# What a specimen is worth when nothing recorded a bond. Wild encounters and NPC rosters
+# are built in memory and never had a happiness row, and this is where the mainline games
+# start everything, so it is the honest default rather than a stand-in for zero.
+DEFAULT_HAPPINESS = 70
+
+
+def get_happiness(pokemon):
+    """The bond a specimen carries, clamped to the range the games store."""
+    raw = (pokemon or {}).get('happiness')
+    if raw is None:
+        raw = DEFAULT_HAPPINESS
+    try:
+        return max(0, min(MAX_HAPPINESS, int(raw)))
+    except (TypeError, ValueError):
+        return DEFAULT_HAPPINESS
+
+
+def get_friendship_power(move_name, attacker):
+    """Power for the bond-scaled moves. None for everything else."""
+    if move_name in FRIENDSHIP_MOVES:
+        bond = get_happiness(attacker)
+    elif move_name in FRUSTRATION_MOVES:
+        bond = MAX_HAPPINESS - get_happiness(attacker)
+    else:
+        return None
+
+    # Floors at 1: these rows carry no stored power, so returning 0 would make the move
+    # silently do nothing rather than do very little.
+    return max(1, math.floor(bond / FRIENDSHIP_DIVISOR))
+
+# ==========================================
+# 🍽️ STOCKPILE, SWALLOW AND SPIT UP
+# ==========================================
+# Stockpile banks up to three charges, each raising both defences a stage. Swallow and
+# Spit Up each cash the whole bank in - one as health, one as power - and hand back the
+# stages that were granted. Nothing else spends the counter, so the three moves are only
+# ever meaningful together.
+#
+# Stockpile's database row carries a bare 'defense +1', which is why the survey counted
+# it as finished: the generic path was raising one stat and banking nothing.
+MAX_STOCKPILE = 3
+SPIT_UP_POWER_PER_STACK = 100
+SWALLOW_HEAL_BY_STACK = {1: 0.25, 2: 0.50, 3: 1.00}
+
+STOCKPILE_STATS = ('defense', 'sp_def')
+
+
+def get_stockpile(pokemon):
+    """How many charges are banked, 0-3."""
+    return int(((pokemon or {}).get('volatile_statuses') or {}).get('stockpile', 0) or 0)
+
+
+def add_stockpile(pokemon):
+    """
+    Bank one charge. Returns (accepted, stat_changes) - refused at the cap, since the
+    games make a fourth Stockpile fail outright rather than silently waste a turn.
+    """
+    held = get_stockpile(pokemon)
+    if held >= MAX_STOCKPILE:
+        return False, []
+
+    pokemon.setdefault('volatile_statuses', {})['stockpile'] = held + 1
+    return True, [('attacker', stat, 1) for stat in STOCKPILE_STATS]
+
+
+def spend_stockpile(pokemon):
+    """
+    Empty the bank. Returns (charges_spent, stat_changes) where the changes undo exactly
+    what was granted - tracked by count rather than by reading the stages back, so an
+    unrelated boost or drop in between is left alone.
+    """
+    held = get_stockpile(pokemon)
+    if not held:
+        return 0, []
+
+    (pokemon.get('volatile_statuses') or {}).pop('stockpile', None)
+    return held, [('attacker', stat, -held) for stat in STOCKPILE_STATS]
+
+
+# ==========================================
+# 🎁 ITEM-DRIVEN DAMAGE
+# ==========================================
+# Natural Gift takes its element and its power from the berry being held, and spends it.
+# Exactly the 41 berries this game actually stocks are tabled - the wider series has
+# more, but a berry that cannot be obtained here would only be dead weight.
+#
+# Powers are the Gen VI values: the status and resist berries throw for 80, the stat
+# berries for 100. (The 90-power middle tier is all berries this game does not stock.)
+NATURAL_GIFT_BERRIES = {
+    # --- Status-curing berries ---
+    'cheri-berry': ('fire', 80),     'chesto-berry': ('water', 80),
+    'pecha-berry': ('electric', 80), 'rawst-berry': ('grass', 80),
+    'aspear-berry': ('ice', 80),     'leppa-berry': ('fighting', 80),
+    'oran-berry': ('poison', 80),    'persim-berry': ('ground', 80),
+    'lum-berry': ('flying', 80),     'sitrus-berry': ('psychic', 80),
+    'figy-berry': ('bug', 80),       'wiki-berry': ('rock', 80),
+    'mago-berry': ('ghost', 80),     'aguav-berry': ('dragon', 80),
+    'iapapa-berry': ('dark', 80),
+
+    # --- Type-resisting berries ---
+    'occa-berry': ('fire', 80),      'passho-berry': ('water', 80),
+    'wacan-berry': ('electric', 80), 'rindo-berry': ('grass', 80),
+    'yache-berry': ('ice', 80),      'chople-berry': ('fighting', 80),
+    'kebia-berry': ('poison', 80),   'shuca-berry': ('ground', 80),
+    'coba-berry': ('flying', 80),    'payapa-berry': ('psychic', 80),
+    'tanga-berry': ('bug', 80),      'charti-berry': ('rock', 80),
+    'kasib-berry': ('ghost', 80),    'haban-berry': ('dragon', 80),
+    'colbur-berry': ('dark', 80),    'babiri-berry': ('steel', 80),
+    'chilan-berry': ('normal', 80),
+
+    # --- Stat-boosting berries, which throw harder ---
+    'liechi-berry': ('grass', 100),  'ganlon-berry': ('ice', 100),
+    'salac-berry': ('fighting', 100),'petaya-berry': ('poison', 100),
+    'apicot-berry': ('ground', 100), 'lansat-berry': ('flying', 100),
+    'starf-berry': ('psychic', 100), 'micle-berry': ('rock', 100),
+    'custap-berry': ('ghost', 100),
+}
+
+# Present is a gamble: four in ten it is a feeble tap, two in ten it HEALS the target
+# instead. Weights are out of ten so the roll stays readable.
+PRESENT_OUTCOMES = [(4, 40), (3, 80), (1, 120), (2, None)]   # (weight, power); None heals
+PRESENT_HEAL_FRACTION = 0.25
+
+
+def natural_gift_payload(attacker):
+    """
+    The (type, power) a held berry throws for, or None when there is nothing to throw.
+    Reads the stored item so a suppressed-item field (Magic Room) is handled by the
+    caller rather than silently succeeding here.
+    """
+    return NATURAL_GIFT_BERRIES.get((get_stored_item(attacker) or '').lower())
+
+
+def roll_present(rng=None):
+    """
+    One draw from Present's table. Returns a power, or None when it heals instead.
+    Rolled once per use and handed straight to the damage step - deliberately not
+    routed through resolve_dynamic_power, which the move button also calls and would
+    therefore advertise a number the swing was never going to use.
+    """
+    roll = (rng or random).randint(1, sum(w for w, _ in PRESENT_OUTCOMES))
+    for weight, power in PRESENT_OUTCOMES:
+        roll -= weight
+        if roll <= 0:
+            return power
+    return PRESENT_OUTCOMES[-1][1]
+
+
+# ==========================================
+# 🃏 RESOURCE-SCALED POWER
+# ==========================================
+# Trump Card reads the PP left AFTER this use, so the engines - which spend the point
+# before swinging - can pass what they see. The move-button hint has not spent it yet
+# and says so with pending=True.
+TRUMP_CARD_POWER = {0: 200, 1: 80, 2: 60, 3: 50}
+TRUMP_CARD_DEFAULT = 40
+
+
+def trump_card_power(attacker, pending=False):
+    """Power for Trump Card, rising sharply as its own PP runs out."""
+    slot = find_move_slot(attacker, 'trump-card')
+    left = slot.get('pp', 0) if slot else 0
+    if pending:
+        left = max(0, left - 1)
+    return TRUMP_CARD_POWER.get(left, TRUMP_CARD_DEFAULT)
+
+
+def resolve_dynamic_power(move_name, attacker, defender, pending=False):
     """
     Single entry point for every move whose base power is computed rather than stored.
     Returns None for ordinary moves so callers can fall back to the database value.
@@ -395,6 +574,23 @@ def resolve_dynamic_power(move_name, attacker, defender):
     scaled = get_hp_scaled_power(move_name, attacker, defender)
     if scaled is not None:
         return scaled
+
+    bond = get_friendship_power(move_name, attacker)
+    if bond is not None:
+        return bond
+
+    # --- Resource-scaled ---
+    if move_name == 'trump-card':
+        return trump_card_power(attacker, pending=pending)
+
+    if move_name == 'spit-up':
+        # Nothing banked means the move fails outright, handled in the damage engine.
+        return SPIT_UP_POWER_PER_STACK * get_stockpile(attacker) or None
+
+    if move_name == 'hard-press':
+        # Scales with how much fight the TARGET has left, unlike the Flail family.
+        max_hp = defender.get('max_hp', 100) or 100
+        return max(1, math.floor(100 * defender.get('current_hp', 0) / max_hp))
 
     # Fling reads whatever the user is holding, so the AI and the move button both need
     # it resolved here rather than at swing time.
@@ -2255,7 +2451,9 @@ def format_power_hint(move_name, attacker, defender):
     Short ' ⚡NNN' suffix showing an HP-scaled move's power *right now*, for battle
     buttons. Returns '' for every other move so callers can append it unconditionally.
     """
-    power = resolve_dynamic_power(move_name, attacker, defender)
+    # pending=True: the button is offering a move whose cost has not been paid yet, and
+    # Trump Card's power is decided by what is left once it has been.
+    power = resolve_dynamic_power(move_name, attacker, defender, pending=True)
     return f" ⚡{power}" if power is not None else ""
 
 def describe_power_range(move_name):
@@ -2295,6 +2493,20 @@ def describe_power_range(move_name):
         return "50+ (↑ 50 per ally lost)"
     if move_name == 'body-press':
         return "80 (attacks with your Defense)"
+
+    # --- Resource family ---
+    if move_name == 'trump-card':
+        return "40-200 (↑ as its own PP runs out)"
+    if move_name == 'spit-up':
+        return "100 per Stockpile charge"
+    if move_name == 'hard-press':
+        return "1-100 (↑ with target's HP)"
+
+    # --- Friendship family ---
+    if move_name in FRIENDSHIP_MOVES:
+        return "1-102 (↑ the more it likes you)"
+    if move_name in FRUSTRATION_MOVES:
+        return "1-102 (↑ the less it likes you)"
 
     return None
 
@@ -2589,6 +2801,37 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             attacker['current_hp'] = max(0, attacker['current_hp'] - burst)
             return 0, (f"💥 The powder ignited! {attacker['name'].capitalize()} was "
                        f"caught in the blast and lost {burst} HP!"), 'none', [], 0
+
+    # ==========================================
+    # 🎁 ITEM-DRIVEN DAMAGE
+    # ==========================================
+    # Both settle their own power, which overrides the shared resolver at the damage
+    # gate far below. They sit up HERE rather than beside that gate because Natural Gift
+    # rewrites the element, and the type chart is read long before the gate - putting
+    # this any later would throw a berry that the type chart never saw.
+    item_power = None
+
+    if move_name == 'natural-gift':
+        # Magic Room seals held items away, so there is nothing to draw on.
+        payload = None if magic_room else natural_gift_payload(attacker)
+        if payload is None:
+            return 0, "But it failed! It had no berry to give!", 'none', [], 0
+
+        move_type, item_power = payload
+        # Thrown, so it is spent - and spent in the database too, the way a berry eaten
+        # mid-battle is, rather than handed back when the battle ends.
+        mark_item_consumed(attacker, get_stored_item(attacker))
+        attacker['held_item'] = None
+
+    if move_name == 'present':
+        item_power = roll_present()
+        if item_power is None:
+            mended = max(1, math.floor(defender.get('max_hp', 100) * PRESENT_HEAL_FRACTION))
+            before = defender.get('current_hp', 0)
+            defender['current_hp'] = min(defender.get('max_hp', 100), before + mended)
+            return 0, (f"🎁 {attacker['name'].capitalize()} gave a present - and it "
+                       f"restored {defender['name'].capitalize()}'s health instead! "
+                       f"(+{defender['current_hp'] - before} HP)"), 'none', [], 0
 
     # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
     if move_name == 'tera-blast' and attacker.get('tera_type'):
@@ -3012,6 +3255,31 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                        f"electromagnetism!"), 'none', [], 0
         return 0, (f"🌀 {defender['name'].capitalize()} was hurled into the air "
                    f"and cannot dodge!"), 'none', [], 0
+
+    # ==========================================
+    # 🍽️ STOCKPILE AND SWALLOW
+    # ==========================================
+    # Spit Up is the third of the family, but it deals damage, so its power comes from
+    # resolve_dynamic_power and only its empty-bank failure is handled down with the
+    # other attacks.
+    if move_name == 'stockpile':
+        accepted, changes = add_stockpile(attacker)
+        if not accepted:
+            return 0, "But it failed! It cannot stockpile any more!", 'none', [], 0
+
+        return 0, (f"🍽️ {attacker['name'].capitalize()} stockpiled "
+                   f"{get_stockpile(attacker)}!"), 'none', changes, 0
+
+    if move_name == 'swallow':
+        held, changes = spend_stockpile(attacker)
+        if not held:
+            return 0, "But it failed! It had nothing stockpiled!", 'none', [], 0
+
+        share = SWALLOW_HEAL_BY_STACK[held]
+        healed = max(1, math.floor(attacker.get('max_hp', 100) * share))
+        # The engines apply the healing amount; returning it keeps that in one place.
+        return 0, (f"🍽️ {attacker['name'].capitalize()} swallowed {held} charge(s) "
+                   f"and recovered {int(share * 100)}% of its health!"), 'none', changes, healed
 
     # ==========================================
     # 💗 RESTORATION AND SACRIFICE
@@ -3481,7 +3749,18 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Resolved before the gate below: Flail, Gyro Ball, Grass Knot, Punishment and
     # friends are all stored as 0 power in the database, so without this they'd be
     # filtered out as non-damaging and silently deal nothing.
-    dynamic_power = resolve_dynamic_power(move_name, attacker, defender)
+    # Spit Up is the damaging end of the Stockpile family: it needs a bank to spend, and
+    # empties it on the way out. Read before the power resolves, since resolving it is
+    # what the bank is for.
+    if move_name == 'spit-up' and not get_stockpile(attacker):
+        return 0, "But it failed! It had nothing stockpiled!", 'none', [], 0
+
+    dynamic_power = item_power or resolve_dynamic_power(move_name, attacker, defender)
+
+    if move_name == 'spit-up':
+        # Emptied here rather than after the swing, so the stages Stockpile granted are
+        # handed back in the same breath the power is taken.
+        stat_changes.extend(spend_stockpile(attacker)[1])
 
     if move.get('class') != 'status' and (move.get('power', 0) > 0 or dynamic_power):
         level = attacker.get('level', 50)

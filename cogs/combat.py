@@ -5947,7 +5947,7 @@ class Combat(commands.Cog):
                             SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                                 cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                                 cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender
+                                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender, cp.happiness
                             FROM user_party up
                             JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                             JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -6016,7 +6016,10 @@ class Combat(commands.Cog):
                                 'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 
                                 'is_shiny': row[21], 'held_item': row[22], 'gmax_factor': row[23], 
                                 'ability': row[24], 'types': p_types, 'experience': row[25], 'volatile_statuses': {},
-                                'gender': normalize_gender(row[27])
+                                'gender': normalize_gender(row[27]),
+                                # Appended last in the SELECT, so it is read off the end
+                                # rather than renumbering every index above it.
+                                'happiness': row[-1]
                             })
                             
                         teams[uid] = player_team
@@ -8184,7 +8187,7 @@ class Combat(commands.Cog):
                     SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -8225,7 +8228,10 @@ class Combat(commands.Cog):
                             'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
                             'held_item': held_item, 'gmax_factor': gmax_factor, 'ability': ability, 'types': p_types,
                             'experience': experience, 'volatile_statuses': {},
-                            'gender': normalize_gender(row[26])
+                            'gender': normalize_gender(row[26]),
+                            # Appended last in the SELECT, so it is read off the end
+                            # rather than renumbering every index above it.
+                            'happiness': row[-1]
                         })
 
                     # ==========================================
@@ -8983,7 +8989,7 @@ class Combat(commands.Cog):
                     SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -9028,7 +9034,10 @@ class Combat(commands.Cog):
                                 'volatile_statuses': {},   # <--- GUARANTEES PARASITES HAVE A HOST!
                                 'ivs': p_ivs,
                                 'evs': p_evs,
-                                'gender': normalize_gender(row[26])
+                                'gender': normalize_gender(row[26]),
+                                # Appended last in the SELECT, so it is read off the end
+                                # rather than renumbering every index above it.
+                                'happiness': row[-1]
                             })
                     
                     # ==========================================
