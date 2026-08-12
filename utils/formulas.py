@@ -415,6 +415,17 @@ COURT_CHANGE_KEYS = (
 PRIZE_MONEY_MULTIPLIER = 2
 
 # ==========================================
+# 💪 SELF-BUFFS THE DATABASE FORGOT
+# ==========================================
+# Both rows carry an empty stat_name, so the generic path had nothing to apply and the
+# moves did nothing at all. Victory Dance raises three stats despite being commonly
+# described as raising two; Shelter raises Defense sharply, which is two stages.
+SELF_BUFF_MOVES = {
+    'victory-dance': {'attack': 1, 'defense': 1, 'speed': 1},
+    'shelter': {'defense': 2},
+}
+
+
 def field_flag(field, move_name):
     """Turns left on a field effect, keyed by move name rather than by flag spelling."""
     return int((field or {}).get(move_name.replace('-', '_'), 0) or 0)
@@ -3713,12 +3724,35 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         a_stats['speed'], d_stats['speed'] = d_stats.get('speed', 50), a_stats.get('speed', 50)
         return 0, f"💨 {attacker['name'].capitalize()} traded Speed with {defender['name'].capitalize()}!", 'none', [], 0
 
-    if move_name == 'power-trick':
+    # Power Shift is Power Trick under another name - both turn the user's own Attack and
+    # Defense inside out - so it shares the implementation rather than growing a second.
+    if move_name in ('power-trick', 'power-shift'):
         # Self-targeting: the user turns its own Attack and Defense inside out.
         a_stats = attacker.setdefault('stats', {})
         snapshot_base_stats(attacker)
         a_stats['attack'], a_stats['defense'] = a_stats.get('defense', 50), a_stats.get('attack', 50)
         return 0, f"🔃 {attacker['name'].capitalize()} switched its own Attack and Defense!", 'none', [], 0
+
+    if move_name == 'topsy-turvy':
+        stages = defender.get('stat_stages') or {}
+        if not any(stages.values()):
+            return 0, "But it failed! There was nothing to turn around!", 'none', [], 0
+
+        # Inverted, not cleared: a +2 becomes a -2. Haze is the one that wipes them.
+        for stat, stage in list(stages.items()):
+            stages[stat] = -stage
+
+        return 0, (f"🙃 {defender['name'].capitalize()}'s stat changes were all turned "
+                   f"upside down!"), 'none', [], 0
+
+    # Two straightforward self-buffs whose database rows carry no stat_name at all, which
+    # is why the generic path had nothing to apply and they did nothing.
+    if move_name in SELF_BUFF_MOVES:
+        boosts = SELF_BUFF_MOVES[move_name]
+        changes = [('attacker', stat, amount) for stat, amount in boosts.items()]
+        flavour = ("danced in celebration" if move_name == 'victory-dance'
+                   else "hardened its surface like iron")
+        return 0, f"💪 {attacker['name'].capitalize()} {flavour}!", 'none', changes, 0
 
     if move_name == 'pain-split':
         pooled = attacker.get('current_hp', 0) + defender.get('current_hp', 0)
