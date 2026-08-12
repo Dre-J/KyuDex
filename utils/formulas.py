@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, get_species_weight
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -426,6 +426,181 @@ SELF_BUFF_MOVES = {
 }
 
 # ==========================================
+# 🎲 MOVES THAT DECIDE THEIR OWN ELEMENT OR POWER
+# ==========================================
+# Hidden Power's element is read out of the six IVs - one bit each, least significant,
+# in the order the games use. Sixteen types: Normal and Fairy are never produced.
+HIDDEN_POWER_TYPES = [
+    'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel',
+    'fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark',
+]
+HIDDEN_POWER_IV_ORDER = ['hp', 'attack', 'defense', 'speed', 'sp_atk', 'sp_def']
+
+# Weather Ball and Terrain Pulse both take their element from the conditions and double
+# in power when there are any. Terrain Pulse additionally needs the user on the ground -
+# terrain cannot reach something that is airborne.
+WEATHER_BALL_TYPES = {
+    'sun': 'fire', 'extremely-harsh-sunlight': 'fire',
+    'rain': 'water', 'heavy-rain': 'water',
+    'sandstorm': 'rock', 'hail': 'ice', 'snow': 'ice',
+}
+TERRAIN_PULSE_TYPES = {
+    'electric': 'electric', 'grassy': 'grass', 'misty': 'fairy', 'psychic': 'psychic',
+}
+CONDITION_BALL_MULTIPLIER = 2
+
+# Nature Power becomes a different move depending on what is underfoot.
+NATURE_POWER_MOVES = {
+    'electric': 'thunderbolt', 'grassy': 'energy-ball',
+    'misty': 'moonblast', 'psychic': 'psychic',
+}
+NATURE_POWER_DEFAULT = 'tri-attack'
+
+# Every move Transform copies arrives with five PP, however much the original had.
+TRANSFORM_COPIED_PP = 5
+
+# ==========================================
+# 🛡️ BIDE
+# ==========================================
+# Two turns of soaking up punishment, then twice the total handed straight back. The
+# payout ignores type entirely - it is not an elemental hit, which is why it goes back
+# as raw damage rather than through the chart.
+#
+# NOTE: the user is not force-locked into Bide across those turns the way the mainline
+# games lock it. The storage persists regardless, so choosing something else in between
+# delays the release rather than losing it. Locking the move would mean routing Bide
+# through the two-turn charge machinery, which is built to fire on the second turn
+# rather than the third.
+BIDE_TURNS = 2
+BIDE_MULTIPLIER = 2
+
+
+def begin_bide(pokemon):
+    """Start soaking. Returns nothing - the storage lives on the specimen."""
+    volatiles = pokemon.setdefault('volatile_statuses', {})
+    volatiles['bide'] = BIDE_TURNS
+    volatiles['bide_damage'] = 0
+
+
+def store_bide_damage(pokemon, amount):
+    """
+    Add to a biding specimen's tally. Called wherever damage is recorded, and silently
+    ignored by anything that is not currently biding.
+    """
+    volatiles = (pokemon or {}).get('volatile_statuses') or {}
+    if volatiles.get('bide'):
+        volatiles['bide_damage'] = volatiles.get('bide_damage', 0) + max(0, amount or 0)
+
+
+def bide_stored(pokemon):
+    """How much punishment is banked so far."""
+    return ((pokemon or {}).get('volatile_statuses') or {}).get('bide_damage', 0) or 0
+
+# Magnitude rolls its own power. Weights are out of 100, as the games distribute them -
+# the middling tremors are far more common than either extreme.
+MAGNITUDE_TABLE = [(5, 10, 4), (10, 30, 5), (20, 50, 6), (30, 70, 7),
+                   (20, 90, 8), (10, 110, 9), (5, 150, 10)]
+
+
+def beat_up_powers(user_party):
+    """
+    One power per conscious party member, from that member's SPECIES base Attack. The
+    user's own Attack still swings every strike - only the power varies down the party,
+    which is what makes a weak user with a strong bench worth something.
+    """
+    return [math.floor(get_species_base_attack(member) / 10) + 5
+            for member in (user_party or [])
+            if member and member.get('current_hp', 0) > 0
+            and not (member.get('status_condition') or {}).get('name') in
+            ('sleep', 'freeze', 'paralysis', 'burn', 'poison')]
+
+
+def apply_transform(attacker, defender):
+    """
+    Take on the target's shape: its species, types, stats bar HP, ability and movelist,
+    every copied move carrying 5 PP. Returns a log fragment, or '' when it cannot.
+
+    The original is stashed whole so withdrawing undoes it - a transformed specimen that
+    switched out and came back wearing the other's face would be a lasting corruption of
+    the roster rather than a battle effect.
+    """
+    if attacker is None or defender is None:
+        return ""
+    if (attacker.get('volatile_statuses') or {}).get('transformed'):
+        return ""
+    # Copying a copy would compound the borrowed shape rather than mirror the original.
+    if (defender.get('volatile_statuses') or {}).get('transformed'):
+        return ""
+
+    attacker['_pre_transform'] = {
+        'pokedex_id': attacker.get('pokedex_id'),
+        'name': attacker.get('name'),
+        'types': list(attacker.get('types') or []),
+        'stats': dict(attacker.get('stats') or {}),
+        'moves': [dict(slot) for slot in (attacker.get('moves') or [])],
+        'ability': attacker.get('ability'),
+    }
+
+    borrowed = dict(defender.get('stats') or {})
+    borrowed['hp'] = (attacker.get('stats') or {}).get('hp', borrowed.get('hp', 50))
+
+    attacker['pokedex_id'] = defender.get('pokedex_id')
+    attacker['types'] = list(defender.get('types') or [])
+    attacker['stats'] = borrowed
+    # Read through the accessor rather than the raw key, so a suppressed target hands
+    # over the ability it actually owns rather than whatever was left lying in the dict.
+    attacker['ability'] = get_stored_ability(defender)
+    attacker['moves'] = [{'name': slot.get('name'), 'pp': TRANSFORM_COPIED_PP,
+                          'max_pp': TRANSFORM_COPIED_PP}
+                         for slot in (defender.get('moves') or [])]
+    attacker.setdefault('volatile_statuses', {})['transformed'] = True
+
+    return f"🎭 {attacker['name'].capitalize()} transformed into {defender['name'].capitalize()}!"
+
+
+def restore_pre_transform(pokemon):
+    """Put a transformed specimen back in its own shape when it leaves the field."""
+    original = (pokemon or {}).pop('_pre_transform', None)
+    if not original:
+        return
+    pokemon.update(original)
+    (pokemon.get('volatile_statuses') or {}).pop('transformed', None)
+
+
+def hidden_power_type(attacker):
+    """
+    The element Hidden Power resolves to for this specimen. Defaults to a flawless
+    spread when nothing recorded IVs, which is what NPC and wild rosters carry.
+    """
+    ivs = (attacker or {}).get('ivs') or {}
+    total = 0
+    for slot, stat in enumerate(HIDDEN_POWER_IV_ORDER):
+        total += (int(ivs.get(stat, 31)) & 1) << slot
+
+    return HIDDEN_POWER_TYPES[(total * 15) // 63]
+
+
+def roll_magnitude(rng=None):
+    """One tremor: returns (power, magnitude_number)."""
+    roll = (rng or random).randint(1, 100)
+    for weight, power, number in MAGNITUDE_TABLE:
+        roll -= weight
+        if roll <= 0:
+            return power, number
+    return MAGNITUDE_TABLE[-1][1], MAGNITUDE_TABLE[-1][2]
+
+
+def nature_power_move(terrain):
+    """Which move Nature Power becomes underfoot."""
+    return NATURE_POWER_MOVES.get(terrain, NATURE_POWER_DEFAULT)
+
+
+def shares_a_type(attacker, defender):
+    """Whether the two have any element in common - Synchronoise's whole condition."""
+    return bool(set(attacker.get('types') or []) & set(defender.get('types') or []))
+
+
+# ==========================================
 # 👻 CURSE, PSYCHO SHIFT AND THE ODDMENTS
 # ==========================================
 # Curse is two different moves wearing one name, told apart by the user's typing.
@@ -722,6 +897,13 @@ def resolve_dynamic_power(move_name, attacker, defender, pending=False):
     if move_name == 'spit-up':
         # Nothing banked means the move fails outright, handled in the damage engine.
         return SPIT_UP_POWER_PER_STACK * get_stockpile(attacker) or None
+
+    if move_name == 'beat-up':
+        # One strike per able party member, resolved as a single blow carrying their
+        # combined power. The engine's strike loop applies one power to every hit, so
+        # summing here keeps the party's contribution without pretending each member
+        # rolls its own critical.
+        return sum(beat_up_powers(attacker.get('_beat_up_party'))) or None
 
     if move_name == 'hard-press':
         # Scales with how much fight the TARGET has left, unlike the Flail family.
@@ -1201,6 +1383,13 @@ GMAX_EFFECTS = {
 # the whole team; PvP simply never reads it, which is why the coins only cash in PvE.
 COIN_SCATTER_PER_LEVEL = 5
 
+# Pay Day and Make It Rain scatter the same way G-Max Gold Rush does, so all three share
+# one purse. Make It Rain's Sp. Atk drop already comes off its database row.
+COIN_SCATTER_MOVES = {'pay-day', 'make-it-rain'}
+
+# What Metal Burst and Comeuppance hand back, as a share of what they were dealt.
+RETALIATION_MULTIPLIER = 1.5
+
 
 def scatter_coins(attacker):
     """Add this user's coin scatter to its running total. Returns the amount added."""
@@ -1498,7 +1687,7 @@ def clear_interceptors(pokemon):
 # These do not resolve themselves - they name a DIFFERENT move, which the engines then
 # fetch and run in their place. Resolution is kept here, pure and testable; the engines
 # only have to hydrate the payload and re-dispatch.
-COPY_MOVES = {'mirror-move', 'copycat', 'me-first', 'assist', 'metronome'}
+COPY_MOVES = {'mirror-move', 'copycat', 'me-first', 'assist', 'metronome', 'nature-power'}
 
 # Nothing in the mimicry family can copy another member of it, or Struggle - both would
 # either recurse or have nothing behind them to copy.
@@ -1517,7 +1706,7 @@ def can_be_copied(move_name):
 
 
 def resolve_copied_move(move_name, attacker, defender, party=None,
-                        last_move_overall=None, pool=None):
+                        last_move_overall=None, pool=None, terrain='none'):
     """
     Which move a copy move actually performs.
 
@@ -1530,7 +1719,12 @@ def resolve_copied_move(move_name, attacker, defender, party=None,
       * Me First    - what the target is winding up RIGHT NOW, so it needs to move first
       * Assist      - a random move off the rest of the party
       * Metronome   - anything at all
+      * Nature Power - whatever suits the ground underfoot
     """
+    if move_name == 'nature-power':
+        # Never fails: bare ground is still ground, and answers with Tri Attack.
+        return nature_power_move(terrain), ""
+
     if move_name == 'mirror-move':
         copied = defender.get('last_move_used')
         if not can_be_copied(copied):
@@ -2282,6 +2476,9 @@ def leave_field(pokemon):
         # Coming back in counts as arriving fresh, which is what re-arms Fake Out
         pokemon['turns_on_field'] = 0
     reset_stat_stages(pokemon)
+    # Undone before the stat/ability restores, so those put back the specimen's OWN
+    # figures rather than the borrowed ones it was wearing.
+    restore_pre_transform(pokemon)
     restore_base_stats(pokemon)
     restore_base_ability(pokemon)
     end_charge(pokemon)
@@ -2535,9 +2732,15 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     a_stages = attacker.get('stat_stages') or {}
     d_stages = defender.get('stat_stages') or {}
 
+    # Kept unfiltered for Foul Play, which borrows the target's ATTACK - an offensive
+    # stat, so it needs the offensive crit rule rather than the defensive one applied
+    # to everything else the defender owns.
+    d_stages_raw = d_stages
+
     if ignore_boosts:
         a_stages = {k: max(0, v) for k, v in a_stages.items()}
         d_stages = {k: min(0, v) for k, v in d_stages.items()}
+        d_stages_raw = {k: max(0, v) for k, v in d_stages_raw.items()}
 
     phys_atk = apply_stat_stage(attacker.get('stats', {}).get('attack', 50), a_stages.get('attack', 0))
     spec_atk = apply_stat_stage(attacker.get('stats', {}).get('sp_atk', 50), a_stages.get('sp_atk', 0))
@@ -2552,6 +2755,15 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     # 🚨 WONDER ROOM swaps which of the target's two walls is standing where
     if wonder_room:
         phys_def, spec_def = spec_def, phys_def
+
+    # --- FOUL PLAY: swings with the TARGET's Attack ---
+    # The target's own boosts come along with it, which is the point of the move - but a
+    # critical hit still discards boosts that would make the hit weaker, so this reads
+    # the same filtered stages everything else here does.
+    if move_name == 'foul-play':
+        borrowed = apply_stat_stage(defender.get('stats', {}).get('attack', 50),
+                                    d_stages_raw.get('attack', 0))
+        return borrowed, phys_def, 'physical'
 
     # --- BODY PRESS: swings with the user's own Defense ---
     if move_name == 'body-press':
@@ -2973,6 +3185,27 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             return 0, (f"🎁 {attacker['name'].capitalize()} gave a present - and it "
                        f"restored {defender['name'].capitalize()}'s health instead! "
                        f"(+{defender['current_hp'] - before} HP)"), 'none', [], 0
+
+    # ==========================================
+    # 🎲 MOVES THAT DECIDE THEIR OWN ELEMENT
+    # ==========================================
+    # All of these must settle here, above the type chart, or they would rewrite an
+    # element that nothing downstream ever looks at.
+    condition_power = None
+
+    if move_name == 'hidden-power':
+        move_type = hidden_power_type(attacker)
+
+    elif move_name == 'weather-ball':
+        if weather in WEATHER_BALL_TYPES:
+            move_type = WEATHER_BALL_TYPES[weather]
+            condition_power = CONDITION_BALL_MULTIPLIER
+
+    elif move_name == 'terrain-pulse':
+        # Terrain cannot reach a specimen that is not standing on it.
+        if terrain in TERRAIN_PULSE_TYPES and is_grounded(attacker, gravity):
+            move_type = TERRAIN_PULSE_TYPES[terrain]
+            condition_power = CONDITION_BALL_MULTIPLIER
 
     # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
     if move_name == 'tera-blast' and attacker.get('tera_type'):
@@ -3447,6 +3680,33 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         return 0, (f"😤 {attacker['name'].capitalize()} braced itself - slower, but far "
                    f"harder to move!"), 'none', changes, 0
 
+    if move_name == 'bide':
+        volatiles = attacker.setdefault('volatile_statuses', {})
+        if not volatiles.get('bide'):
+            begin_bide(attacker)
+            return 0, (f"🛡️ {attacker['name'].capitalize()} is storing energy!"), 'none', [], 0
+
+        volatiles['bide'] -= 1
+        if volatiles['bide'] > 0:
+            return 0, (f"🛡️ {attacker['name'].capitalize()} is still storing energy!"), 'none', [], 0
+
+        banked = volatiles.pop('bide_damage', 0) or 0
+        volatiles.pop('bide', None)
+        if banked <= 0:
+            return 0, "But it failed! It had taken nothing to give back!", 'none', [], 0
+
+        # Handed back raw: Bide's payout is not an elemental hit, so it neither gains
+        # STAB nor answers to the type chart.
+        return (banked * BIDE_MULTIPLIER,
+                f"💥 {attacker['name'].capitalize()} unleashed everything it had stored!",
+                'none', [], 0)
+
+    if move_name == 'transform':
+        became = apply_transform(attacker, defender)
+        if not became:
+            return 0, "But it failed! There was no shape it could take!", 'none', [], 0
+        return 0, became, 'none', [], 0
+
     if move_name == 'teleport':
         # The switch itself is the engines' business; this only reports it, and the
         # pivot machinery declines when there is nobody in reserve.
@@ -3907,6 +4167,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if attacker.get('last_damage_taken', 0) > 0:
             return math.floor(attacker['last_damage_taken'] * 1.5), "It retaliated with a burst of metal!", 'none', [], 0
         return 0, "But it failed!", 'none', [], 0
+
+    # Comeuppance is Metal Burst in Dark clothing - same one-and-a-half times whatever
+    # was last dealt to the user, and the same failure when nothing was.
+    if move_name == 'comeuppance':
+        if attacker.get('last_damage_taken', 0) > 0:
+            return (math.floor(attacker['last_damage_taken'] * RETALIATION_MULTIPLIER),
+                    "It paid the attacker back in kind!", 'none', [], 0)
+        return 0, "But it failed! Nothing had struck it!", 'none', [], 0
     
     # ==========================================
     # 🚨 FIXED DAMAGE & HP ANOMALIES
@@ -4006,11 +4274,52 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Resolved before the gate below: Flail, Gyro Ball, Grass Knot, Punishment and
     # friends are all stored as 0 power in the database, so without this they'd be
     # filtered out as non-damaging and silently deal nothing.
+    # Pay Day and Make It Rain shake loose money on the way past. Scattered even when the
+    # blow is shrugged off, the way the games pay out for the attempt rather than the hit.
+    if move_name in COIN_SCATTER_MOVES:
+        shaken = scatter_coins(attacker)
+        msg += f" 🪙 Coins scattered everywhere! ({shaken} to collect afterwards)"
+
+    # Synchronoise only reaches something built like the user.
+    if move_name == 'synchronoise' and not shares_a_type(attacker, defender):
+        return 0, (f"But it failed! {defender['name'].capitalize()} shares no type with "
+                   f"{attacker['name'].capitalize()}!"), 'none', [], 0
+
+    # Spectral Thief robs the target of its boosts BEFORE swinging, so the stolen stages
+    # are already the user's when the damage is worked out. Guarded on effectiveness: a
+    # Ghost move cannot reach a Normal type, and a move that never lands steals nothing.
+    if move_name == 'spectral-thief' and type_multiplier > 0:
+        plundered = {stat: stage for stat, stage
+                     in (defender.get('stat_stages') or {}).items() if stage > 0}
+        if plundered:
+            a_stages = attacker.setdefault('stat_stages', {})
+            d_stages = defender.setdefault('stat_stages', {})
+            for stat, stage in plundered.items():
+                a_stages[stat] = min(MAX_STAT_STAGE, a_stages.get(stat, 0) + stage)
+                d_stages[stat] = 0
+            msg += (f" 👤 {attacker['name'].capitalize()} stole "
+                    f"{defender['name'].capitalize()}'s boosts!")
+
     # Spit Up is the damaging end of the Stockpile family: it needs a bank to spend, and
     # empties it on the way out. Read before the power resolves, since resolving it is
     # what the bank is for.
     if move_name == 'spit-up' and not get_stockpile(attacker):
         return 0, "But it failed! It had nothing stockpiled!", 'none', [], 0
+
+    # Beat Up reads the whole bench. resolve_dynamic_power is also called by the engines'
+    # AI scorer, which has no party to hand it, so the roster is stashed on the user here
+    # rather than added to that shared signature.
+    if move_name == 'beat-up':
+        attacker['_beat_up_party'] = user_party
+
+    # Magnitude rolls its own tremor. It has NO stored power, so this has to happen above
+    # the damage gate - rolling it further down, inside the block that gate guards, meant
+    # the move never got in and quietly dealt nothing. Kept out of resolve_dynamic_power
+    # because the move button calls that too, and would advertise a number the swing was
+    # never going to use.
+    if move_name == 'magnitude':
+        item_power, magnitude_number = roll_magnitude()
+        msg += f"📳 Magnitude {magnitude_number}! "
 
     dynamic_power = item_power or resolve_dynamic_power(move_name, attacker, defender)
 
@@ -4066,6 +4375,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # A handful of G-Max moves have a fixed power that outranks the engines' 140
         if move.get('name') in GMAX_FIXED_POWER:
             move_power = GMAX_FIXED_POWER[move['name']]
+
+        # Weather Ball and Terrain Pulse double when the conditions that gave them their
+        # element are actually present. Set up above, beside the type rewrite, so the
+        # element and the power can never disagree about whether it was in effect.
+        if condition_power is not None:
+            move_power *= condition_power
+
 
         # ==========================================
         # 🚨 CONDITIONAL POWER MULTIPLIERS

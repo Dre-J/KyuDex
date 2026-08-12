@@ -47,6 +47,32 @@ def get_species_weight(pokemon):
     return SPECIES_WEIGHTS.get(pokemon.get('pokedex_id'), _DEFAULT_WEIGHT_KG)
 
 # ==========================================
+# SPECIMEN BASE ATTACK INDEX (Beat Up)
+# ==========================================
+# Beat Up's power for each strike comes from that party member's SPECIES base Attack,
+# not from its trained stat, so the whole column is cached at boot the same way body mass
+# is - the damage formula is synchronous and cannot go back to the database mid-swing.
+SPECIES_BASE_ATTACK = {}
+_DEFAULT_BASE_ATTACK = 50
+
+try:
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(DB_FILE) as _conn:
+        SPECIES_BASE_ATTACK = {
+            row[0]: row[1]
+            for row in _conn.execute(
+                "SELECT pokedex_id, base_value FROM base_pokemon_stats WHERE stat_name = 'attack'")
+            if row[1]
+        }
+    print(f"⚔️ Indexed base Attack for {len(SPECIES_BASE_ATTACK)} species.")
+except Exception as e:
+    print(f"⚠️ WARNING: Could not index base Attack ({e}). Beat Up will use a default.")
+
+def get_species_base_attack(pokemon):
+    """Species base Attack, falling back to a neutral default for unknown species."""
+    return SPECIES_BASE_ATTACK.get((pokemon or {}).get('pokedex_id'), _DEFAULT_BASE_ATTACK)
+
+# ==========================================
 # 🎲 THE METRONOME POOL
 # ==========================================
 # Every move Metronome may roll, indexed once at import rather than queried per use.
