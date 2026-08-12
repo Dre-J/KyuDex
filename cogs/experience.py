@@ -67,6 +67,12 @@ class PassiveExperienceCog(commands.Cog):
         if message.author.bot:
             return
 
+        # 2. Ignore command invocations. Passive XP is meant to reward conversation, and
+        #    without this every `!catch`, `!battle` and `!party` paid out as well.
+        ctx = await self.bot.get_context(message)
+        if ctx.valid:
+            return
+
         user_id = str(message.author.id)
         current_time = time.time()
 
