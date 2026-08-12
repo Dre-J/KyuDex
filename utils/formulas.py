@@ -425,6 +425,52 @@ SELF_BUFF_MOVES = {
     'shelter': {'defense': 2},
 }
 
+# ==========================================
+# 👻 CURSE, PSYCHO SHIFT AND THE ODDMENTS
+# ==========================================
+# Curse is two different moves wearing one name, told apart by the user's typing.
+CURSE_SELF_COST = 0.5          # what a Ghost pays out of its own maximum
+CURSE_DRAIN_FRACTION = 0.25    # what the cursed one loses each turn thereafter
+CURSE_STAT_CHANGES = {'attack': 1, 'defense': 1, 'speed': -1}
+
+# Psycho Shift hands over anything that is not already worn by the target. These are the
+# major ailments as this database spells them - there is no separate 'bad-poison' row,
+# Toxic stores plain 'poison', so naming one here would only ever match nothing.
+PSYCHO_SHIFT_TRANSFERS = {'burn', 'paralysis', 'poison', 'sleep', 'freeze'}
+
+# Acupressure sharpens one stat at random, by two stages.
+ACUPRESSURE_BOOST = 2
+MAX_STAT_STAGE = 6
+
+# ==========================================
+# 👥 MOVES THAT NEED AN ALLY ON THE FIELD
+# ==========================================
+# These fail in a single battle in the mainline games too - this is not a shortcut around
+# a one-per-side engine, it is what the move does. They are named here so they fail with
+# an explanation rather than doing nothing quietly, the same as Quash and After You.
+DOUBLES_ONLY_MOVES = {
+    'ally-switch': "there was no ally to switch places with",
+    'dragon-cheer': "there were no allies to cheer on",
+    'hold-hands': "there was no ally to hold hands with",
+    'spotlight': "there was nobody else to put in the spotlight",
+}
+
+
+def transferable_status(pokemon):
+    """The ailment a specimen could hand over, or None if it has nothing to give."""
+    name = (pokemon.get('status_condition') or {}).get('name')
+    return name if name in PSYCHO_SHIFT_TRANSFERS else None
+
+
+def random_boostable_stat(pokemon, rng=None):
+    """
+    One stat Acupressure could still sharpen, chosen at random. None when every stat is
+    already at the ceiling, which is the move's only failure case.
+    """
+    stages = pokemon.get('stat_stages') or {}
+    room = [stat for stat in ALL_STAT_STAGES if stages.get(stat, 0) < MAX_STAT_STAGE]
+    return (rng or random).choice(room) if room else None
+
 
 def field_flag(field, move_name):
     """Turns left on a field effect, keyed by move name rather than by flag spelling."""
@@ -2253,7 +2299,7 @@ def baton_pass_state(outgoing, incoming):
 
     PASSABLE = ['leech_seed', 'volatile_leech_seed', 'confusion', 'perish_song',
                 'volatile_perish_song', 'focus_energy', 'laser_focus', 'ingrain',
-                'partially_trapped', 'hard_trapped', 'substitute']
+                'partially_trapped', 'hard_trapped', 'substitute', 'curse']
 
     carried = {k: v for k, v in (outgoing.get('volatile_statuses') or {}).items()
                if k in PASSABLE}
@@ -3350,6 +3396,61 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                        f"electromagnetism!"), 'none', [], 0
         return 0, (f"🌀 {defender['name'].capitalize()} was hurled into the air "
                    f"and cannot dodge!"), 'none', [], 0
+
+    # ==========================================
+    # 👥 MOVES THAT NEED AN ALLY ON THE FIELD
+    # ==========================================
+    # One specimen a side means these have nothing to work with - which is exactly what
+    # they do in a single battle in the games, so the failure is the correct outcome
+    # rather than a gap.
+    if move_name in DOUBLES_ONLY_MOVES:
+        return 0, f"But it failed! {DOUBLES_ONLY_MOVES[move_name].capitalize()}!", 'none', [], 0
+
+    if move_name == 'celebrate':
+        # No battle effect whatsoever, faithfully.
+        return 0, (f"🎉 {attacker['name'].capitalize()} is congratulating you on your "
+                   f"special day!"), 'none', [], 0
+
+    if move_name == 'acupressure':
+        # Self-targeting here: with no ally on the field, the user is the only candidate.
+        stat = random_boostable_stat(attacker)
+        if stat is None:
+            return 0, "But it failed! Every stat was already at its peak!", 'none', [], 0
+
+        return (0, f"💆 {attacker['name'].capitalize()} pressed a pressure point!",
+                'none', [('attacker', stat, ACUPRESSURE_BOOST)], 0)
+
+    if move_name == 'psycho-shift':
+        giving = transferable_status(attacker)
+        if giving is None:
+            return 0, "But it failed! It had no condition to pass on!", 'none', [], 0
+        if (defender.get('status_condition') or {}).get('name'):
+            return 0, "But it failed! The target is already afflicted!", 'none', [], 0
+
+        attacker['status_condition'] = None
+        return 0, (f"🔀 {attacker['name'].capitalize()} passed its {giving} to "
+                   f"{defender['name'].capitalize()}!"), giving, [], 0
+
+    if move_name == 'curse':
+        # Two moves under one name, told apart by the user's typing.
+        if 'ghost' in (attacker.get('types') or []):
+            if (defender.get('volatile_statuses') or {}).get('curse'):
+                return 0, "But it failed! The target is already cursed!", 'none', [], 0
+
+            toll = max(1, math.floor(attacker.get('max_hp', 100) * CURSE_SELF_COST))
+            attacker['current_hp'] = max(0, attacker['current_hp'] - toll)
+            defender.setdefault('volatile_statuses', {})['curse'] = True
+            return 0, (f"👻 {attacker['name'].capitalize()} cut its own health to lay a "
+                       f"curse on {defender['name'].capitalize()}! (-{toll} HP)"), 'none', [], 0
+
+        changes = [('attacker', stat, amount) for stat, amount in CURSE_STAT_CHANGES.items()]
+        return 0, (f"😤 {attacker['name'].capitalize()} braced itself - slower, but far "
+                   f"harder to move!"), 'none', changes, 0
+
+    if move_name == 'teleport':
+        # The switch itself is the engines' business; this only reports it, and the
+        # pivot machinery declines when there is nobody in reserve.
+        return 0, (f"✨ {attacker['name'].capitalize()} teleported away!"), 'none', [], 0
 
     # ==========================================
     # 🌍 FIELD-WIDE SPORTS, DELUGES AND SIDE SWAPS
