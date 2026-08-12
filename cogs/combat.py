@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
 from utils import checks
 import aiohttp
@@ -5162,6 +5162,10 @@ class BattleDashboard(discord.ui.View):
 
                     # 1. Calculate Research Funding (Eco Tokens)
                     tokens_earned = 100 + (len(state['npc_team']) * 250)
+
+                    # G-Max Gold Rush scatters coins mid-battle; they are picked up here
+                    coin_bonus = collected_coins(state['player_team'])
+                    tokens_earned += coin_bonus
                     
                     # 2. Calculate Biomass/Experience Accumulation
                     total_exp_yield = sum([p.get('level', 50) * 15 for p in state['npc_team']])
@@ -5171,6 +5175,8 @@ class BattleDashboard(discord.ui.View):
                     exp_per_specimen = math.floor(total_exp_yield / max(1, len(surviving_team)))
                     
                     rewards_log: str = f"\n\n💰 You earned **{tokens_earned} Eco Tokens** for your research!\n"
+                    if coin_bonus:
+                        rewards_log += f"🪙 **{coin_bonus}** of that was loose change scattered by G-Max Gold Rush!\n"
                     rewards_log += f"📈 Surviving team members gained **{exp_per_specimen} EXP**!\n\n"
                     
                     # 🚨 ASYNCHRONOUS DATABASE TRANSACTION
