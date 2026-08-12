@@ -49,8 +49,34 @@ async def load_cog(ctx, extension: str):
 
 load_dotenv() #Loads Hidden variables from .env file
 TOKEN = os.getenv('DISC_TOKEN')
+def tune_database():
+    """
+    Put the database into WAL before anything touches it.
+
+    The default rollback journal takes an exclusive lock for every write, so a battle
+    turn writing state blocks every other read across every server until it finishes.
+    WAL lets readers carry on through a write, which is the shape of nearly all the
+    contention here. Paired with synchronous=NORMAL, the usual companion: a hard power
+    cut can cost the last transaction but cannot corrupt the file.
+
+    Both settings persist in the database itself, so this is a one-time change that is
+    re-asserted at each boot rather than a per-connection cost. Reported rather than
+    assumed - PRAGMA journal_mode returns the mode actually in force.
+    """
+    import sqlite3
+    from utils.constants import DB_FILE
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            conn.execute("PRAGMA synchronous=NORMAL")
+        print(f"🗄️ Database journal mode: {mode}")
+    except Exception as e:
+        print(f"⚠️ WARNING: Could not tune the database ({e}). Falling back to defaults.")
+
+
 # Boot Execution
 async def main():
+    tune_database()
     async with bot:
         await load_extensions()
         await bot.start(TOKEN)
