@@ -443,6 +443,19 @@ ACUPRESSURE_BOOST = 2
 MAX_STAT_STAGE = 6
 
 # ==========================================
+# 👥 MOVES THAT NEED AN ALLY ON THE FIELD
+# ==========================================
+# These fail in a single battle in the mainline games too - this is not a shortcut around
+# a one-per-side engine, it is what the move does. They are named here so they fail with
+# an explanation rather than doing nothing quietly, the same as Quash and After You.
+DOUBLES_ONLY_MOVES = {
+    'ally-switch': "there was no ally to switch places with",
+    'dragon-cheer': "there were no allies to cheer on",
+    'hold-hands': "there was no ally to hold hands with",
+    'spotlight': "there was nobody else to put in the spotlight",
+}
+
+
 def transferable_status(pokemon):
     """The ailment a specimen could hand over, or None if it has nothing to give."""
     name = (pokemon.get('status_condition') or {}).get('name')
@@ -3383,6 +3396,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                        f"electromagnetism!"), 'none', [], 0
         return 0, (f"🌀 {defender['name'].capitalize()} was hurled into the air "
                    f"and cannot dodge!"), 'none', [], 0
+
+    # ==========================================
+    # 👥 MOVES THAT NEED AN ALLY ON THE FIELD
+    # ==========================================
+    # One specimen a side means these have nothing to work with - which is exactly what
+    # they do in a single battle in the games, so the failure is the correct outcome
+    # rather than a gap.
+    if move_name in DOUBLES_ONLY_MOVES:
+        return 0, f"But it failed! {DOUBLES_ONLY_MOVES[move_name].capitalize()}!", 'none', [], 0
 
     if move_name == 'celebrate':
         # No battle effect whatsoever, faithfully.
