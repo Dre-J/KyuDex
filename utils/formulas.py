@@ -176,7 +176,11 @@ def is_grounded(pokemon, gravity_active=False):
     if 'flying' in types: return False
     if ability == 'levitate': return False
     if item == 'air-balloon': return False
-    # (Note: Magnet Rise or Telekinesis could be added here by checking volatile_statuses!)
+
+    # Magnet Rise lifts itself; Telekinesis lifts somebody else. Either way the specimen
+    # is off the ground and Ground-type moves cannot reach it.
+    volatiles = pokemon.get('volatile_statuses') or {}
+    if volatiles.get('magnet_rise') or volatiles.get('telekinesis'): return False
     
     return True
 
@@ -455,7 +459,12 @@ def is_crit_guaranteed(move_name, attacker):
 
 # Effects that sit on a team's side of the field and tick down once per turn. Shared with
 # both engines so the decay loops and the deployment list cannot fall out of step.
-SIDE_SCREEN_MOVES = ['reflect', 'light-screen', 'aurora-veil', 'lucky-chant']
+SIDE_SCREEN_MOVES = ['reflect', 'light-screen', 'aurora-veil', 'lucky-chant',
+                     'safeguard', 'mist']
+
+# Light Clay stretches the two DAMAGE screens only. Everything else here runs a flat
+# five turns however the user is equipped.
+FLAT_DURATION_SCREENS = {'lucky-chant', 'safeguard', 'mist'}
 
 # ==========================================
 # 🚨 PROTECTION MOVES
@@ -990,6 +999,33 @@ def apply_gmax_effect(move_name, attacker, defender, user_party=None,
     return ""
 
 
+# ==========================================
+# 🎯 GUARANTEED ACCURACY, GROUNDING AND SIDE GUARDS
+# ==========================================
+# Lock-On and Mind Reader are the same move under two names.
+LOCK_ON_MOVES = {'lock-on', 'mind-reader'}
+
+# How long a specimen stays airborne.
+LEVITATION_TURNS = {'magnet-rise': 5, 'telekinesis': 3}
+
+
+def consume_lock_on(attacker):
+    """
+    Spend a standing Lock-On, if there is one. Returns whether the next attack is
+    therefore guaranteed to land.
+
+    Consumed rather than merely read: it covers exactly one attack.
+    """
+    volatiles = (attacker or {}).get('volatile_statuses') or {}
+    return bool(volatiles.pop('locked_on', None))
+
+
+def side_is_guarded(side_hazards, guard):
+    """Whether a side has an active Safeguard or Mist."""
+    return bool((side_hazards or {}).get(guard, 0) > 0)
+
+
+# ==========================================
 # 💗 RESTORATION AND SACRIFICE
 # ==========================================
 # Aqua Ring trickles back a sixteenth each turn, the same share Ingrain does.
@@ -2429,7 +2465,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     if move_name in SIDE_SCREEN_MOVES and user_hazards is not None:
         # Light Clay only extends the damage-reducing screens; Lucky Chant is a flat 5.
-        if move_name == 'lucky-chant':
+        if move_name in FLAT_DURATION_SCREENS:
             duration = 5
         else:
             duration = 8 if attacker_item == 'light-clay' else 5
@@ -2446,6 +2482,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif move_name == 'light-screen': msg += f" 🪞 A wondrous wall of light appeared to protect {attacker['name'].capitalize()}'s team!"
         elif move_name == 'aurora-veil': msg += f" 🌌 An aurora appeared to protect {attacker['name'].capitalize()}'s team!"
         elif move_name == 'lucky-chant': msg += f" 🍀 The chant shielded {attacker['name'].capitalize()}'s team from critical hits!"
+        elif move_name == 'safeguard': msg += f" 🛡️ A mystical veil shielded {attacker['name'].capitalize()}'s team from status conditions!"
+        elif move_name == 'mist': msg += f" 🌫️ A white mist stopped {attacker['name'].capitalize()}'s team losing any stats!"
 
         return 0, msg.strip(), 'none', [], 0
 
@@ -2562,6 +2600,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         return 0, f"{attacker['name'].capitalize()} kept going and crashed!", None, [], 0
     
     if move.get('class') != 'status':
+        # A specimen held off the ground cannot be reached by Ground moves. Levitate gets
+        # this from the ability table below, but Magnet Rise and Telekinesis are
+        # volatiles, so they need saying here.
+        if move_type == 'ground' and not is_grounded(defender, gravity):
+            lifted = (defender.get('volatile_statuses') or {})
+            if lifted.get('magnet_rise') or lifted.get('telekinesis'):
+                return 0, (f"🪂 {defender['name'].capitalize()} is airborne - the attack "
+                           f"passed harmlessly underneath!"), None, [], 0
+
         immunity_data = BIOLOGICAL_TRAITS['immunities'].get(def_ability)
         
         # If the defender has an immunity AND the incoming attack matches its element
@@ -2939,6 +2986,32 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         attacker.setdefault('volatile_statuses', {})['grudge'] = True
         return 0, (f"👻 {attacker['name'].capitalize()} wants its opponent to bear a "
                    f"grudge!"), 'none', [], 0
+
+    # ==========================================
+    # ==========================================
+    # 🎯 GUARANTEED ACCURACY AND LEVITATION
+    # ==========================================
+    if move_name in LOCK_ON_MOVES:
+        if (attacker.get('volatile_statuses') or {}).get('locked_on'):
+            return 0, "But it failed! It has already taken aim!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})['locked_on'] = True
+        return 0, (f"🎯 {attacker['name'].capitalize()} took aim - its next "
+                   f"attack cannot miss!"), 'none', [], 0
+
+    if move_name in LEVITATION_TURNS:
+        # Magnet Rise lifts the user; Telekinesis lifts the target
+        subject = attacker if move_name == 'magnet-rise' else defender
+        flag = move_name.replace('-', '_')
+
+        if (subject.get('volatile_statuses') or {}).get(flag):
+            return 0, "But it failed! It is already airborne!", 'none', [], 0
+        subject.setdefault('volatile_statuses', {})[flag] = LEVITATION_TURNS[move_name]
+        if move_name == 'magnet-rise':
+            return 0, (f"🧲 {attacker['name'].capitalize()} levitated on "
+                       f"electromagnetism!"), 'none', [], 0
+        return 0, (f"🌀 {defender['name'].capitalize()} was hurled into the air "
+                   f"and cannot dodge!"), 'none', [], 0
 
     # ==========================================
     # 💗 RESTORATION AND SACRIFICE
@@ -4319,6 +4392,21 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # A decoy eats all three: the specimen behind it takes nothing, catches nothing, and
     # keeps its stat stages. Anything aimed at the ATTACKER (recoil, self-boosts, drain)
     # is deliberately left alone.
+    # ==========================================
+    # 🛡️ SIDE GUARDS
+    # ==========================================
+    # Safeguard turns status away from the whole side; Mist holds its stats in place.
+    # Neither touches anything the ATTACKER is doing to itself.
+    if inflicted_status and side_is_guarded(target_hazards, 'safeguard'):
+        inflicted_status = None
+        msg += f" 🛡️ {defender['name'].capitalize()}'s Safeguard turned the status away!"
+
+    if side_is_guarded(target_hazards, 'mist'):
+        blocked = [c for c in stat_changes if c[0] == 'defender' and c[2] < 0]
+        if blocked:
+            stat_changes = [c for c in stat_changes if c not in blocked]
+            msg += f" 🌫️ The mist stopped {defender['name'].capitalize()} losing any stats!"
+
     if substitute_intercepts(defender, move, attacker):
         if damage > 0:
             damage, sub_note = absorb_with_substitute(defender, damage)
