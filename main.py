@@ -15,6 +15,38 @@ bot.remove_command('help')
 async def on_ready():
     print(f'Logged in as {bot.user.name}!')
     print('Environmental monitoring systems online.')
+    await warm_battle_scenes()
+
+
+async def warm_battle_scenes():
+    """
+    Draw every battle backdrop and weather overlay before anyone asks for one.
+
+    They are cached on first use, so otherwise the first battle in each biome pays ~240ms
+    to draw a 1600x900 backdrop before it can send anything - a slow opening turn for a
+    real player, once per biome per restart.
+
+    Deliberately after login rather than before it: the bot comes online immediately and
+    warms in the background, so this costs nobody a delayed startup. Handed to a worker
+    thread because it is a couple of seconds of solid PIL work and the event loop still
+    has a gateway heartbeat to keep.
+
+    Set KYU_NO_PREWARM=1 to skip it. Peak memory is unchanged either way - normal play
+    fills these same caches - but on a very small host you may prefer to pay for a biome
+    only if it is actually visited.
+    """
+    if os.getenv("KYU_NO_PREWARM"):
+        print("🎨 Scene pre-warm skipped (KYU_NO_PREWARM).")
+        return
+
+    try:
+        from cogs import battle_render
+        built, seconds, megabytes = await asyncio.to_thread(battle_render.prewarm_scene_caches)
+        print(f"🎨 Battle scenes warmed: {built} surfaces in {seconds:.1f}s "
+              f"({megabytes:.0f}MB held)")
+    except Exception as e:
+        # A cold cache is slower, never broken, so this must not stop the bot booting.
+        print(f"⚠️ WARNING: Could not pre-warm battle scenes ({e}). They will build on demand.")
 
 async def load_extensions():
     """Iterates through the 'cogs' folder and loads every Python file."""
