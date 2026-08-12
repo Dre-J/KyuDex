@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
 from utils import checks
 import aiohttp
@@ -642,6 +642,18 @@ async def check_for_evolution(db, user_id, specimen, combat_log):
 
     return None, None # No evolution occurred
 
+def side_of(state, specimen):
+    """
+    Which side's slot this specimen occupies. Used for effects banked against a side
+    rather than a specimen, so they can be paid out from a single shared hook instead
+    of at every one of the half-dozen switch-in paths.
+    """
+    for key in ('player_team', 'npc_team', 'p1_team', 'p2_team'):
+        if any(m is specimen for m in (state.get(key) or [])):
+            return key[:-5]
+    return None
+
+
 async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state, combat_log):
     """Executes passive biological traits for a SINGLE specimen entering the biome."""
 
@@ -743,6 +755,16 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
                     print(f"DEBUG: Could not find '{target_form}' in the base_pokemon_species table!")
         except Exception as e:
             print(f"DEBUG: Failed Primal Reversion: {e}")
+
+    # A Healing Wish or Lunar Dance left behind by the previous occupant lands here,
+    # before anything else the arrival triggers.
+    side = side_of(state, entering_combatant)
+    if side is not None:
+        pending = state.pop(f"{side}_sacrifice", None)
+        if pending is not None:
+            note = apply_healing_wish(entering_combatant, restores_pp=pending)
+            if note:
+                combat_log += note + chr(10)
 
     ability = get_active_ability(entering_combatant)
     name = entering_combatant['name'].capitalize()
@@ -3694,6 +3716,28 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         
                         # ==========================================
+                        # 🪞 REDIRECTION: Magic Coat and Snatch
+                        # ==========================================
+                        # Both were set up at +4 priority, so they are already standing.
+                        # Swapping the pair here means everything downstream - accuracy,
+                        # the damage formula, the log - sees the corrected owner.
+                        if magic_coat_bounces(defender, move_stats):
+                            defender['volatile_statuses'].pop('magic_coat', None)
+                            combat_log += (f"\U0001fa9e **{defender['name'].capitalize()}** bounced "
+                                           f"back the {raw_move_name.replace('-', ' ').title()}!\n")
+                            attacker, defender = defender, attacker
+                            is_player = not is_player
+                            owner_prefix = "Your " if is_player else "The rival's "
+
+                        elif snatch_steals(defender, move_stats):
+                            defender['volatile_statuses'].pop('snatch', None)
+                            combat_log += (f"\U0001f91a **{defender['name'].capitalize()}** snatched "
+                                           f"the {raw_move_name.replace('-', ' ').title()}!\n")
+                            attacker, defender = defender, attacker
+                            is_player = not is_player
+                            owner_prefix = "Your " if is_player else "The rival's "
+
+                        # ==========================================
                         # 🎭 COPY MOVES: perform something else entirely
                         # ==========================================
                         if raw_move_name in COPY_MOVES:
@@ -3808,7 +3852,9 @@ class BattleDashboard(discord.ui.View):
                         is_ohko = raw_move_name in OHKO_MOVES
 
                         # Shared with the physics engine so the two copies cannot drift
-                        is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
+                        # A standing Lock-On is spent here and guarantees this one attack
+                        is_guaranteed = (raw_move_name in GUARANTEED_HIT_MOVES
+                                         or consume_lock_on(attacker))
 
                         # Safely fetch abilities
                         atk_ability = get_active_ability(attacker)
@@ -3824,6 +3870,9 @@ class BattleDashboard(discord.ui.View):
                             # 1. Fetch Biological Stages (Default to 0 if missing)
                             acc_stage = attacker.get('stat_stages', {}).get('accuracy', 0)
                             eva_stage = defender.get('stat_stages', {}).get('evasion', 0)
+                            # Telekinesis holds the target up where it cannot dodge
+                            if defender.get('volatile_statuses', {}).get('telekinesis'):
+                                eva_stage = 0
                             
                             # 2. Calculate the Net Multiplier (Capped between -6 and +6)
                             net_stage = max(-6, min(6, acc_stage - eva_stage))
@@ -3927,6 +3976,13 @@ class BattleDashboard(discord.ui.View):
                         # reads the element off it.
                         attacker['last_move_used'] = raw_move_name
                         attacker['last_move_type'] = move_stats.get('type')
+                        # A sacrifice move banks its wish against the SIDE, so whoever
+                        # fills the vacated slot collects it - see trigger_single_entry_ability.
+                        if '_sacrifice_wish' in attacker:
+                            _side = side_of(state, attacker)
+                            if _side is not None:
+                                state[f"{_side}_sacrifice"] = attacker.pop('_sacrifice_wish')
+
                         state['last_move_overall'] = raw_move_name   # Copycat reads this
 
                         # Grudge: if that blow was the one that finished the target, the
@@ -4923,6 +4979,13 @@ class BattleDashboard(discord.ui.View):
                 if combatant['current_hp'] > 0:
                     volatiles = combatant.get('volatile_statuses', {})
                     
+                    # Aqua Ring trickles back the same share Ingrain does
+                    if 'aqua_ring' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
+                        ring_qty = max(1, math.floor(combatant.get('max_hp', 100) / AQUA_RING_FRACTION))
+                        combatant['current_hp'] = min(combatant.get('max_hp', 100),
+                                                      combatant['current_hp'] + ring_qty)
+                        combat_log += f"\U0001f4a7 {owner_str.strip()} **{combatant['name'].capitalize()}** was restored by its veil of water! (+{ring_qty} HP)\n"
+
                     # Ingrain Healing (1/16th Max HP)
                     if 'ingrain' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
                         heal_qty = max(1, math.floor(combatant.get('max_hp', 100) / 16))
@@ -5025,6 +5088,16 @@ class BattleDashboard(discord.ui.View):
                     combatant['volatile_statuses'].pop('destiny-bond', None)
                     combatant['volatile_statuses'].pop('is_switching', None)
                     combatant['volatile_statuses'].pop('stats_lowered_this_turn', None)
+                    combatant['volatile_statuses'].pop('electrified', None)
+                    clear_interceptors(combatant)
+
+                    # Magnet Rise and Telekinesis run their own clocks
+                    for lift in ('magnet_rise', 'telekinesis'):
+                        if combatant['volatile_statuses'].get(lift):
+                            combatant['volatile_statuses'][lift] -= 1
+                            if combatant['volatile_statuses'][lift] <= 0:
+                                del combatant['volatile_statuses'][lift]
+                                combat_log += f"🪂 **{combatant['name'].capitalize()}** drifted back to the ground!\n"
 
                     # Embargo runs on its own five-turn clock rather than being wiped
                     if combatant['volatile_statuses'].get('embargo'):
@@ -6682,6 +6755,21 @@ class Combat(commands.Cog):
                                             break
 
                     # ==========================================
+                    # 🪞 REDIRECTION: Magic Coat and Snatch
+                    # ==========================================
+                    if magic_coat_bounces(defender, move):
+                        defender['volatile_statuses'].pop('magic_coat', None)
+                        combat_log += (f"\U0001fa9e **{defender['name'].capitalize()}** bounced back "
+                                       f"the {raw_move_name.replace('-', ' ').title()}!\n")
+                        attacker, defender = defender, attacker
+
+                    elif snatch_steals(defender, move):
+                        defender['volatile_statuses'].pop('snatch', None)
+                        combat_log += (f"\U0001f91a **{defender['name'].capitalize()}** snatched the "
+                                       f"{raw_move_name.replace('-', ' ').title()}!\n")
+                        attacker, defender = defender, attacker
+
+                    # ==========================================
                     # 🎭 COPY MOVES: perform something else entirely
                     # ==========================================
                     if raw_move_name in COPY_MOVES:
@@ -6792,7 +6880,9 @@ class Combat(commands.Cog):
                         is_ohko = raw_move_name in OHKO_MOVES
 
                         # Shared with the physics engine so the two copies cannot drift
-                        is_guaranteed = raw_move_name in GUARANTEED_HIT_MOVES
+                        # A standing Lock-On is spent here and guarantees this one attack
+                        is_guaranteed = (raw_move_name in GUARANTEED_HIT_MOVES
+                                         or consume_lock_on(attacker))
 
                         # Safely fetch abilities
                         atk_ability = get_active_ability(attacker)
@@ -6808,6 +6898,9 @@ class Combat(commands.Cog):
                             # 1. Fetch Biological Stages (Default to 0 if missing)
                             acc_stage = attacker.get('stat_stages', {}).get('accuracy', 0)
                             eva_stage = defender.get('stat_stages', {}).get('evasion', 0)
+                            # Telekinesis holds the target up where it cannot dodge
+                            if defender.get('volatile_statuses', {}).get('telekinesis'):
+                                eva_stage = 0
                             
                             # 2. Calculate the Net Multiplier (Capped between -6 and +6)
                             net_stage = max(-6, min(6, acc_stage - eva_stage))
@@ -6911,6 +7004,13 @@ class Combat(commands.Cog):
                     # reads the element off it.
                     attacker['last_move_used'] = raw_move_name
                     attacker['last_move_type'] = move.get('type')
+                    # A sacrifice move banks its wish against the SIDE, so whoever
+                    # fills the vacated slot collects it - see trigger_single_entry_ability.
+                    if '_sacrifice_wish' in attacker:
+                        _side = side_of(state, attacker)
+                        if _side is not None:
+                            state[f"{_side}_sacrifice"] = attacker.pop('_sacrifice_wish')
+
                     state['last_move_overall'] = raw_move_name   # Copycat reads this
                     # ==========================================
 
@@ -7529,6 +7629,13 @@ class Combat(commands.Cog):
                 if combatant['current_hp'] > 0:
                     volatiles = combatant.get('volatile_statuses', {})
                     
+                    # Aqua Ring trickles back the same share Ingrain does
+                    if 'aqua_ring' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
+                        ring_qty = max(1, math.floor(combatant.get('max_hp', 100) / AQUA_RING_FRACTION))
+                        combatant['current_hp'] = min(combatant.get('max_hp', 100),
+                                                      combatant['current_hp'] + ring_qty)
+                        combat_log += f"\U0001f4a7 {owner_str.strip()} **{combatant['name'].capitalize()}** was restored by its veil of water! (+{ring_qty} HP)\n"
+
                     # Ingrain Healing (1/16th Max HP)
                     if 'ingrain' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
                         heal_qty = max(1, math.floor(combatant.get('max_hp', 100) / 16))
@@ -7604,6 +7711,16 @@ class Combat(commands.Cog):
                     p_active['volatile_statuses'].pop('destiny-bond', None)
                     p_active['volatile_statuses'].pop('is_switching', None)
                     p_active['volatile_statuses'].pop('stats_lowered_this_turn', None)
+                    p_active['volatile_statuses'].pop('electrified', None)
+                    clear_interceptors(p_active)
+
+                    # Magnet Rise and Telekinesis run their own clocks
+                    for lift in ('magnet_rise', 'telekinesis'):
+                        if p_active['volatile_statuses'].get(lift):
+                            p_active['volatile_statuses'][lift] -= 1
+                            if p_active['volatile_statuses'][lift] <= 0:
+                                del p_active['volatile_statuses'][lift]
+                                combat_log += f"🪂 **{p_active['name'].capitalize()}** drifted back to the ground!\n"
 
                     # A charge that was pending and did NOT fire this turn means the user
                     # was stopped, so the move fails and it comes back down. PvP had no

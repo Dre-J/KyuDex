@@ -176,7 +176,11 @@ def is_grounded(pokemon, gravity_active=False):
     if 'flying' in types: return False
     if ability == 'levitate': return False
     if item == 'air-balloon': return False
-    # (Note: Magnet Rise or Telekinesis could be added here by checking volatile_statuses!)
+
+    # Magnet Rise lifts itself; Telekinesis lifts somebody else. Either way the specimen
+    # is off the ground and Ground-type moves cannot reach it.
+    volatiles = pokemon.get('volatile_statuses') or {}
+    if volatiles.get('magnet_rise') or volatiles.get('telekinesis'): return False
     
     return True
 
@@ -455,7 +459,12 @@ def is_crit_guaranteed(move_name, attacker):
 
 # Effects that sit on a team's side of the field and tick down once per turn. Shared with
 # both engines so the decay loops and the deployment list cannot fall out of step.
-SIDE_SCREEN_MOVES = ['reflect', 'light-screen', 'aurora-veil', 'lucky-chant']
+SIDE_SCREEN_MOVES = ['reflect', 'light-screen', 'aurora-veil', 'lucky-chant',
+                     'safeguard', 'mist']
+
+# Light Clay stretches the two DAMAGE screens only. Everything else here runs a flat
+# five turns however the user is equipped.
+FLAT_DURATION_SCREENS = {'lucky-chant', 'safeguard', 'mist'}
 
 # ==========================================
 # 🚨 PROTECTION MOVES
@@ -988,6 +997,167 @@ def apply_gmax_effect(move_name, attacker, defender, user_party=None,
         return " 🌀 The gale swept the battlefield clean!" if swept else ""
 
     return ""
+
+
+# ==========================================
+# 🎯 GUARANTEED ACCURACY, GROUNDING AND SIDE GUARDS
+# ==========================================
+# Lock-On and Mind Reader are the same move under two names.
+LOCK_ON_MOVES = {'lock-on', 'mind-reader'}
+
+# How long a specimen stays airborne.
+LEVITATION_TURNS = {'magnet-rise': 5, 'telekinesis': 3}
+
+
+def consume_lock_on(attacker):
+    """
+    Spend a standing Lock-On, if there is one. Returns whether the next attack is
+    therefore guaranteed to land.
+
+    Consumed rather than merely read: it covers exactly one attack.
+    """
+    volatiles = (attacker or {}).get('volatile_statuses') or {}
+    return bool(volatiles.pop('locked_on', None))
+
+
+def side_is_guarded(side_hazards, guard):
+    """Whether a side has an active Safeguard or Mist."""
+    return bool((side_hazards or {}).get(guard, 0) > 0)
+
+
+# ==========================================
+# 💗 RESTORATION AND SACRIFICE
+# ==========================================
+# Aqua Ring trickles back a sixteenth each turn, the same share Ingrain does.
+AQUA_RING_FRACTION = 16
+
+# Refresh scrubs the three conditions that wear off on their own, and deliberately not
+# sleep or freeze - those have their own timers and countering them is the point of Rest.
+REFRESH_CURES = {'paralysis', 'poison', 'burn'}
+
+# The user faints outright; the replacement arrives whole. Lunar Dance also refills PP,
+# which is the only thing separating the two.
+SACRIFICE_MOVES = {'healing-wish': False, 'lunar-dance': True}
+
+REVIVAL_BLESSING_FRACTION = 0.5
+
+
+def apply_healing_wish(incoming, restores_pp=False):
+    """
+    Pay out a banked Healing Wish to whoever takes the vacated slot.
+
+    Returns a log fragment, or '' when the replacement needed nothing.
+    """
+    if incoming is None or incoming.get('current_hp', 0) <= 0:
+        return ""
+
+    max_hp = incoming.get('max_hp', 100)
+    mended = incoming['current_hp'] < max_hp
+    had_status = (incoming.get('status_condition') or {}).get('name')
+
+    refilled = False
+    if restores_pp:
+        for slot in (incoming.get('moves') or []):
+            if slot.get('pp', 0) < slot.get('max_pp', 0):
+                slot['pp'] = slot['max_pp']
+                refilled = True
+
+    if not (mended or had_status or refilled):
+        return ""
+
+    incoming['current_hp'] = max_hp
+    incoming['status_condition'] = None
+
+    note = f"💗 The departed's wish restored {incoming['name'].capitalize()} completely"
+    return note + (" - and refreshed its moves!" if refilled else "!")
+
+
+def revive_fallen(party, exclude=None):
+    """
+    Bring one fainted party member back at half health. Returns (name, healed) so the
+    caller can report it, or (None, 0) when there is nobody to revive.
+    """
+    for member in (party or []):
+        if member is None or member is exclude:
+            continue
+        if member.get('current_hp', 0) > 0:
+            continue
+
+        max_hp = member.get('max_hp', 100)
+        member['current_hp'] = max(1, math.floor(max_hp * REVIVAL_BLESSING_FRACTION))
+        member['status_condition'] = None
+        return member.get('name', 'a specimen').capitalize(), member['current_hp']
+
+    return None, 0
+
+
+# ==========================================
+# 🪞 REDIRECTION AND INTERCEPTION
+# ==========================================
+# Four of these arm an interceptor that changes how the OPPONENT'S next move resolves,
+# which is why Magic Coat and Snatch both sit at +4 priority - they have to be standing
+# before the thing they intercept arrives.
+POWDER_RECOIL_FRACTION = 0.25
+
+# Magic Coat cannot bounce a move that was itself bounced, nor the interceptors.
+BOUNCE_IMMUNE_MOVES = {
+    'magic-coat', 'snatch', 'struggle', 'sketch', 'mimic', 'transform', 'metronome',
+    'me-first', 'mirror-move', 'copycat', 'assist', 'sleep-talk',
+}
+
+# Snatch only takes what the user was doing to ITSELF; these are the self-aimed targets.
+SNATCHABLE_TARGETS = {'user', 'users-field', 'user-and-allies', 'all-allies'}
+
+
+def magic_coat_bounces(defender, move):
+    """
+    Whether the defender's Magic Coat reflects this move back at whoever threw it.
+
+    Only status moves aimed AT the coat holder bounce - a self-buff has nothing to
+    reflect, and a damaging move goes straight through.
+    """
+    if not (defender.get('volatile_statuses') or {}).get('magic_coat'):
+        return False
+    if move.get('class') != 'status':
+        return False
+
+    name = (move.get('name') or '').lower().replace(' ', '-')
+    if name in BOUNCE_IMMUNE_MOVES:
+        return False
+
+    return 'selected-pokemon' in str(move.get('target', '')) or \
+           'opponent' in str(move.get('target', ''))
+
+
+def snatch_steals(thief, move):
+    """
+    Whether the thief's Snatch takes this move and uses it instead.
+
+    Snatch is the mirror of Magic Coat: it takes what the user was doing FOR itself -
+    a boost, a heal, a screen - rather than what was being done to somebody.
+    """
+    if not (thief.get('volatile_statuses') or {}).get('snatch'):
+        return False
+    if move.get('class') != 'status':
+        return False
+
+    name = (move.get('name') or '').lower().replace(' ', '-')
+    if name in BOUNCE_IMMUNE_MOVES:
+        return False
+
+    return str(move.get('target', '')) in SNATCHABLE_TARGETS
+
+
+def clear_interceptors(pokemon):
+    """
+    Magic Coat, Snatch and Powder all last a single turn. Cleared alongside the other
+    per-turn volatiles so an unused one cannot linger into the next round.
+    """
+    if pokemon is None:
+        return
+    volatiles = pokemon.get('volatile_statuses') or {}
+    for flag in ('magic_coat', 'snatch', 'powder'):
+        volatiles.pop(flag, None)
 
 
 # ==========================================
@@ -2295,7 +2465,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # ==========================================
     if move_name in SIDE_SCREEN_MOVES and user_hazards is not None:
         # Light Clay only extends the damage-reducing screens; Lucky Chant is a flat 5.
-        if move_name == 'lucky-chant':
+        if move_name in FLAT_DURATION_SCREENS:
             duration = 5
         else:
             duration = 8 if attacker_item == 'light-clay' else 5
@@ -2312,6 +2482,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         elif move_name == 'light-screen': msg += f" 🪞 A wondrous wall of light appeared to protect {attacker['name'].capitalize()}'s team!"
         elif move_name == 'aurora-veil': msg += f" 🌌 An aurora appeared to protect {attacker['name'].capitalize()}'s team!"
         elif move_name == 'lucky-chant': msg += f" 🍀 The chant shielded {attacker['name'].capitalize()}'s team from critical hits!"
+        elif move_name == 'safeguard': msg += f" 🛡️ A mystical veil shielded {attacker['name'].capitalize()}'s team from status conditions!"
+        elif move_name == 'mist': msg += f" 🌫️ A white mist stopped {attacker['name'].capitalize()}'s team losing any stats!"
 
         return 0, msg.strip(), 'none', [], 0
 
@@ -2400,6 +2572,24 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # 🚨 ITEM-DRIVEN ELEMENTS (Judgment / Techno Blast / Multi-Attack)
     move_type = resolve_item_move_type(move_name, attacker_item, move_type)
 
+    # ==========================================
+    # 🪞 INTERCEPTORS ARMED AGAINST THIS USER
+    # ==========================================
+    # Electrify rewrites the element before anything reads it, so STAB, the type chart
+    # and every type-keyed effect downstream all see Electric.
+    if (attacker.get('volatile_statuses') or {}).get('electrified') and move_class != 'status':
+        move_type = 'electric'
+
+    # Powder detonates on any Fire move the coated specimen tries to throw, and the move
+    # never happens. Checked on the ORIGINAL element as well as the rewritten one so an
+    # Electrified Fire move still fizzles rather than slipping through as Electric.
+    if (attacker.get('volatile_statuses') or {}).get('powder') and move_class != 'status':
+        if move_type == 'fire' or (move.get('type') or '').lower() == 'fire':
+            burst = max(1, math.floor(attacker.get('max_hp', 100) * POWDER_RECOIL_FRACTION))
+            attacker['current_hp'] = max(0, attacker['current_hp'] - burst)
+            return 0, (f"💥 The powder ignited! {attacker['name'].capitalize()} was "
+                       f"caught in the blast and lost {burst} HP!"), 'none', [], 0
+
     # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
     if move_name == 'tera-blast' and attacker.get('tera_type'):
         move_type = attacker['tera_type']
@@ -2410,6 +2600,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         return 0, f"{attacker['name'].capitalize()} kept going and crashed!", None, [], 0
     
     if move.get('class') != 'status':
+        # A specimen held off the ground cannot be reached by Ground moves. Levitate gets
+        # this from the ability table below, but Magnet Rise and Telekinesis are
+        # volatiles, so they need saying here.
+        if move_type == 'ground' and not is_grounded(defender, gravity):
+            lifted = (defender.get('volatile_statuses') or {})
+            if lifted.get('magnet_rise') or lifted.get('telekinesis'):
+                return 0, (f"🪂 {defender['name'].capitalize()} is airborne - the attack "
+                           f"passed harmlessly underneath!"), None, [], 0
+
         immunity_data = BIOLOGICAL_TRAITS['immunities'].get(def_ability)
         
         # If the defender has an immunity AND the incoming attack matches its element
@@ -2522,6 +2721,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
         attacker['types'] = mirrored
         return 0, f"🪞 {attacker['name'].capitalize()} mirrored {defender['name'].capitalize()}'s typing!", 'none', [], 0
+
+    if move_name == 'magic-powder':
+        if defender.get('types') == ['psychic']:
+            return 0, "But it failed! It is already pure Psychic!", 'none', [], 0
+
+        defender['types'] = ['psychic']
+        return 0, (f"✨ {defender['name'].capitalize()} was dusted and became pure "
+                   f"Psychic!"), 'none', [], 0
 
     if move_name == 'soak':
         if defender.get('types') == ['water']:
@@ -2781,6 +2988,101 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                    f"grudge!"), 'none', [], 0
 
     # ==========================================
+    # ==========================================
+    # 🎯 GUARANTEED ACCURACY AND LEVITATION
+    # ==========================================
+    if move_name in LOCK_ON_MOVES:
+        if (attacker.get('volatile_statuses') or {}).get('locked_on'):
+            return 0, "But it failed! It has already taken aim!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})['locked_on'] = True
+        return 0, (f"🎯 {attacker['name'].capitalize()} took aim - its next "
+                   f"attack cannot miss!"), 'none', [], 0
+
+    if move_name in LEVITATION_TURNS:
+        # Magnet Rise lifts the user; Telekinesis lifts the target
+        subject = attacker if move_name == 'magnet-rise' else defender
+        flag = move_name.replace('-', '_')
+
+        if (subject.get('volatile_statuses') or {}).get(flag):
+            return 0, "But it failed! It is already airborne!", 'none', [], 0
+        subject.setdefault('volatile_statuses', {})[flag] = LEVITATION_TURNS[move_name]
+        if move_name == 'magnet-rise':
+            return 0, (f"🧲 {attacker['name'].capitalize()} levitated on "
+                       f"electromagnetism!"), 'none', [], 0
+        return 0, (f"🌀 {defender['name'].capitalize()} was hurled into the air "
+                   f"and cannot dodge!"), 'none', [], 0
+
+    # ==========================================
+    # 💗 RESTORATION AND SACRIFICE
+    # ==========================================
+    if move_name == 'aqua-ring':
+        if (attacker.get('volatile_statuses') or {}).get('aqua_ring'):
+            return 0, "But it failed! It is already veiled in water!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})['aqua_ring'] = True
+        return 0, (f"💧 {attacker['name'].capitalize()} veiled itself in water - "
+                   f"it will recover a little each turn!"), 'none', [], 0
+
+    if move_name == 'refresh':
+        current = (attacker.get('status_condition') or {}).get('name')
+        if current not in REFRESH_CURES:
+            return 0, "But it failed! There was nothing it could shake off!", 'none', [], 0
+
+        attacker['status_condition'] = None
+        return 0, (f"✨ {attacker['name'].capitalize()} refreshed itself and shook "
+                   f"off its {current}!"), 'none', [], 0
+
+    if move_name in SACRIFICE_MOVES:
+        # The engines read this off the state and pay it to whoever takes the slot
+        attacker['current_hp'] = 0
+        attacker['_sacrifice_wish'] = SACRIFICE_MOVES[move_name]
+        flavour = ("danced and faded away" if move_name == 'lunar-dance'
+                   else "gave itself up")
+        return 0, (f"💗 {attacker['name'].capitalize()} {flavour} so its "
+                   f"replacement can arrive whole!"), 'none', [], 0
+
+    if move_name == 'revival-blessing':
+        name, healed = revive_fallen(user_party, exclude=attacker)
+        if not name:
+            return 0, "But it failed! Nobody had fallen!", 'none', [], 0
+
+        return 0, (f"🕊️ {name} was revived and is ready to fight again! "
+                   f"({healed} HP)"), 'none', [], 0
+
+    # ==========================================
+    # 🪞 REDIRECTION AND INTERCEPTION
+    # ==========================================
+    if move_name in ('magic-coat', 'snatch'):
+        flag = move_name.replace('-', '_')
+        if (attacker.get('volatile_statuses') or {}).get(flag):
+            return 0, "But it failed! It is already braced!", 'none', [], 0
+
+        attacker.setdefault('volatile_statuses', {})[flag] = True
+        if move_name == 'magic-coat':
+            return 0, (f"🪞 {attacker['name'].capitalize()} shrouded itself - "
+                       f"status moves will bounce back!"), 'none', [], 0
+        return 0, (f"🤚 {attacker['name'].capitalize()} is poised to snatch the "
+                   f"next self-serving move!"), 'none', [], 0
+
+    if move_name == 'powder':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('powder'):
+            return 0, "But it failed! It is already covered!", 'none', [], 0
+
+        victim['powder'] = True
+        return 0, (f"🟢 {defender['name'].capitalize()} was covered in a "
+                   f"combustible powder!"), 'none', [], 0
+
+    if move_name == 'electrify':
+        victim = defender.setdefault('volatile_statuses', {})
+        if victim.get('electrified'):
+            return 0, "But it failed! It is already charged!", 'none', [], 0
+
+        victim['electrified'] = True
+        return 0, (f"⚡ {defender['name'].capitalize()} was electrified - its move "
+                   f"turned Electric!"), 'none', [], 0
+
     # ==========================================
     # 🎭 COPY AND MIMICRY MOVES
     # ==========================================
@@ -4090,6 +4392,21 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # A decoy eats all three: the specimen behind it takes nothing, catches nothing, and
     # keeps its stat stages. Anything aimed at the ATTACKER (recoil, self-boosts, drain)
     # is deliberately left alone.
+    # ==========================================
+    # 🛡️ SIDE GUARDS
+    # ==========================================
+    # Safeguard turns status away from the whole side; Mist holds its stats in place.
+    # Neither touches anything the ATTACKER is doing to itself.
+    if inflicted_status and side_is_guarded(target_hazards, 'safeguard'):
+        inflicted_status = None
+        msg += f" 🛡️ {defender['name'].capitalize()}'s Safeguard turned the status away!"
+
+    if side_is_guarded(target_hazards, 'mist'):
+        blocked = [c for c in stat_changes if c[0] == 'defender' and c[2] < 0]
+        if blocked:
+            stat_changes = [c for c in stat_changes if c not in blocked]
+            msg += f" 🌫️ The mist stopped {defender['name'].capitalize()} losing any stats!"
+
     if substitute_intercepts(defender, move, attacker):
         if damage > 0:
             damage, sub_note = absorb_with_substitute(defender, damage)
