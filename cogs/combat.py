@@ -1,4 +1,5 @@
 import discord
+import os
 import time
 import traceback
 from discord.ext import commands
@@ -2894,6 +2895,7 @@ class BattleDashboard(discord.ui.View):
                 weather=battle_render.normalize_weather(weather),
             )
 
+        started = time.perf_counter()
         try:
             buffer = await asyncio.to_thread(_render)
         except Exception as e:
@@ -2901,8 +2903,22 @@ class BattleDashboard(discord.ui.View):
             traceback.print_exc()
             return None
 
+        # Set KYU_TRACE_RENDER=1 to print what each frame actually cost. Off by default
+        # so it costs a perf_counter call and nothing else.
+        #
+        # Read this alongside the wall-clock time of the send that follows: if a frame
+        # renders in 130ms but the turn still takes two seconds, the time is going to the
+        # upload rather than to us, and the next thing worth cutting is how MANY frames a
+        # turn sends - not how fast each one is built.
+        if os.getenv("KYU_TRACE_RENDER"):
+            elapsed = (time.perf_counter() - started) * 1000
+            size_kb = buffer.getbuffer().nbytes / 1024
+            print(f"⏱️ frame: {elapsed:.0f}ms  {size_kb:.1f}KB")
+
         # Randomize the filename to bust Discord's aggressive image cache!
-        new_filename = f"battle_{random.randint(10000, 99999)}.png"
+        # Extension follows the renderer, so switching format does not silently ship a
+        # WebP wearing a .png name.
+        new_filename = f"battle_{random.randint(10000, 99999)}.{battle_render.IMAGE_EXTENSION}"
         return discord.File(fp=buffer, filename=new_filename)
 
     async def handle_forfeit(self, interaction: discord.Interaction):
