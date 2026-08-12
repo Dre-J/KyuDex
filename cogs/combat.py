@@ -6,7 +6,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
 from utils import checks
 import aiohttp
@@ -514,7 +514,7 @@ async def fetch_move_payload(move_name):
 
 
 pivot_moves = ['u-turn', 'volt-switch', 'flip-turn', 'baton-pass', 'parting-shot',
-               'chilly-reception', 'shed-tail']
+               'chilly-reception', 'shed-tail', 'teleport']
 
 phaze_moves = ['roar', 'whirlwind', 'dragon-tail', 'circle-throw']
 
@@ -5001,6 +5001,12 @@ class BattleDashboard(discord.ui.View):
                                                       combatant['current_hp'] + ring_qty)
                         combat_log += f"\U0001f4a7 {owner_str.strip()} **{combatant['name'].capitalize()}** was restored by its veil of water! (+{ring_qty} HP)\n"
 
+                    # A Ghost's Curse bleeds a quarter of the maximum away every turn
+                    if 'curse' in volatiles:
+                        curse_qty = max(1, math.floor(combatant.get('max_hp', 100) * CURSE_DRAIN_FRACTION))
+                        combatant['current_hp'] = max(0, combatant['current_hp'] - curse_qty)
+                        combat_log += f"\U0001f47b {owner_str.strip()} **{combatant['name'].capitalize()}** was hurt by the curse! (-{curse_qty} HP)\n"
+
                     # Ingrain Healing (1/16th Max HP)
                     if 'ingrain' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
                         heal_qty = max(1, math.floor(combatant.get('max_hp', 100) / 16))
@@ -7676,6 +7682,12 @@ class Combat(commands.Cog):
                         combatant['current_hp'] = min(combatant.get('max_hp', 100),
                                                       combatant['current_hp'] + ring_qty)
                         combat_log += f"\U0001f4a7 {owner_str.strip()} **{combatant['name'].capitalize()}** was restored by its veil of water! (+{ring_qty} HP)\n"
+
+                    # A Ghost's Curse bleeds a quarter of the maximum away every turn
+                    if 'curse' in volatiles:
+                        curse_qty = max(1, math.floor(combatant.get('max_hp', 100) * CURSE_DRAIN_FRACTION))
+                        combatant['current_hp'] = max(0, combatant['current_hp'] - curse_qty)
+                        combat_log += f"\U0001f47b {owner_str.strip()} **{combatant['name'].capitalize()}** was hurt by the curse! (-{curse_qty} HP)\n"
 
                     # Ingrain Healing (1/16th Max HP)
                     if 'ingrain' in volatiles and combatant['current_hp'] < combatant.get('max_hp', 100):
