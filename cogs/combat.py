@@ -8,7 +8,7 @@ import random
 import asyncio
 import math
 from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -889,17 +889,40 @@ async def pick_npc_move(db, available_moves, npc, foe, state, context='ATTACK'):
     return chosen, highest_score
 
 # ==========================================
-# 🚨 PRIMAL LOCKOUT
+# 🚨 DYNAMAX LOCKOUT
 # ==========================================
-# Primal Reversion is these species' transformation, and it is mutually exclusive with
-# Dynamax/Gigantamax. Matched on the base species so the block holds whether or not they
-# are holding their orb and whether or not they have already reverted.
+# Primal Reversion is Groudon's and Kyogre's transformation, and it is mutually exclusive
+# with Dynamax/Gigantamax.
 PRIMAL_SPECIES = ['groudon', 'kyogre']
 
+# Zacian, Zamazenta and Eternatus cannot Dynamax in the mainline games at all: the first
+# two have the Crowned forms instead, and Eternatus is the source of the phenomenon rather
+# than a user of it. Matched on the BASE species, so the block holds whether or not they
+# have already taken their other form.
+NO_DYNAMAX_SPECIES = set(PRIMAL_SPECIES) | {'zacian', 'zamazenta', 'eternatus'}
+
+
 def can_dynamax(pokemon):
-    """False for species whose transformation slot is taken by Primal Reversion."""
+    """False for species that are barred from Dynamaxing, whatever form they are in."""
     base_name = (pokemon.get('name') or '').lower().split('-')[0].strip()
-    return base_name not in PRIMAL_SPECIES
+    return base_name not in NO_DYNAMAX_SPECIES
+
+
+CHOICE_ITEMS = ['choice-band', 'choice-specs', 'choice-scarf']
+
+
+def locks_into_one_move(held_item, pokemon=None):
+    """
+    True when this specimen may only repeat the move it opened with.
+
+    Three call sites used to test the item list directly, which is why Gorilla Tactics
+    needed one predicate rather than three more `or` clauses: the ability is a Choice
+    Band that cannot be knocked off, so the lock, the greyed-out buttons and the PvP menu
+    all have to agree about it.
+    """
+    if held_item in CHOICE_ITEMS:
+        return True
+    return bool(pokemon) and get_active_ability(pokemon) in CHOICE_LOCK_ABILITIES
 
 
 def is_dynamax_active(adaptation):
@@ -1709,7 +1732,7 @@ class PvPMoveMenu(discord.ui.View):
             
             # --- CHOICE LOCK SETUP ---
             choice_lock_move = self.active_poke.get('volatile_statuses', {}).get('choice_lock')
-            has_choice_item = held_item in ['choice-band', 'choice-specs', 'choice-scarf']
+            has_choice_item = locks_into_one_move(held_item, self.active_poke)
 
 
 
@@ -1989,7 +2012,7 @@ class PvPMoveMenu(discord.ui.View):
                 # ==========================================
                 held_item = get_active_item(self.active_poke, self.state.get('field', {}).get('magic_room', 0) > 0)
                 print(f"DEBUG LOCK 1: Detected held item: {held_item}") # Tripwire 1
-                if held_item in ['choice-band', 'choice-specs', 'choice-scarf']:
+                if locks_into_one_move(held_item, self.active_poke):
                     if 'volatile_statuses' not in self.active_poke:
                         self.active_poke['volatile_statuses'] = {}
                     
@@ -3087,7 +3110,7 @@ class BattleDashboard(discord.ui.View):
 
         # Set up the Choice Lock variables
         choice_lock_move = p_active.get('volatile_statuses', {}).get('choice_lock')
-        has_choice_item = held_item in ['choice-band', 'choice-specs', 'choice-scarf']
+        has_choice_item = locks_into_one_move(held_item, p_active)
 
         # THE TEMPORAL LOCK FLAG
         is_charging = p_active.get('volatile_statuses', {}).get('charging')
@@ -3506,7 +3529,7 @@ class BattleDashboard(discord.ui.View):
 
                     # APPLY THE PVE CHOICE LOCK 🚨
                     held_item = get_active_item(p_active, state.get('field', {}).get('magic_room', 0) > 0)
-                    if held_item in ['choice-band', 'choice-specs', 'choice-scarf']:
+                    if locks_into_one_move(held_item, p_active):
                         if 'volatile_statuses' not in p_active:
                             p_active['volatile_statuses'] = {}
                         if not p_active['volatile_statuses'].get('choice_lock'):
@@ -4308,8 +4331,9 @@ class BattleDashboard(discord.ui.View):
                             else:
                                 acc_multiplier = 3.0 / (3.0 + abs(net_stage))
                                 
-                            final_acc = move_acc * acc_multiplier
-                            
+                            # Hustle pays for its Attack boost here
+                            final_acc = move_acc * acc_multiplier * accuracy_multiplier(attacker)
+
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:
                                 combat_log += "💨 The attack missed!\n"
@@ -5115,7 +5139,8 @@ class BattleDashboard(discord.ui.View):
                 if combatant['current_hp'] > 0 and combatant.get('status_condition'):
                     status = combatant['status_condition']['name']
                     if status == 'burn':
-                        burn_dmg = max(1, math.floor(combatant['max_hp'] / 16))
+                        burn_divisor = 32 if ability in BURN_TOLL_HALVED_BY else 16
+                        burn_dmg = max(1, math.floor(combatant['max_hp'] / burn_divisor))
                         combatant['current_hp'] = max(0, combatant['current_hp'] - burn_dmg)
                         combat_log += f"🔥 {owner_str} **{combatant['name'].capitalize()}** suffered a burn! (-{burn_dmg} HP)\n"
                     elif status == 'poison':
@@ -5212,6 +5237,14 @@ class BattleDashboard(discord.ui.View):
                                 heal = max(1, math.floor(combatant.get('max_hp', 100) / eot_trait['denominator']))
                                 combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                 combat_log += f"🍄 {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP using its {ability_name}!\n"
+
+                        # Solar Power's price for the Sp. Atk it grants
+                        elif eot_trait['type'] == 'weather_toll':
+                            current_weather = state.get('weather', {}).get('type', 'none')
+                            if current_weather in eot_trait['weather']:
+                                toll = max(1, math.floor(combatant.get('max_hp', 100) / eot_trait['denominator']))
+                                combatant['current_hp'] = max(0, combatant['current_hp'] - toll)
+                                combat_log += f"☀️ {owner_str.strip()} **{combatant['name'].capitalize()}** was scorched by its {ability_name}! (-{toll} HP)\n"
 
                         # Weather-gated cure (Hydration) - Shed Skin's certain cousin
                         elif eot_trait['type'] == 'weather_cure':
@@ -7251,8 +7284,9 @@ class Combat(commands.Cog):
                             else:
                                 acc_multiplier = 3.0 / (3.0 + abs(net_stage))
                                 
-                            final_acc = move_acc * acc_multiplier
-                            
+                            # Hustle pays for its Attack boost here
+                            final_acc = move_acc * acc_multiplier * accuracy_multiplier(attacker)
+
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:
                                 combat_log += "💨 The attack missed!\n"
@@ -7777,7 +7811,8 @@ class Combat(commands.Cog):
                 if combatant['current_hp'] > 0 and combatant.get('status_condition'):
                     status_name = combatant['status_condition']['name']
                     if status_name == 'burn':
-                        burn_dmg = max(1, math.floor(combatant['max_hp'] / 16))
+                        burn_divisor = 32 if ability in BURN_TOLL_HALVED_BY else 16
+                        burn_dmg = max(1, math.floor(combatant['max_hp'] / burn_divisor))
                         combatant['current_hp'] = max(0, combatant['current_hp'] - burn_dmg)
                         combat_log += f"🔥 {owner_str} **{combatant['name'].capitalize()}** suffered a burn! (-{burn_dmg} HP)\n"
                     elif status_name == 'poison':
@@ -7865,6 +7900,14 @@ class Combat(commands.Cog):
                                 heal = max(1, math.floor(combatant.get('max_hp', 100) / eot_trait['denominator']))
                                 combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                 combat_log += f"🍄 {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP using its {ability_name}!\n"
+
+                        # Solar Power's price for the Sp. Atk it grants
+                        elif eot_trait['type'] == 'weather_toll':
+                            current_weather = state.get('weather', {}).get('type', 'none')
+                            if current_weather in eot_trait['weather']:
+                                toll = max(1, math.floor(combatant.get('max_hp', 100) / eot_trait['denominator']))
+                                combatant['current_hp'] = max(0, combatant['current_hp'] - toll)
+                                combat_log += f"☀️ {owner_str.strip()} **{combatant['name'].capitalize()}** was scorched by its {ability_name}! (-{toll} HP)\n"
 
                         # Weather-gated cure (Hydration) - Shed Skin's certain cousin
                         elif eot_trait['type'] == 'weather_cure':

@@ -361,6 +361,8 @@ EQUIPMENT_CATALOG = {
     "dna-splicers":  {"name": "DNA Splicers", "price": 0, "desc": "Allows Kyurem to fuse with Reshiram or Zekrom.", "emoji": "🧬", "category": "formitems", "purchasable": False},
     "rusted-sword":  {"name": "Rusted Sword", "price": 0, "desc": "Zacian takes its Crowned form while holding this.", "emoji": "⚔️", "category": "formitems", "purchasable": False},
     "rusted-shield":  {"name": "Rusted Shield", "price": 0, "desc": "Zamazenta takes its Crowned form while holding this.", "emoji": "🛡️", "category": "formitems", "purchasable": False},
+    "red-orb":  {"name": "Red Orb", "price": 0, "desc": "Groudon undergoes Primal Reversion while holding this.", "emoji": "🔴", "category": "formitems", "purchasable": False},
+    "blue-orb":  {"name": "Blue Orb", "price": 0, "desc": "Kyogre undergoes Primal Reversion while holding this.", "emoji": "🔵", "category": "formitems", "purchasable": False},
     
     # Evolution Items
     "water-stone":    {"name": "Water Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, blue and glistens.", "emoji": "💎", "category": "evoitems"},
@@ -517,6 +519,37 @@ BIOLOGICAL_TRAITS = {
     'incoming_multipliers': {
         'punk-rock':    {'condition': 'sound', 'multiplier': 0.5},
         'water-bubble': {'condition': 'move_type', 'types': ['fire'], 'multiplier': 0.5},
+
+        # --- Block 2 ---
+        'thick-fat':      {'condition': 'move_type', 'types': ['fire', 'ice'], 'multiplier': 0.5},
+        'heatproof':      {'condition': 'move_type', 'types': ['fire'], 'multiplier': 0.5},
+        'purifying-salt': {'condition': 'move_type', 'types': ['ghost'], 'multiplier': 0.5},
+        'fur-coat':       {'condition': 'move_class', 'classes': ['physical'], 'multiplier': 0.5},
+        'ice-scales':     {'condition': 'move_class', 'classes': ['special'], 'multiplier': 0.5},
+    },
+
+    # A flat multiplier on one of the specimen's OWN stats, read where the damage formula
+    # picks which Attack and Defense it is using. Conditions are all optional and AND
+    # together; a bare entry is unconditional.
+    #
+    #   stats     - which of attack/sp_atk/defense/sp_def it moves
+    #   status    - '*' for any major status, or a list of specific ones
+    #   weather   - only while one of these is on the field
+    #   terrain   - only while one of these is underfoot
+    #   hp_at_or_below - only at or under this fraction of max HP
+    'stat_multipliers': {
+        'huge-power':      {'stats': ['attack'], 'multiplier': 2.0},
+        'pure-power':      {'stats': ['attack'], 'multiplier': 2.0},
+        'hustle':          {'stats': ['attack'], 'multiplier': 1.5},
+        'gorilla-tactics': {'stats': ['attack'], 'multiplier': 1.5},
+        'toxic-boost':     {'stats': ['attack'], 'multiplier': 1.5, 'status': ['poison']},
+        'flare-boost':     {'stats': ['sp_atk'], 'multiplier': 1.5, 'status': ['burn']},
+        'marvel-scale':    {'stats': ['defense'], 'multiplier': 1.5, 'status': '*'},
+        'grass-pelt':      {'stats': ['defense'], 'multiplier': 1.5, 'terrain': ['grassy']},
+        'solar-power':     {'stats': ['sp_atk'], 'multiplier': 1.5,
+                            'weather': ['sun', 'extremely-harsh-sunlight']},
+        'defeatist':       {'stats': ['attack', 'sp_atk'], 'multiplier': 0.5,
+                            'hp_at_or_below': 0.5},
     },
     'end_of_turn': {
         'speed-boost': {'type': 'stat', 'stat': 'speed', 'value': 1},
@@ -531,6 +564,10 @@ BIOLOGICAL_TRAITS = {
         'hydration':   {'type': 'weather_cure', 'weather': ['rain', 'heavy-rain']},
         # The only end-of-turn trait aimed at the OPPONENT rather than its owner
         'bad-dreams':  {'type': 'sleep_drain', 'denominator': 8},
+
+        # Solar Power's price for the Sp. Atk it grants - the mirror of a weather_heal
+        'solar-power': {'type': 'weather_toll', 'weather': ['sun', 'extremely-harsh-sunlight'],
+                        'denominator': 8},
     },
     'contact_status': {
         'static': {'status': 'paralysis', 'immune': 'electric'},
@@ -550,10 +587,34 @@ BIOLOGICAL_TRAITS = {
 # Statuses an ability simply refuses. Replaces the ad-hoc Insomnia branch that used to sit
 # alone in the immunity filter; Block 7 (Immunity, Limber, Magma Armor, Water Veil...)
 # extends this rather than adding more branches beside it.
+# '*' means every major status, not just the ones listed elsewhere.
+ALL_STATUSES = '*'
+
 STATUS_IMMUNE_ABILITIES = {
-    'insomnia':     {'sleep'},
-    'vital-spirit': {'sleep'},
-    'water-bubble': {'burn'},
+    'insomnia':       {'sleep'},
+    'vital-spirit':   {'sleep'},
+    'water-bubble':   {'burn'},
+    'purifying-salt': ALL_STATUSES,
+}
+
+# Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
+# and the rest of the weight-scaled family.
+WEIGHT_MULTIPLIER_ABILITIES = {
+    'heavy-metal': 2.0,
+    'light-metal': 0.5,
+}
+
+# Abilities that lock their owner into the first move it picks, exactly as a Choice item
+# does. Kept beside the items rather than inside them so the UI can ask one question.
+CHOICE_LOCK_ABILITIES = {'gorilla-tactics'}
+
+# Abilities that halve the end-of-turn burn toll.
+BURN_TOLL_HALVED_BY = {'heatproof'}
+
+# What an ability does to the accuracy of the move its owner throws. Hustle pays for its
+# Attack boost here. Block 4 adds Compound Eyes and Victory Star.
+ACCURACY_MULTIPLIER_ABILITIES = {
+    'hustle': 0.8,
 }
 
 # Abilities that shrug off the sandstorm/hail chip damage. Type immunity is handled
