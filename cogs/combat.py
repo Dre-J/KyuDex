@@ -8,7 +8,7 @@ import random
 import asyncio
 import math
 from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -1005,6 +1005,110 @@ def side_of(state, specimen):
     return None
 
 
+# ==========================================
+# ⚔️ THE RUSTED RELICS
+# ==========================================
+# Zacian and Zamazenta wake up the moment they are handed their old weapon. Unlike a Mega
+# Stone this is not a transformation the player triggers - it happens on entry and holds
+# for as long as the relic is held, so it belongs beside the Primal hook rather than in
+# the transformation menu.
+#
+# The ability does not change: base and Crowned both carry Intrepid Sword / Dauntless
+# Shield in base_pokemon_species. Those are Block 10 and do nothing yet either way.
+CROWNED_FORMS = {
+    'zacian':    {'item': 'rusted-sword',  'form': 'zacian-crowned',
+                  'swap': ('iron-head', 'behemoth-blade'), 'flavour': 'drew its sword'},
+    'zamazenta': {'item': 'rusted-shield', 'form': 'zamazenta-crowned',
+                  'swap': ('iron-head', 'behemoth-bash'), 'flavour': 'raised its shield'},
+}
+
+
+async def assume_species_form(db, combatant, form_name):
+    """
+    Rebuild the species-derived half of a combatant in place, for a new form.
+
+    Level, IVs, EVs and the damage already taken all survive: only what the species tables
+    decide - dex id, name, types and base stats - is rewritten. HP moves by the DIFFERENCE
+    between the two forms' maxima rather than being rescaled, so a wounded specimen stays
+    wounded by the same amount rather than being quietly healed or hurt by the change.
+
+    Returns True when the form was found.
+    """
+    async with db.execute(
+        "SELECT pokedex_id, name FROM base_pokemon_species WHERE name = ?", (form_name,)
+    ) as cursor:
+        row = await cursor.fetchone()
+
+    if not row:
+        print(f"⚠️ WARNING: form '{form_name}' is not in base_pokemon_species!")
+        return False
+
+    form_id, display = row
+    async with db.execute(
+        "SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (form_id,)
+    ) as cursor:
+        bases = {r[0]: r[1] for r in await cursor.fetchall()}
+    async with db.execute(
+        "SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (form_id,)
+    ) as cursor:
+        new_types = [r[0] for r in await cursor.fetchall()]
+
+    level = combatant.get('level', 50)
+    ivs = combatant.get('ivs') or {}
+    evs = combatant.get('evs') or {}
+
+    def derive(stat_key, db_key):
+        base = bases.get(db_key, 50)
+        iv = ivs.get(stat_key, 15)
+        ev = evs.get(stat_key, 0)
+        return math.floor((2 * base + iv + math.floor(ev / 4)) * level / 100) + 5
+
+    new_max_hp = math.floor(
+        (2 * bases.get('hp', 50) + ivs.get('hp', 15) + math.floor(evs.get('hp', 0) / 4))
+        * level / 100) + level + 10
+
+    combatant['current_hp'] = max(1, combatant['current_hp'] + (new_max_hp - combatant.get('max_hp', new_max_hp)))
+    combatant['max_hp'] = new_max_hp
+    combatant['current_hp'] = min(combatant['current_hp'], new_max_hp)
+
+    combatant['stats'] = {
+        'attack':  derive('attack', 'attack'),
+        'defense': derive('defense', 'defense'),
+        'sp_atk':  derive('sp_atk', 'special-attack'),
+        'sp_def':  derive('sp_def', 'special-defense'),
+        'speed':   derive('speed', 'speed'),
+    }
+    combatant['pokedex_id'] = form_id
+    combatant['name'] = display
+    combatant['types'] = new_types
+    return True
+
+
+async def reshape_move_slot(combatant, old_name, new_name):
+    """
+    Turn one move slot into another, keeping the PP already spent on it.
+
+    Behemoth Blade is not learned - it IS Iron Head, reshaped by the relic - so the slot
+    holds its position and its remaining PP rather than being handed a fresh one. The
+    engine re-reads the payload from base_moves by name every turn, so renaming the slot
+    is what actually changes the move; the rest is kept in step for the button label.
+    """
+    payload = await fetch_move_payload(new_name)
+    if not payload:
+        print(f"⚠️ WARNING: '{new_name}' is not in base_moves!")
+        return False
+
+    reshaped = False
+    for slot in (combatant.get('moves') or []):
+        if (slot.get('name') or '').lower().replace(' ', '-') != old_name:
+            continue
+        for key in ('name', 'type', 'power', 'accuracy', 'class'):
+            if key in payload:
+                slot[key] = payload[key]
+        reshaped = True
+    return reshaped
+
+
 async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state, combat_log):
     """Executes passive biological traits for a SINGLE specimen entering the biome."""
 
@@ -1106,6 +1210,26 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
                     print(f"DEBUG: Could not find '{target_form}' in the base_pokemon_species table!")
         except Exception as e:
             print(f"DEBUG: Failed Primal Reversion: {e}")
+
+    # ==========================================
+    # 0b. THE RUSTED RELICS (Zacian / Zamazenta)
+    # ==========================================
+    # The 'crowned' guard is the same trick the Primal hook uses: without it, switching
+    # out and back in would re-derive the stats from an already-transformed specimen.
+    crowned = CROWNED_FORMS.get(base_name)
+    if (crowned and held_item == crowned['item']
+            and 'crowned' not in entering_combatant['name'].lower()):
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                if await assume_species_form(db, entering_combatant, crowned['form']):
+                    old_move, new_move = crowned['swap']
+                    await reshape_move_slot(entering_combatant, old_move, new_move)
+                    combat_log += (
+                        f"⚔️ **{owner_str.strip()} {base_name.capitalize()}** "
+                        f"{crowned['flavour']} and became "
+                        f"**{entering_combatant['name'].replace('-', ' ').title()}**!\n")
+        except Exception as e:
+            print(f"DEBUG: Failed Crowned form change: {e}")
 
     # A Healing Wish or Lunar Dance left behind by the previous occupant lands here,
     # before anything else the arrival triggers.
@@ -4917,7 +5041,11 @@ class BattleDashboard(discord.ui.View):
                                     is_immune = True
                                 if weather['type'] == 'hail' and 'ice' in c_types:
                                     is_immune = True
-                                    
+                                # Sand Force weathers its own storm
+                                if get_active_ability(combatant) in WEATHER_CHIP_IMMUNE_ABILITIES:
+                                    is_immune = True
+
+
                                 if not is_immune:
                                     chip_dmg = max(1, math.floor(combatant['max_hp'] / 16))
                                     combatant['current_hp'] = max(0, combatant['current_hp'] - chip_dmg)
@@ -5033,9 +5161,12 @@ class BattleDashboard(discord.ui.View):
             # ---
 
             # ==========================================
-            # 2.8 BIOLOGICAL END-OF-TURN HOOKS 
+            # 2.8 BIOLOGICAL END-OF-TURN HOOKS
             # ==========================================
-            for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]: 
+            # Carries the opponent too: Bad Dreams is the one trait here that reaches
+            # across the field rather than acting on its own owner.
+            for combatant, foe, owner_str in [(p_active, n_active, "Your"),
+                                              (n_active, p_active, "The rival's")]:
                 if combatant['current_hp'] > 0:
                     ability = get_active_ability(combatant)
                     eot_trait = BIOLOGICAL_TRAITS.get('end_of_turn', {}).get(ability)
@@ -5081,6 +5212,22 @@ class BattleDashboard(discord.ui.View):
                                 heal = max(1, math.floor(combatant.get('max_hp', 100) / eot_trait['denominator']))
                                 combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                 combat_log += f"🍄 {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP using its {ability_name}!\n"
+
+                        # Weather-gated cure (Hydration) - Shed Skin's certain cousin
+                        elif eot_trait['type'] == 'weather_cure':
+                            current_weather = state.get('weather', {}).get('type', 'none')
+                            if current_weather in eot_trait['weather'] and combatant.get('status_condition'):
+                                washed = combatant['status_condition']['name']
+                                combatant['status_condition'] = None
+                                combat_log += f"💧 {owner_str.strip()} **{combatant['name'].capitalize()}** washed away its {washed} with {ability_name}!\n"
+
+                        # Bad Dreams - aimed at the OPPONENT, and only while it sleeps
+                        elif eot_trait['type'] == 'sleep_drain':
+                            foe_status = (foe.get('status_condition') or {}) if foe else {}
+                            if foe and foe['current_hp'] > 0 and foe_status.get('name') == 'sleep':
+                                bite = max(1, math.floor(foe.get('max_hp', 100) / eot_trait['denominator']))
+                                foe['current_hp'] = max(0, foe['current_hp'] - bite)
+                                combat_log += f"😈 **{foe['name'].capitalize()}** is tormented by {combatant['name'].capitalize()}'s {ability_name}! (-{bite} HP)\n"
 
             # 3. Parasitic Drain (Leech Seed & Perish Song)
             for combatant, opponent, owner_str in [(p_active, n_active, "Your"), (n_active, p_active, "The rival's")]:
@@ -7528,7 +7675,11 @@ class Combat(commands.Cog):
                                     is_immune = True
                                 if state['weather']['type'] == 'hail' and 'ice' in c_types:
                                     is_immune = True
-                                    
+                                # Sand Force weathers its own storm
+                                if get_active_ability(combatant) in WEATHER_CHIP_IMMUNE_ABILITIES:
+                                    is_immune = True
+
+
                                 if not is_immune:
                                     chip_dmg = max(1, math.floor(combatant['max_hp'] / 16))
                                     combatant['current_hp'] = max(0, combatant['current_hp'] - chip_dmg)
@@ -7666,8 +7817,9 @@ class Combat(commands.Cog):
             # ==========================================
             # 2.8 BIOLOGICAL END-OF-TURN HOOKS 
             # ==========================================
-            # (Note: In process_turn_end, remember to use `for combatant, owner_str in combatants:`)
-            for combatant, _, owner_str in combatants: 
+            # The middle slot is the opponent: Bad Dreams is the one trait here that
+            # reaches across the field rather than acting on its own owner.
+            for combatant, foe, owner_str in combatants:
                 if combatant['current_hp'] > 0:
                     ability = get_active_ability(combatant)
                     eot_trait = BIOLOGICAL_TRAITS.get('end_of_turn', {}).get(ability)
@@ -7713,6 +7865,22 @@ class Combat(commands.Cog):
                                 heal = max(1, math.floor(combatant.get('max_hp', 100) / eot_trait['denominator']))
                                 combatant['current_hp'] = min(combatant.get('max_hp', 100), combatant['current_hp'] + heal)
                                 combat_log += f"🍄 {owner_str.strip()} **{combatant['name'].capitalize()}** restored HP using its {ability_name}!\n"
+
+                        # Weather-gated cure (Hydration) - Shed Skin's certain cousin
+                        elif eot_trait['type'] == 'weather_cure':
+                            current_weather = state.get('weather', {}).get('type', 'none')
+                            if current_weather in eot_trait['weather'] and combatant.get('status_condition'):
+                                washed = combatant['status_condition']['name']
+                                combatant['status_condition'] = None
+                                combat_log += f"💧 {owner_str.strip()} **{combatant['name'].capitalize()}** washed away its {washed} with {ability_name}!\n"
+
+                        # Bad Dreams - aimed at the OPPONENT, and only while it sleeps
+                        elif eot_trait['type'] == 'sleep_drain':
+                            foe_status = (foe.get('status_condition') or {}) if foe else {}
+                            if foe and foe['current_hp'] > 0 and foe_status.get('name') == 'sleep':
+                                bite = max(1, math.floor(foe.get('max_hp', 100) / eot_trait['denominator']))
+                                foe['current_hp'] = max(0, foe['current_hp'] - bite)
+                                combat_log += f"😈 **{foe['name'].capitalize()}** is tormented by {combatant['name'].capitalize()}'s {ability_name}! (-{bite} HP)\n"
 
             # 3. Parasitic Drain (Leech Seed & Perish Song)
             for combatant, opponent, owner_str in combatants:
