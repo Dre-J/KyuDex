@@ -548,6 +548,194 @@ TERRAIN_MESSAGES = {
 }
 
 # ==========================================
+# 🌦️ SHARED MOVE AFTERMATH
+# ==========================================
+# Everything a move does BESIDES rolling damage: weather, terrain, the room and gravity
+# toggles, stat stages, and status.
+#
+# All of this used to live inline in the main turn loop, so only the main turn loop ran
+# it. The NPC has two OTHER action paths - its free swing when the player uses an item,
+# and its swing at whatever the player swaps in - and both resolved damage and threw the
+# rest away. A rival Rain Dance on either path announced itself and changed nothing at
+# all; so did Toxic, Swords Dance and Trick Room. Written as functions so the four call
+# sites cannot drift apart again.
+#
+# Entry hazards are deliberately absent: calculate_damage already lays those, so they
+# reach every path on their own.
+
+WEATHER_ROCKS = {'sun': 'heat-rock', 'rain': 'damp-rock',
+                 'sand': 'smooth-rock', 'hail': 'icy-rock'}
+
+STAT_STAGE_KEYS = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk',
+                   'special-defense': 'sp_def', 'speed': 'speed',
+                   'accuracy': 'accuracy', 'evasion': 'evasion'}
+
+
+def deploy_weather(state, move_name, attacker, magic_room=False):
+    """
+    Put a weather setter's climate on the field. Returns '' if the move sets none.
+
+    The exact display name is tried first so a Max move ('Max Geyser') matches, then the
+    hyphenated form for an ordinary move ('rain-dance').
+    """
+    key = str(move_name)
+    new_weather = WEATHER_MOVES.get(key) or WEATHER_MOVES.get(key.lower().replace(' ', '-'))
+    if not new_weather:
+        return ""
+
+    # A primordial climate outranks anything a move can summon
+    if state.get('weather', {}).get('primordial', False):
+        return f"↳ The extreme weather prevented `{move_name}` from taking effect!\n"
+
+    held = get_active_item(attacker, magic_room)
+    duration = 8 if held == WEATHER_ROCKS.get(new_weather) else 5
+
+    state['weather'] = {'type': new_weather, 'duration': duration, 'primordial': False}
+    return f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
+
+
+def deploy_terrain(state, move_name, attacker, magic_room=False, max_move_type=None):
+    """Lay a terrain, from a terrain move or from the Max move that carries one."""
+    new_terrain = TERRAIN_MOVES.get(str(move_name))
+    if not new_terrain and max_move_type:
+        new_terrain = (MAX_MOVES.get(max_move_type) or {}).get('terrain')
+    if not new_terrain:
+        return ""
+
+    if 'terrain' not in state:
+        state['terrain'] = {'type': 'none', 'duration': 0}
+    if state['terrain']['type'] == new_terrain:
+        return ""
+
+    duration = 8 if get_active_item(attacker, magic_room) == 'terrain-extender' else 5
+    state['terrain'] = {'type': new_terrain, 'duration': duration}
+    return f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+
+
+def deploy_field_toggle(state, move_name, attacker, defender, user_hazards, team_label=None):
+    """
+    Tailwind, Trick Room, Wonder Room, Magic Room and Gravity.
+
+    `user_hazards` is the ATTACKER's own side - Tailwind blows from behind its user, so it
+    is the one field effect here that is not global.
+    """
+    if 'field' not in state:
+        state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0, 'magic_room': 0}
+    field = state['field']
+
+    if move_name == 'tailwind':
+        if user_hazards.get('tailwind', 0) > 0:
+            return "↳ But it failed! A tailwind is already blowing!\n"
+        user_hazards['tailwind'] = 4
+        owner = team_label or attacker['name'].capitalize()
+        return f"↳ The Tailwind blew from behind {owner}'s team!\n"
+
+    if move_name == 'trick-room':
+        if field['trick_room'] > 0:
+            field['trick_room'] = 0
+            return "↳ The twisted dimensions returned to normal!\n"
+        field['trick_room'] = 5
+        return f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
+
+    if move_name == 'wonder-room':
+        if field['wonder_room'] > 0:
+            field['wonder_room'] = 0
+            return "↳ Wonder Room ended, and stats returned to normal!\n"
+        field['wonder_room'] = 5
+        return "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
+
+    if move_name == 'magic-room':
+        if field['magic_room'] > 0:
+            field['magic_room'] = 0
+            return "↳ Magic Room wore off, and held items regained their power!\n"
+        field['magic_room'] = 5
+        return "↳ It created a bizarre area in which held items lose their effects!\n"
+
+    if move_name == 'gravity':
+        if field['gravity'] > 0:
+            return "↳ But it failed! Gravity is already intense!\n"
+        field['gravity'] = 5
+        log = "↳ Gravity intensified!\n"
+        # 🚨 KINETIC GROUNDING: anything currently airborne is slammed into the dirt
+        for p in [attacker, defender]:
+            if p and p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
+                end_charge(p)
+                log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
+        return log
+
+    return ""
+
+
+def apply_status_outcome(defender, inflicted, move_stats):
+    """
+    Land whatever condition the move inflicted: flinch first, then the major statuses.
+
+    Flinch is intercepted rather than written to the status slot - it is a volatile that
+    lasts only until the target's next attempt to move.
+    """
+    if inflicted == 'flinch':
+        inflicted, flinched = None, True
+    else:
+        payload = move_stats or {}
+        flinched = (payload.get('ailment') == 'flinch'
+                    and random.randint(1, 100) <= (payload.get('ailment_chance') or 0))
+
+    if flinched:
+        defender.setdefault('volatile_statuses', {})['flinch'] = True
+
+    if not inflicted or inflicted == 'none':
+        return ""
+
+    duration = random.randint(1, 3) if inflicted == 'sleep' else -1
+    defender['status_condition'] = {'name': inflicted, 'duration': duration}
+    icons = {'burn': '🔥', 'poison': '☣️', 'paralysis': '⚡', 'sleep': '💤', 'freeze': '🧊'}
+    return (f"{icons.get(inflicted, '⚠️')} **{defender['name'].capitalize()}** "
+            f"was afflicted with {inflicted}!\n")
+
+
+def apply_stat_changes(attacker, defender, stat_chgs):
+    """Move every stage the physics engine asked for, and log each one."""
+    log = ""
+    for tgt, s_name, chg in (stat_chgs or []):
+        target_specimen = attacker if tgt == 'attacker' else defender
+        volatiles = target_specimen.setdefault('volatile_statuses', {})
+
+        if s_name == 'flinch':
+            volatiles['flinch'] = True
+            continue
+
+        # Intercept Custom Pathogens
+        if s_name == 'volatile_leech_seed':
+            volatiles.setdefault('leech-seed', True)
+            continue
+        if s_name == 'volatile_perish_song':
+            volatiles.setdefault('perish-song', 3)
+            continue
+
+        db_stat = STAT_STAGE_KEYS.get(s_name)
+        if not db_stat:
+            continue
+
+        if 'stat_stages' not in target_specimen:
+            target_specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0,
+                                              'sp_def': 0, 'speed': 0}
+        stages = target_specimen['stat_stages']
+        # .get, not [] - accuracy and evasion are absent from a fresh stage block
+        stages[db_stat] = max(-6, min(6, stages.get(db_stat, 0) + chg))
+
+        direction = "fell" if chg < 0 else "rose"
+        icon = "📉" if chg < 0 else "📈"
+        log += (f"{icon} **{target_specimen['name'].capitalize()}**'s "
+                f"{s_name.replace('-', ' ')} {direction}!\n")
+
+        # ==========================================
+        # LASH OUT TRACKER
+        # ==========================================
+        if chg < 0:
+            volatiles['stats_lowered_this_turn'] = True
+    return log
+
+# ==========================================
 # 🚨 PRIMAL LOCKOUT
 # ==========================================
 # Primal Reversion is these species' transformation, and it is mutually exclusive with
@@ -2111,6 +2299,27 @@ class SwapMenu(discord.ui.View):
                                 if msg: combat_log += f"*{msg}*\n"
                                 # Tell the UI to actually announce the damage!
                                 if dmg > 0: combat_log += f"↳ Dealt **{dmg}** damage.\n"
+
+                                if heal_amt > 0:
+                                    n_active['current_hp'] = min(n_active.get('max_hp', 100),
+                                                                 n_active['current_hp'] + heal_amt)
+                                    combat_log += f"💚 **{n_active['name'].capitalize()}** recovered health!\n"
+
+                                # ==========================================
+                                # 🌦️ THE REST OF THE MOVE
+                                # ==========================================
+                                # This swing at the incoming specimen used to resolve damage
+                                # and discard everything else, so a rival Rain Dance, Toxic or
+                                # Swords Dance thrown here did nothing whatsoever.
+                                combat_log += apply_stat_changes(n_active, new_active, stat_chgs)
+                                combat_log += apply_status_outcome(new_active, inf_status, n_move_stats)
+
+                                magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
+                                move_name_used = chosen_move['name']
+                                combat_log += deploy_weather(state, move_name_used, n_active, magic_room_on)
+                                combat_log += deploy_terrain(state, move_name_used, n_active, magic_room_on)
+                                combat_log += deploy_field_toggle(state, move_name_used, n_active,
+                                                                  new_active, state['npc_hazards'])
                 else:
                     combat_log += f"💀 Your **{new_active['name'].capitalize()}** couldn't survive the treacherous habitat!\n"
 
@@ -4066,24 +4275,8 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # PHASE 1 & 2: THE FLINCH INTERCEPTOR
                         # ==========================================
-                        is_flinch_proc = False
-                        if inf_status == 'flinch':
-                            is_flinch_proc = True
-                            inf_status = None 
-                        elif move_stats.get('ailment') == 'flinch' and random.randint(1, 100) <= move_stats.get('ailment_chance', 0):
-                            is_flinch_proc = True
-
-                        if is_flinch_proc:
-                            if 'volatile_statuses' not in defender:
-                                defender['volatile_statuses'] = {}
-                            defender['volatile_statuses']['flinch'] = True
-
-                        # Process standard pathogens (Burn, Poison, etc.)
-                        if inf_status and inf_status != 'none':
-                            dur = random.randint(1, 3) if inf_status == 'sleep' else -1
-                            defender['status_condition'] = {'name': inf_status, 'duration': dur}
-                            hazard_icons = {'burn': '🔥', 'poison': '☣️', 'paralysis': '⚡', 'sleep': '💤', 'freeze': '🧊'}
-                            combat_log += f"{hazard_icons.get(inf_status, '⚠️')} **{defender['name'].capitalize()}** was afflicted with {inf_status}!\n"
+                        # Flinch interception + standard pathogens (Burn, Poison, etc.)
+                        combat_log += apply_status_outcome(defender, inf_status, move_stats)
 
                         # ==========================================
                         # THE OMNIBOOST DICTIONARY (Complex Mutations)
@@ -4106,43 +4299,7 @@ class BattleDashboard(discord.ui.View):
                                 stat_chgs = [] 
 
                         # Execute the Stat Changes
-                        for tgt, s_name, chg in stat_chgs:
-                            target_specimen = attacker if tgt == 'attacker' else defender
-                            
-                            if 'volatile_statuses' not in target_specimen:
-                                target_specimen['volatile_statuses'] = {}
-                                
-                            if s_name == 'flinch':
-                                target_specimen['volatile_statuses']['flinch'] = True
-                                continue 
-                                
-                            # Intercept Custom Pathogens
-                            if s_name == 'volatile_leech_seed':
-                                if 'leech-seed' not in target_specimen['volatile_statuses']:
-                                    target_specimen['volatile_statuses']['leech-seed'] = True
-                                continue
-                                
-                            if s_name == 'volatile_perish_song':
-                                if 'perish-song' not in target_specimen['volatile_statuses']:
-                                    target_specimen['volatile_statuses']['perish-song'] = 3
-                                continue
-
-                            stat_map = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed', 'accuracy':'accuracy', 'evasion': 'evasion'}
-                            db_stat = stat_map.get(s_name)
-                            if db_stat:
-                                if 'stat_stages' not in target_specimen:
-                                    target_specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
-                                curr_stg = target_specimen['stat_stages'][db_stat]
-                                target_specimen['stat_stages'][db_stat] = max(-6, min(6, curr_stg + chg))
-                                
-                                direction = "fell" if chg < 0 else "rose"
-                                icon = "📉" if chg < 0 else "📈"
-                                combat_log += f"{icon} **{target_specimen['name'].capitalize()}**'s {s_name.replace('-', ' ')} {direction}!\n"
-                                # ==========================================
-                                # LASH OUT TRACKER
-                                # ==========================================
-                                if chg < 0:
-                                    target_specimen['volatile_statuses']['stats_lowered_this_turn'] = True
+                        combat_log += apply_stat_changes(attacker, defender, stat_chgs)
 
                         # Only apply the exhaustion tag if the attack actually dealt damage,
                         # and never while Dynamaxed - Max Moves leave no recharge window.
@@ -4245,94 +4402,16 @@ class BattleDashboard(discord.ui.View):
                                         )
                         # ==========================================
 
-                        # CLIMATOLOGICAL OVERRIDES (PvE)
-                        new_weather = WEATHER_MOVES.get(str(effective_move_name))
-                        if new_weather:
-                            # Do not change weather if a Primordial climate is active!
-                            if state.get('weather', {}).get('primordial', False):
-                                combat_log += f"↳ The extreme weather prevented `{effective_move_name}` from taking effect!\n"
-                            else:
-                                attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
-                                weather_rocks = {'sun': 'heat-rock', 'rain': 'damp-rock', 'sand': 'smooth-rock', 'hail': 'icy-rock'}
-                                
-                                duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
-                                
-                                state['weather'] = {'type': new_weather, 'duration': duration, 'primordial': False}
-                                combat_log += f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
-                        # ==========================================
-                        # TERRAIN DEPLOYMENT
-                        # ==========================================
-                        new_terrain = TERRAIN_MOVES.get(str(effective_move_name))
-                        
-                        # 2. Check for Max Moves!
-                        if not new_terrain and (is_player and is_max_action):
-                            max_move_data = MAX_MOVES.get(move_stats['type']) 
-                            if max_move_data and 'terrain' in max_move_data:
-                                new_terrain = max_move_data['terrain']
+                        # CLIMATOLOGICAL OVERRIDES / TERRAIN / FIELD DEPLOYMENT (PvE)
+                        magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
+                        combat_log += deploy_weather(state, effective_move_name, attacker, magic_room_on)
+                        combat_log += deploy_terrain(
+                            state, effective_move_name, attacker, magic_room_on,
+                            max_move_type=move_stats['type'] if (is_player and is_max_action) else None)
+                        combat_log += deploy_field_toggle(
+                            state, raw_move_name, attacker, defender,
+                            state['player_hazards'] if is_player else state['npc_hazards'])
 
-                        if new_terrain:
-                            attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
-                            duration = 8 if attacker_item == 'terrain-extender' else 5
-                            
-                            if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
-                            
-                            if state['terrain']['type'] != new_terrain:
-                                state['terrain'] = {'type': new_terrain, 'duration': duration}
-                                combat_log += f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
-                        
-                        # ==========================================
-                        # 🚨 FIELD STATE DEPLOYMENT
-                        # ==========================================
-                        if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0, 'magic_room': 0}
-                        
-                        # 1. Tailwind (Side-Specific)
-                        if raw_move_name == 'tailwind':
-                            user_hazards = state['player_hazards'] if is_player else state['npc_hazards']
-                            if user_hazards.get('tailwind', 0) > 0:
-                                combat_log += "↳ But it failed! A tailwind is already blowing!\n"
-                            else:
-                                user_hazards['tailwind'] = 4
-                                combat_log += f"↳ The Tailwind blew from behind {attacker['name'].capitalize()}'s team!\n"
-                                
-                        # 2. Trick Room & Wonder Room (Global Toggles)
-                        elif raw_move_name == 'trick-room':
-                            if state['field']['trick_room'] > 0:
-                                state['field']['trick_room'] = 0
-                                combat_log += "↳ The twisted dimensions returned to normal!\n"
-                            else:
-                                state['field']['trick_room'] = 5
-                                combat_log += f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
-                                
-                        elif raw_move_name == 'wonder-room':
-                            if state['field']['wonder_room'] > 0:
-                                state['field']['wonder_room'] = 0
-                                combat_log += "↳ Wonder Room ended, and stats returned to normal!\n"
-                            else:
-                                state['field']['wonder_room'] = 5
-                                combat_log += "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
-
-                        elif raw_move_name == 'magic-room':
-                            if state['field']['magic_room'] > 0:
-                                state['field']['magic_room'] = 0
-                                combat_log += "↳ Magic Room wore off, and held items regained their power!\n"
-                            else:
-                                state['field']['magic_room'] = 5
-                                combat_log += "↳ It created a bizarre area in which held items lose their effects!\n"
-                                
-                        # 3. Gravity (Global Absolute)
-                        elif raw_move_name == 'gravity':
-                            if state['field']['gravity'] > 0:
-                                combat_log += "↳ But it failed! Gravity is already intense!\n"
-                            else:
-                                state['field']['gravity'] = 5
-                                combat_log += "↳ Gravity intensified!\n"
-                                
-                                # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
-                                for p in [attacker, defender]:
-                                    if p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
-                                        end_charge(p)
-                                        combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
-                                        
                         # ==========================================
                         # PHAZING ANOMALIES (PvE Forced Swaps)
                         # ==========================================
@@ -4674,7 +4753,7 @@ class BattleDashboard(discord.ui.View):
                         p_active['current_hp'] = max(0, p_active['current_hp'] - dmg)
                         if msg: combat_log += f"*{msg}*\n"
                         if dmg > 0: combat_log += f"You took **{dmg}** damage.\n"
-                        
+
                         # Did the attack trigger the player's Sitrus Berry?
                         berry_log = check_consumables(p_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
                         if berry_log: combat_log += berry_log
@@ -4683,6 +4762,22 @@ class BattleDashboard(discord.ui.View):
                         if heal_amt > 0:
                             n_active['current_hp'] = min(n_active.get('max_hp', 100), n_active['current_hp'] + heal_amt)
                             combat_log += f"💚 **{n_active['name'].capitalize()}** recovered health!\n"
+
+                        # ==========================================
+                        # 🌦️ THE REST OF THE MOVE
+                        # ==========================================
+                        # A free swing is still a real move: it sets weather, lays terrain,
+                        # shifts stat stages and inflicts status exactly as it would on the
+                        # NPC's ordinary turn. Without this the rival's Rain Dance announced
+                        # itself here and changed nothing at all.
+                        combat_log += apply_stat_changes(n_active, p_active, stat_chgs)
+                        combat_log += apply_status_outcome(p_active, inf_status, n_move_stats)
+
+                        magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
+                        combat_log += deploy_weather(state, npc_move_name, n_active, magic_room_on)
+                        combat_log += deploy_terrain(state, npc_move_name, n_active, magic_room_on)
+                        combat_log += deploy_field_toggle(state, npc_move_name, n_active,
+                                                          p_active, state['npc_hazards'])
 
             await self.process_turn_end(interaction, combat_log)
 
@@ -7281,99 +7376,27 @@ class Combat(commands.Cog):
                     # CLIMATOLOGICAL OVERRIDES (Weather Moves) PvP
                     # ==========================================
                     effective_move_name = move.get('base_name', move['name'])
-                    
-                    # Try the exact name first (for 'Max Flare'), then fallback to hyphenated (for 'rain-dance')
-                    new_weather = WEATHER_MOVES.get(effective_move_name) or WEATHER_MOVES.get(effective_move_name.lower().replace(' ', '-'))
-                    
-                    if new_weather:
-                        # Do not change weather if a Primordial climate is active!
-                        if state.get('weather', {}).get('primordial', False):
-                            combat_log += f"↳ The extreme weather prevented `{effective_move_name}` from taking effect!\n"
-                        else:
-                            attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
-                            weather_rocks = {'sun': 'heat-rock', 'rain': 'damp-rock', 'sand': 'smooth-rock', 'hail': 'icy-rock'}
-                            
-                            duration = 8 if attacker_item == weather_rocks.get(new_weather) else 5
-                            
-                            state['weather'] = {'type': new_weather, 'duration': duration, 'primordial': False}
-                            combat_log += f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
-                        
+                    magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
+
+                    combat_log += deploy_weather(state, effective_move_name, attacker, magic_room_on)
+
                     if defender['current_hp'] <= 0:
                         combat_log += f"💀 **{opp_name}'s** {defender['name'].capitalize()} fainted!\n\n"
                     
                     # ==========================================
                     # TERRAIN DEPLOYMENT
                     # ==========================================
-                    new_terrain = TERRAIN_MOVES.get(str(effective_move_name))
-
-                    # 2. Check for Max Moves!
-                    if not new_terrain and (adp_state['active'] and is_max_move):
-                        max_move_data = MAX_MOVES.get(move.get('type'))
-                        if max_move_data and 'terrain' in max_move_data:
-                            new_terrain = max_move_data['terrain']
-
-                    if new_terrain:
-                        attacker_item = get_active_item(attacker, state.get('field', {}).get('magic_room', 0) > 0)
-                        duration = 8 if attacker_item == 'terrain-extender' else 5
-                        
-                        if 'terrain' not in state: state['terrain'] = {'type': 'none', 'duration': 0}
-                        
-                        if state['terrain']['type'] != new_terrain:
-                            state['terrain'] = {'type': new_terrain, 'duration': duration}
-                            combat_log += f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+                    combat_log += deploy_terrain(
+                        state, effective_move_name, attacker, magic_room_on,
+                        max_move_type=move.get('type') if (adp_state['active'] and is_max_move) else None)
             
                     # ==========================================
                     # 🚨 FIELD STATE DEPLOYMENT
                     # ==========================================
-                    if 'field' not in state: state['field'] = {'trick_room': 0, 'wonder_room': 0, 'gravity': 0, 'magic_room': 0}
-                    
-                    # 1. Tailwind (Side-Specific)
-                    if raw_move_name == 'tailwind':
-                        user_hazards = state['p1_hazards'] if player_tag == 'p1' else state['p2_hazards'] # Use state['player_hazards'] / npc_hazards in PvE!
-                        if user_hazards.get('tailwind', 0) > 0:
-                            combat_log += "↳ But it failed! A tailwind is already blowing!\n"
-                        else:
-                            user_hazards['tailwind'] = 4
-                            combat_log += f"↳ The Tailwind blew from behind {owner_name}'s team!\n"
-                            
-                    # 2. Trick Room & Wonder Room (Global Toggles)
-                    elif raw_move_name == 'trick-room':
-                        if state['field']['trick_room'] > 0:
-                            state['field']['trick_room'] = 0
-                            combat_log += "↳ The twisted dimensions returned to normal!\n"
-                        else:
-                            state['field']['trick_room'] = 5
-                            combat_log += f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
-                            
-                    elif raw_move_name == 'wonder-room':
-                        if state['field']['wonder_room'] > 0:
-                            state['field']['wonder_room'] = 0
-                            combat_log += "↳ Wonder Room ended, and stats returned to normal!\n"
-                        else:
-                            state['field']['wonder_room'] = 5
-                            combat_log += "↳ It created a bizarre area in which Defense and Sp. Def stats are swapped!\n"
-
-                    elif raw_move_name == 'magic-room':
-                        if state['field']['magic_room'] > 0:
-                            state['field']['magic_room'] = 0
-                            combat_log += "↳ Magic Room wore off, and held items regained their power!\n"
-                        else:
-                            state['field']['magic_room'] = 5
-                            combat_log += "↳ It created a bizarre area in which held items lose their effects!\n"
-                            
-                    # 3. Gravity (Global Absolute)
-                    elif raw_move_name == 'gravity':
-                        if state['field']['gravity'] > 0:
-                            combat_log += "↳ But it failed! Gravity is already intense!\n"
-                        else:
-                            state['field']['gravity'] = 5
-                            combat_log += "↳ Gravity intensified!\n"
-                            
-                            # 🚨 KINETIC GROUNDING: If anyone is currently flying, slam them into the dirt!
-                            for p in [attacker, defender]:
-                                if p.get('volatile_statuses', {}).get('semi_invulnerable') == 'air':
-                                    end_charge(p)
-                                    combat_log += f"↳ **{p['name'].capitalize()}** couldn't stay airborne because of gravity!\n"
+                    combat_log += deploy_field_toggle(
+                        state, raw_move_name, attacker, defender,
+                        state['p1_hazards'] if player_tag == 'p1' else state['p2_hazards'],
+                        team_label=owner_name)
 
             # ==========================================
             # PHASE 3: POST-TURN ENVIRONMENTAL DAMAGE & CLEANUP (PvP)
