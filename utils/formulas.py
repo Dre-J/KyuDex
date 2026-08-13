@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -335,7 +335,7 @@ def get_stat_scaled_power(move_name, attacker, defender):
 
     # --- RELATIVE BODY MASS ---
     if move_name in ['heavy-slam', 'heat-crash']:
-        ratio = get_species_weight(attacker) / max(0.1, get_species_weight(defender))
+        ratio = effective_weight(attacker) / max(0.1, effective_weight(defender))
         if ratio >= 5: return 120
         if ratio >= 4: return 100
         if ratio >= 3: return 80
@@ -344,7 +344,7 @@ def get_stat_scaled_power(move_name, attacker, defender):
 
     if move_name in ['grass-knot', 'low-kick']:
         # Purely the target's mass - a heavy target is easier to trip
-        weight = get_species_weight(defender)
+        weight = effective_weight(defender)
         if weight < 10:  return 20
         if weight < 25:  return 40
         if weight < 50:  return 60
@@ -2838,8 +2838,67 @@ def apply_stat_stage(raw_stat, stage):
         return int(raw_stat * (2.0 / (2.0 + abs(stage))))
     return raw_stat
 
+def stat_multiplier_for(pokemon, stat, weather='none', terrain='none'):
+    """
+    The flat multiplier an ability puts on one of its owner's own stats.
+
+    Huge Power, Marvel Scale, Defeatist and the rest. Every condition on the row is
+    optional and they AND together, so a bare row is unconditional. Returns 1.0 when
+    nothing applies.
+    """
+    if not pokemon:
+        return 1.0
+
+    trait = BIOLOGICAL_TRAITS.get('stat_multipliers', {}).get(get_active_ability(pokemon))
+    if not trait or stat not in trait['stats']:
+        return 1.0
+
+    wanted = trait.get('status')
+    if wanted is not None:
+        current = (pokemon.get('status_condition') or {}).get('name')
+        if not current:
+            return 1.0
+        if wanted != '*' and current not in wanted:
+            return 1.0
+
+    if 'weather' in trait and weather not in trait['weather']:
+        return 1.0
+    if 'terrain' in trait and terrain not in trait['terrain']:
+        return 1.0
+
+    if 'hp_at_or_below' in trait:
+        share = pokemon.get('current_hp', 0) / max(1, pokemon.get('max_hp', 1))
+        if share > trait['hp_at_or_below']:
+            return 1.0
+
+    return trait['multiplier']
+
+
+def accuracy_multiplier(attacker):
+    """
+    What an ability does to the accuracy of the move its owner is throwing.
+
+    Hustle's 1.5x Attack is paid for here. Shared by both engines' accuracy rolls so the
+    two copies of that block cannot disagree, and so Block 4 has somewhere to put
+    Compound Eyes and Victory Star.
+    """
+    return ACCURACY_MULTIPLIER_ABILITIES.get(get_active_ability(attacker), 1.0)
+
+
+def effective_weight(pokemon):
+    """
+    How heavy the specimen counts as, for Grass Knot, Low Kick, Heat Crash and Heavy Slam.
+
+    Heavy Metal doubles it and Light Metal halves it, so this wraps the species lookup
+    rather than every caller remembering to ask.
+    """
+    raw = get_species_weight(pokemon)
+    factor = WEIGHT_MULTIPLIER_ABILITIES.get(get_active_ability(pokemon), 1.0)
+    return max(0.1, raw * factor)
+
+
 def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False, magic_room=False,
-                         ignore_boosts=False):
+                         ignore_boosts=False, weather='none', terrain='none'):
     """
     Decides which Attack and Defense stats the damage formula reads, applies stat stages,
     Wonder Room and Assault Vest, and reports the category the move resolves as.
@@ -2870,6 +2929,15 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     phys_def = apply_stat_stage(defender.get('stats', {}).get('defense', 50), d_stages.get('defense', 0))
     spec_def = apply_stat_stage(defender.get('stats', {}).get('sp_def', 50), d_stages.get('sp_def', 0))
 
+    # Flat ability multipliers (Huge Power, Marvel Scale, Defeatist...). Applied AFTER the
+    # stages, which is where the real formula puts them, and to the stat itself rather
+    # than the damage - so Body Press swinging with Defense picks up Marvel Scale, and a
+    # Psyshock aimed at physical Defense picks up Fur Coat's owner's Defense boost.
+    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain))
+    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain))
+    phys_def = math.floor(phys_def * stat_multiplier_for(defender, 'defense', weather, terrain))
+    spec_def = math.floor(spec_def * stat_multiplier_for(defender, 'sp_def', weather, terrain))
+
     # Assault Vest reinforces the Sp. Def stat itself, so it follows that stat rather than
     # the move - a Psyshock aimed at physical Defense correctly ignores the vest.
     if get_active_item(defender, magic_room) == 'assault-vest':
@@ -2886,11 +2954,17 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     if move_name == 'foul-play':
         borrowed = apply_stat_stage(defender.get('stats', {}).get('attack', 50),
                                     d_stages_raw.get('attack', 0))
+        # The target's Huge Power comes along with its Attack, because it IS the target's
+        # Attack that is being swung
+        borrowed = math.floor(borrowed * stat_multiplier_for(defender, 'attack', weather, terrain))
         return borrowed, phys_def, 'physical'
 
     # --- BODY PRESS: swings with the user's own Defense ---
     if move_name == 'body-press':
         body_press_atk = apply_stat_stage(attacker.get('stats', {}).get('defense', 50), a_stages.get('defense', 0))
+        # Likewise Marvel Scale, which is a Defense boost the move is now attacking with
+        body_press_atk = math.floor(
+            body_press_atk * stat_multiplier_for(attacker, 'defense', weather, terrain))
         return body_press_atk, phys_def, 'physical'
 
     # --- PSYSHOCK FAMILY: special attack aimed at the physical wall ---
@@ -4461,13 +4535,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # stat stages, Wonder Room and Assault Vest. `effective_class` is what the move
         # actually resolved as, which can differ from its stored category for Photon
         # Geyser and Shell Side Arm.
-        a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room, magic_room)
+        a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender,
+                                                     wonder_room, magic_room,
+                                                     weather=weather, terrain=terrain)
 
         # A critical hit reads the same stats with unfavourable stages stripped out. We
         # resolve that variant up front and express it as a ratio, so the multi-strike loop
         # can apply it per hit without recomputing the whole base damage.
         a_crit, d_crit, _ = resolve_combat_stats(move_name, move_class, attacker, defender,
-                                                 wonder_room, magic_room, ignore_boosts=True)
+                                                 wonder_room, magic_room, ignore_boosts=True,
+                                                 weather=weather, terrain=terrain)
 
         # Choice items reinforce the offensive stat the move ended up swinging with
         if effective_class == 'physical':
@@ -4652,6 +4729,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             if cond == 'sound' and is_sound_move(move_name):
                 ability_mod *= blunter['multiplier']
             elif cond == 'move_type' and move_type in blunter['types']:
+                ability_mod *= blunter['multiplier']
+            # Fur Coat and Ice Scales blunt a whole category. Read off the category the
+            # move RESOLVED as, so a Photon Geyser that turned physical meets Fur Coat.
+            elif cond == 'move_class' and effective_class in blunter['classes']:
                 ability_mod *= blunter['multiplier']
 
 
@@ -5247,7 +5328,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Insomnia on, so the sleep lock it grants has to actually hold; Vital Spirit is the
     # same trait under a different name, and Water Bubble refuses burns.
     refused = STATUS_IMMUNE_ABILITIES.get(def_ability, ())
-    if inflicted_status and inflicted_status in refused:
+    if inflicted_status and (refused == ALL_STATUSES or inflicted_status in refused):
         blocked = inflicted_status
         inflicted_status = None
         verb = "keeps it wide awake" if blocked == 'sleep' else f"refuses the {blocked}"
