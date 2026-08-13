@@ -7,7 +7,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY
 from utils import checks
 import aiohttp
@@ -1253,6 +1253,11 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
                         f"**{entering_combatant['name'].replace('-', ' ').title()}**!\n")
         except Exception as e:
             print(f"DEBUG: Failed Crowned form change: {e}")
+
+    # What it walked on holding, for Unburden: the boost is for having LOST the item, so
+    # a specimen that arrives empty-handed never earns it. Re-recorded on every entry, so
+    # switching out and back in with nothing does not keep an old boost alive.
+    entering_combatant['_entry_item'] = get_stored_item(entering_combatant)
 
     # A Healing Wish or Lunar Dance left behind by the previous occupant lands here,
     # before anything else the arrival triggers.
@@ -3898,36 +3903,19 @@ class BattleDashboard(discord.ui.View):
                 # 3. KINETIC SPEED CHECK (PvE)
                 # ==========================================
                 def get_true_speed(specimen, has_tailwind=False):
-                    raw_spd = specimen['stats']['speed']
-                    stage = specimen.get('stat_stages', {}).get('speed', 0)
-                    
-                    # Apply biological stages
-                    if stage > 0: multiplier = (2.0 + stage) / 2.0
-                    elif stage < 0: multiplier = 2.0 / (2.0 + abs(stage))
-                    else: multiplier = 1.0
-                    
-                    final_spd = int(raw_spd * multiplier)
-                    
-                    # --- Equipment Modifiers ---
-                    item = get_active_item(specimen, state.get('field', {}).get('magic_room', 0) > 0)
-                    if item == 'choice-scarf':
-                        final_spd = int(final_spd * 1.5)
-
-                    # Apply Paralysis penalty
-                    status = specimen.get('status_condition', {})
-                    if status and status.get('name') == 'paralysis':
-                        final_spd = int(final_spd * 0.5)
-                    
-                    # Tailwind Multiplier
-                    if has_tailwind: final_spd *= 2.0
-                    return final_spd
+                    """Thin wrapper so the two engines share one speed calculation."""
+                    return battle_speed(
+                        specimen, has_tailwind,
+                        weather=state.get('weather', {'type': 'none'})['type'],
+                        terrain=state.get('terrain', {'type': 'none'})['type'],
+                        magic_room=state.get('field', {}).get('magic_room', 0) > 0)
 
                 # Fetch Tailwind Statuses
                 p_has_tailwind = state.get('player_hazards', {}).get('tailwind', 0) > 0
                 n_has_tailwind = state.get('npc_hazards', {}).get('tailwind', 0) > 0
 
-                p_speed = get_true_speed(p_active)
-                n_speed = get_true_speed(n_active)
+                p_speed = get_true_speed(p_active, p_has_tailwind)
+                n_speed = get_true_speed(n_active, n_has_tailwind)
 
                 
                 # Sucker Punch reads these: the queue already knows both moves, so the
@@ -6775,30 +6763,12 @@ class Combat(commands.Cog):
             
             # KINETIC SPEED CHECK (PvP)
             def get_combat_speed(pokemon, has_tailwind=False):
-                base_spd = pokemon['stats'].get('speed', 50)
-                stage = pokemon.get('stat_stages', {}).get('speed', 0)
-                
-                # 1. Calculate the base biological multiplier first
-                if stage > 0: multiplier = (2.0 + stage) / 2.0
-                elif stage < 0: multiplier = 2.0 / (2.0 + abs(stage))
-                else: multiplier = 1.0
-                
-                final_spd = base_spd * multiplier
-                
-                # 2. Apply Equipment Modifiers
-                item = get_active_item(pokemon, state.get('field', {}).get('magic_room', 0) > 0)
-                if item == 'choice-scarf':
-                    final_spd *= 1.5
-
-                # 🚨 TAILWIND MULTIPLIER
-                if has_tailwind: final_spd *= 2.0
-              
-                # 3. Apply Pathogen Penalties
-                status = pokemon.get('status_condition') or {}
-                if status and status.get('name') == 'paralysis':
-                    final_spd *= 0.5
-                    
-                return int(final_spd) # Ensure we return a clean integer!
+                """Thin wrapper so the two engines share one speed calculation."""
+                return battle_speed(
+                    pokemon, has_tailwind,
+                    weather=state.get('weather', {'type': 'none'})['type'],
+                    terrain=state.get('terrain', {'type': 'none'})['type'],
+                    magic_room=state.get('field', {}).get('magic_room', 0) > 0)
 
             # Sucker Punch reads these - see the PvE side for the reasoning
             p1_active['_committed_move'] = (c1.get('data') or {}).get('class') if c1.get('type') == 'attack' else None
