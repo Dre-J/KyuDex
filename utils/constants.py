@@ -359,6 +359,8 @@ EQUIPMENT_CATALOG = {
     # Form Items
     "reveal-glass":  {"name": "Reveal Glass", "price": 0, "desc": "Allows the weather trio to switch between forms.", "emoji": "🧬", "category": "formitems", "purchasable": False},
     "dna-splicers":  {"name": "DNA Splicers", "price": 0, "desc": "Allows Kyurem to fuse with Reshiram or Zekrom.", "emoji": "🧬", "category": "formitems", "purchasable": False},
+    "rusted-sword":  {"name": "Rusted Sword", "price": 0, "desc": "Zacian takes its Crowned form while holding this.", "emoji": "⚔️", "category": "formitems", "purchasable": False},
+    "rusted-shield":  {"name": "Rusted Shield", "price": 0, "desc": "Zamazenta takes its Crowned form while holding this.", "emoji": "🛡️", "category": "formitems", "purchasable": False},
     
     # Evolution Items
     "water-stone":    {"name": "Water Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, blue and glistens.", "emoji": "💎", "category": "evoitems"},
@@ -487,7 +489,34 @@ BIOLOGICAL_TRAITS = {
         'iron-fist':     {'condition': 'punch', 'multiplier': 1.2},
         'strong-jaw':    {'condition': 'bite', 'multiplier': 1.5},
         'mega-launcher': {'condition': 'pulse', 'multiplier': 1.5},
-        'technician':    {'condition': 'power_cap', 'threshold': 60, 'multiplier': 1.5}
+        'technician':    {'condition': 'power_cap', 'threshold': 60, 'multiplier': 1.5},
+
+        # --- Element-gated. Values are the CURRENT generation's, matching the movepool
+        # rebuild: Transistor was nerfed from 1.5 to 1.3 in Gen 9, and Steely Spirit now
+        # boosts the holder's own Steel moves rather than only an ally's.
+        'steelworker':   {'condition': 'move_type', 'types': ['steel'], 'multiplier': 1.5},
+        'steely-spirit': {'condition': 'move_type', 'types': ['steel'], 'multiplier': 1.5},
+        'transistor':    {'condition': 'move_type', 'types': ['electric'], 'multiplier': 1.3},
+        'dragons-maw':   {'condition': 'move_type', 'types': ['dragon'], 'multiplier': 1.5},
+        'rocky-payload': {'condition': 'move_type', 'types': ['rock'], 'multiplier': 1.5},
+        'fire-mane':     {'condition': 'move_type', 'types': ['fire'], 'multiplier': 1.5},
+        'water-bubble':  {'condition': 'move_type', 'types': ['water'], 'multiplier': 2.0},
+
+        # --- Everything else needs its own kind of condition
+        'reckless':      {'condition': 'recoil', 'multiplier': 1.2},
+        'punk-rock':     {'condition': 'sound', 'multiplier': 1.3},
+        'sand-force':    {'condition': 'weather_type', 'weather': ['sand'],
+                          'types': ['rock', 'ground', 'steel'], 'multiplier': 1.3},
+        'neuroforce':    {'condition': 'super_effective', 'multiplier': 1.25},
+        'rivalry':       {'condition': 'gender', 'same': 1.25, 'opposite': 0.75},
+    },
+
+    # The defensive half of the same idea: a multiplier on damage COMING IN, keyed on the
+    # target's ability. Punk Rock and Water Bubble each cut the very thing they amplify,
+    # so both sit in this table and the one above.
+    'incoming_multipliers': {
+        'punk-rock':    {'condition': 'sound', 'multiplier': 0.5},
+        'water-bubble': {'condition': 'move_type', 'types': ['fire'], 'multiplier': 0.5},
     },
     'end_of_turn': {
         'speed-boost': {'type': 'stat', 'stat': 'speed', 'value': 1},
@@ -496,7 +525,12 @@ BIOLOGICAL_TRAITS = {
         'rain-dish':   {'type': 'weather_heal', 'weather': ['rain', 'heavy-rain'], 'denominator': 16},
         'ice-body':    {'type': 'weather_heal', 'weather': ['hail'], 'denominator': 16},
         # 🚨 NEW: Pathogen Symbiosis
-        'poison-heal': {'type': 'status_heal', 'status': 'poison', 'denominator': 8}
+        'poison-heal': {'type': 'status_heal', 'status': 'poison', 'denominator': 8},
+
+        # Shed Skin's weather-gated cousin - certain rather than a 33% roll
+        'hydration':   {'type': 'weather_cure', 'weather': ['rain', 'heavy-rain']},
+        # The only end-of-turn trait aimed at the OPPONENT rather than its owner
+        'bad-dreams':  {'type': 'sleep_drain', 'denominator': 8},
     },
     'contact_status': {
         'static': {'status': 'paralysis', 'immune': 'electric'},
@@ -504,8 +538,28 @@ BIOLOGICAL_TRAITS = {
         'poison-point': {'status': 'poison', 'immune': 'poison'},
         'effect-spore': {'status': 'poison', 'immune': 'poison'}
     },
+
+    # The mirror of contact_status: the ATTACKER's ability infecting whoever it touches,
+    # rather than the defender's punishing whoever touched it.
+    'contact_status_offensive': {
+        'poison-touch': {'status': 'poison', 'immune': 'poison', 'chance': 30},
+    },
     'contact_damage': ['rough-skin', 'iron-barbs'],
 }
+
+# Statuses an ability simply refuses. Replaces the ad-hoc Insomnia branch that used to sit
+# alone in the immunity filter; Block 7 (Immunity, Limber, Magma Armor, Water Veil...)
+# extends this rather than adding more branches beside it.
+STATUS_IMMUNE_ABILITIES = {
+    'insomnia':     {'sleep'},
+    'vital-spirit': {'sleep'},
+    'water-bubble': {'burn'},
+}
+
+# Abilities that shrug off the sandstorm/hail chip damage. Type immunity is handled
+# separately, on the types themselves. Block 7 adds Overcoat and Magic Guard here, and
+# Block 4 adds Sand Veil and Snow Cloak.
+WEATHER_CHIP_IMMUNE_ABILITIES = {'sand-force'}
 
 # ==========================================
 # KINETIC MULTI-STRIKE PROFILES

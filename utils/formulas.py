@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -1997,6 +1997,52 @@ SOUND_MOVES = {
     'relic-song', 'roar', 'round', 'screech', 'shadow-panic', 'sing', 'snarl',
     'snore', 'sparkling-aria', 'supersonic', 'torch-song', 'uproar',
 }
+
+# Reckless boosts these two despite their carrying no recoil in the database: they hurt
+# their user only on a MISS, which the schema has no field for.
+CRASH_MOVES = {'jump-kick', 'high-jump-kick'}
+
+# Typings that refuse a condition outright. The contact abilities used to carry a single
+# 'immune' type each, which meant Poison Point could poison a Steel type - the immunity
+# filter that knows better runs on `inflicted_status`, and a contact ability writes the
+# status slot directly, going around it.
+STATUS_TYPE_IMMUNITY = {
+    'paralysis': {'electric'},
+    'burn':      {'fire'},
+    'poison':    {'poison', 'steel'},
+    'freeze':    {'ice'},
+}
+
+
+def status_type_immune(status, types):
+    """True when the target's typing refuses the condition outright."""
+    return bool(STATUS_TYPE_IMMUNITY.get(status, set()) & set(types or []))
+
+
+def normalise_move_name(move_name):
+    """Move names reach here as both 'Rain Dance' and 'rain-dance' depending on the path."""
+    return str(move_name or '').lower().replace(' ', '-')
+
+
+def is_sound_move(move_name):
+    """Sound-based, for Punk Rock, Soundproof and the Substitute bypass."""
+    return normalise_move_name(move_name) in SOUND_MOVES
+
+
+def is_recoil_move(move_name, move=None):
+    """
+    True for moves that hurt their own user when they land.
+
+    Recoil is stored as a NEGATIVE drain percentage, which is already how the engine
+    applies it, so there is no separate list to drift out of date. Struggle is excluded:
+    its recoil is a fixed fraction applied by the engine, and Reckless does not boost it.
+    """
+    name = normalise_move_name(move_name)
+    if name == 'struggle':
+        return False
+    if name in CRASH_MOVES:
+        return True
+    return ((move or {}).get('drain') or 0) < 0
 
 
 def substitute_hp(pokemon):
@@ -4579,13 +4625,36 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         amplifier = BIOLOGICAL_TRAITS.get('damage_multipliers', {}).get(atk_ability)
         if amplifier:
             cond = amplifier['condition']
-            mult = amplifier['multiplier']
+            mult = amplifier.get('multiplier', 1.0)
             if cond == 'contact' and move.get('class') == 'physical': ability_mod *= mult
             elif cond == 'punch' and 'punch' in move_name: ability_mod *= mult
             elif cond == 'bite' and any(term in move_name for term in ['bite', 'fang', 'crunch']): ability_mod *= mult
             elif cond == 'pulse' and any(term in move_name for term in ['pulse', 'aura-sphere']): ability_mod *= mult
             elif cond == 'power_cap' and 0 < move_power <= amplifier['threshold']: ability_mod *= mult
-        
+            elif cond == 'move_type' and move_type in amplifier['types']: ability_mod *= mult
+            elif cond == 'sound' and is_sound_move(move_name): ability_mod *= mult
+            elif cond == 'recoil' and is_recoil_move(move_name, move): ability_mod *= mult
+            elif cond == 'super_effective' and type_multiplier > 1.0: ability_mod *= mult
+            elif (cond == 'weather_type' and weather in amplifier['weather']
+                  and move_type in amplifier['types']): ability_mod *= mult
+            elif cond == 'gender':
+                # Rivalry cuts both ways, and does nothing at all if either side's gender
+                # is unknown - the same rule Attract obeys.
+                a_gender, d_gender = attacker.get('gender'), defender.get('gender')
+                if a_gender in ('M', 'F') and d_gender in ('M', 'F'):
+                    ability_mod *= amplifier['same'] if a_gender == d_gender else amplifier['opposite']
+
+        # The defensive half, keyed on the TARGET's ability. Punk Rock and Water Bubble
+        # each blunt exactly what they amplify, so they appear in both tables.
+        blunter = BIOLOGICAL_TRAITS.get('incoming_multipliers', {}).get(def_ability)
+        if blunter:
+            cond = blunter['condition']
+            if cond == 'sound' and is_sound_move(move_name):
+                ability_mod *= blunter['multiplier']
+            elif cond == 'move_type' and move_type in blunter['types']:
+                ability_mod *= blunter['multiplier']
+
+
         if atk_ability == 'flash-fire' and move_type == 'fire' and attacker.get('volatile_statuses', {}).get('flash_fire'):
             ability_mod *= 1.5
         if def_ability == 'dry-skin' and move_type == 'fire':
@@ -4945,11 +5014,32 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if contact_trait and not attacker.get('status_condition'):
             # These abilities have a 30% trigger rate in the franchise ecosystem
             if random.randint(1, 100) <= 30:
-                immune_type = contact_trait.get('immune')
                 # Ensure the attacker isn't biologically immune to the pathogen!
-                if immune_type not in atk_types:
+                # Read off the shared table rather than the row's single 'immune' type,
+                # which knew about Poison but not Steel.
+                if not status_type_immune(contact_trait['status'], atk_types):
                     attacker['status_condition'] = {'name': contact_trait['status'], 'duration': -1}
                     msg += f" {attacker['name'].capitalize()} was afflicted with {contact_trait['status']} by {defender['name'].capitalize()}'s {def_ability.replace('-', ' ').title()}!"
+
+        # 1b. OFFENSIVE CONTACT STATUS (Poison Touch) - the attacker infecting what it hits
+        touch_trait = BIOLOGICAL_TRAITS.get('contact_status_offensive', {}).get(atk_ability)
+        if touch_trait and not defender.get('status_condition'):
+            if random.randint(1, 100) <= touch_trait.get('chance', 30):
+                if not status_type_immune(touch_trait['status'], defender.get('types')):
+                    defender['status_condition'] = {'name': touch_trait['status'], 'duration': -1}
+                    msg += (f" {defender['name'].capitalize()} was afflicted with "
+                            f"{touch_trait['status']} by {attacker['name'].capitalize()}'s "
+                            f"{pretty_ability(atk_ability)}!")
+
+        # 1c. CUTE CHARM - infatuation is a VOLATILE, not a major status, so it cannot ride
+        # the contact_status table: writing it into the status slot is the exact bug that
+        # made Attract block every other condition. Obeys the same gender rule.
+        if def_ability == 'cute-charm' and random.randint(1, 100) <= 30:
+            shielded_by = infatuation_blocked_by(attacker)
+            if not shielded_by and can_be_infatuated(defender, attacker):
+                attacker.setdefault('volatile_statuses', {})['infatuation'] = True
+                msg += (f" 💘 {attacker['name'].capitalize()} fell in love with "
+                        f"{defender['name'].capitalize()}'s Cute Charm!")
 
 
     # ==========================================
@@ -5153,12 +5243,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         inflicted_status = None
         msg += f" {defender['name'].capitalize()}'s Ice typing makes it immune to freezing!"
 
-    # Worry Seed's whole purpose is to staple this on, so the sleep lock it grants has to
-    # actually hold. Vital Spirit is the same trait under a different name.
-    if inflicted_status == 'sleep' and def_ability in ['insomnia', 'vital-spirit']:
+    # Abilities that simply refuse a condition. Worry Seed's whole purpose is to staple
+    # Insomnia on, so the sleep lock it grants has to actually hold; Vital Spirit is the
+    # same trait under a different name, and Water Bubble refuses burns.
+    refused = STATUS_IMMUNE_ABILITIES.get(def_ability, ())
+    if inflicted_status and inflicted_status in refused:
+        blocked = inflicted_status
         inflicted_status = None
+        verb = "keeps it wide awake" if blocked == 'sleep' else f"refuses the {blocked}"
         msg += (f" {defender['name'].capitalize()}'s {pretty_ability(def_ability)} "
-                f"keeps it wide awake!")
+                f"{verb}!")
 
     # ==========================================
     # PHASE 6: THERMODYNAMIC REACTIONS
