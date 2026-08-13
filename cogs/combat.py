@@ -735,6 +735,159 @@ def apply_stat_changes(attacker, defender, stat_chgs):
             volatiles['stats_lowered_this_turn'] = True
     return log
 
+
+# ==========================================
+# 🧠 SHARED NPC MOVE SELECTION
+# ==========================================
+# One scorer for all three PvE paths. The ordinary turn had the full heuristic, the free
+# swing after an item had only the damage half, and the swing at a swapped-in specimen had
+# no scoring whatsoever - it picked at random, so the rival would happily throw Splash over
+# a super-effective attack.
+
+NPC_HEAL_MOVES = ['roost', 'recover', 'soft-boiled', 'slack-off']
+NPC_PATHOGEN_MOVES = ['will-o-wisp', 'toxic', 'thunder-wave', 'spore', 'sleep-powder']
+NPC_PROTECT_MOVES = ['protect', 'detect', 'spiky-shield', 'king-shield']
+
+
+async def pick_npc_move(db, available_moves, npc, foe, state, context='ATTACK'):
+    """
+    Score every move the NPC could throw and hand back the best of them.
+
+    Returns (chosen_move, score). `npc` is the one acting, `foe` the one it is scoring
+    against. A score of -10000 or worse means "do not do this"; the +10000 bonuses are
+    the executioner, which outranks everything else on the board.
+    """
+    best_moves = []
+    highest_score = -10000.0
+
+    foe_types = foe.get('types', [])
+    npc_types = npc.get('types', [])
+    npc_hp_pct = npc['current_hp'] / max(1, npc.get('max_hp', 1))
+    magic_room = state.get('field', {}).get('magic_room', 0) > 0
+
+    for m in available_moves:
+        async with db.execute(
+            "SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?",
+            (m['name'],)) as cursor:
+            m_data = await cursor.fetchone()
+
+        if not m_data:
+            continue
+
+        m_type, m_power, m_class, m_heal, m_target = m_data
+        m_power = m_power or 0
+        m_heal = m_heal or 0
+
+        # HP-scaled moves store the wrong power (0, or a flat 150 for Eruption). Recompute
+        # it for this exact matchup so the AI stops firing a full-strength Water Spout at
+        # 10% HP.
+        scaled_power = resolve_dynamic_power(m['name'], npc, foe)
+        if scaled_power is not None:
+            m_power = scaled_power
+
+        score = 10.0  # Base minimum score
+
+        # 1. DAMAGE CALCULATION & THE EXECUTIONER
+        if m_class != 'status' and m_power > 0:
+            multiplier = 1.0
+            for foe_type in foe_types:
+                multiplier *= TYPE_CHART.get(m_type, {}).get(foe_type, 1.0)
+
+            # STAB (Same Type Attack Bonus) calculation
+            if m_type in npc_types:
+                multiplier *= 1.5
+
+            estimated_damage = m_power * multiplier
+            score += estimated_damage
+
+            # A rough estimate rather than the full physics engine, which would mean
+            # running calculate_damage once per candidate move per turn.
+            if estimated_damage >= (foe['current_hp'] * 0.8):
+                score += 10000.0
+
+        # 1b. FORMULA-BYPASS MOVES
+        # Set damage, level damage, HP-fraction cuts, Endeavor and the OHKO family all
+        # carry 0 power in the database, so the block above skips them. We score them on
+        # the HP they actually remove.
+        elif m['name'] in FORMULA_BYPASS_MOVES:
+            payload = estimate_bypass_payload(m['name'], m_type, npc, foe)
+
+            if payload <= 0:
+                # Immune, out-levelled, or otherwise guaranteed to fail
+                score -= 10000.0
+            else:
+                score += payload
+
+                if payload >= foe['current_hp']:
+                    score += 10000.0   # It secures the KO!
+                elif m['name'] == 'final-gambit':
+                    # Suiciding without landing the kill is a pure loss
+                    score -= 5000.0
+
+        # 2. STATUS & UTILITY SCORING
+        if m_class == 'status':
+
+            # Self-Preservation (Smart Healing)
+            is_recovery = m_heal > 0 or m['name'] in NPC_HEAL_MOVES
+            if is_recovery:
+                if npc_hp_pct < 0.4: score += 5000.0      # Bleeding out! Panicked healing!
+                elif npc_hp_pct > 0.8: score -= 10000.0   # Don't waste a turn overhealing
+                else: score += 500.0
+
+            # Pathogen Targeting (Smart Status Conditions)
+            if m['name'] in NPC_PATHOGEN_MOVES:
+                if foe.get('status_condition'):
+                    score -= 10000.0   # Do not try to burn a poisoned target!
+                else:
+                    score += 800.0
+
+            # Tactical Setup (Swords Dance, Calm Mind).
+            # The column holds a name, not the PokeAPI id - this used to compare it
+            # against 7 and so never once fired. Recovery is self-targeted too, and it is
+            # the one self-targeted thing a dying specimen SHOULD reach for, so it is
+            # scored above and excluded here.
+            if m_target == 'user' and not is_recovery and m['name'] not in NPC_PROTECT_MOVES:
+                if npc_hp_pct > 0.7: score += 400.0       # Healthy? Set up!
+                elif npc_hp_pct < 0.3: score -= 5000.0    # Dying? Do NOT set up!
+
+            # Ability manipulation (Gastro Acid, Skill Swap...)
+            # Only worth a turn if it would actually land - most of these fail flat
+            # against the wrong target.
+            would_land = ability_move_would_land(m['name'], npc, foe)
+            if would_land is False:
+                score -= 10000.0
+            elif would_land:
+                score += 600.0
+
+            # Item manipulation (Trick, Bestow, Embargo...)
+            item_lands = item_move_would_land(m['name'], npc, foe, magic_room)
+            if item_lands is False:
+                score -= 10000.0
+            elif item_lands:
+                score += 600.0
+
+            # Stalling (Smart Protect)
+            if m['name'] in NPC_PROTECT_MOVES:
+                if state.get('npc_used_protect_last_turn'):
+                    score -= 10000.0   # Never spam Protect twice
+                elif foe.get('status_condition') or 'leech-seed' in foe.get('volatile_statuses', {}):
+                    score += 2000.0    # Player is bleeding out. Stall them!
+
+        # Lock in the highest score
+        if score > highest_score:
+            highest_score = score
+            best_moves = [m]
+        elif score == highest_score:
+            best_moves.append(m)
+
+    chosen = random.choice(best_moves) if best_moves else random.choice(available_moves)
+
+    # Remember if the NPC used Protect so it doesn't spam it next turn
+    state['npc_used_protect_last_turn'] = chosen['name'] in NPC_PROTECT_MOVES
+
+    print(f"DEBUG AI [{context}]: Selected '{chosen['name']}' (Score: {highest_score})")
+    return chosen, highest_score
+
 # ==========================================
 # 🚨 PRIMAL LOCKOUT
 # ==========================================
@@ -2257,17 +2410,23 @@ class SwapMenu(discord.ui.View):
                 if new_active['current_hp'] > 0:
                     available_moves = usable_moves(n_active, p_active)
                     if available_moves:
-                        chosen_move = random.choice(available_moves)
-                        chosen_move['pp'] -= 1 
-                        
                         async with aiosqlite.connect(DB_FILE) as db:
+                            # Scored against p_active, the specimen that was standing there
+                            # when the NPC committed - a switch does not let the opponent
+                            # re-pick in the mainline games either. The blow still lands on
+                            # whoever came in.
+                            chosen_move, _score = await pick_npc_move(
+                                db, available_moves, n_active, p_active, state,
+                                context='SWAP-IN SWING')
+                            chosen_move['pp'] -= 1
+
                             async with db.execute("""
-                            SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance, 
+                            SELECT type, power, accuracy, damage_class, target, ailment, ailment_chance,
                                 stat_name, stat_change, stat_chance, healing, drain, name, priority
                             FROM base_moves WHERE name = ?
                         """, (chosen_move['name'],)) as cursor:
                                 n_row = await cursor.fetchone()
-                        
+
                         if n_row:
                             # Perfectly mapped all 14 variables
                             n_move_stats = {
@@ -2278,7 +2437,13 @@ class SwapMenu(discord.ui.View):
                                 'name': n_row[12], 'priority': n_row[13] or 0
                             }
                             
-                            combat_log += f"🔴 The rival's **{n_active['name'].capitalize()}** struck the incoming Pokémon with `{chosen_move['name'].replace('-', ' ').title()}`!\n"
+                            # Now that this path scores its move properly it can pick a
+                            # status move, which nothing "strikes" anybody with.
+                            move_label = chosen_move['name'].replace('-', ' ').title()
+                            if n_move_stats['class'] == 'status':
+                                combat_log += f"🔴 The rival's **{n_active['name'].capitalize()}** used `{move_label}`!\n"
+                            else:
+                                combat_log += f"🔴 The rival's **{n_active['name'].capitalize()}** struck the incoming Pokémon with `{move_label}`!\n"
                             
                             if random.randint(1, 100) > n_move_stats['accuracy']:
                                 combat_log += "The attack missed!\n"
@@ -3533,132 +3698,10 @@ class BattleDashboard(discord.ui.View):
                                 combat_log += f"⚠️ The rival's **{n_active['name'].capitalize()}** has no energy left!\n"
                             else:
                                 # --- TACTICAL PRIORITY FILTER (PHASE 3 UTILITY AI) ---
-                                best_moves = []
-                                highest_score = -10000.0
-                                
-                                p_types = p_active.get('types', [])
-                                n_types = n_active.get('types', [])
-                                
-                                # Calculate health percentages for tactical decisions
-                                p_hp_pct = p_active['current_hp'] / max(1, p_active.get('max_hp', 1))
-                                n_hp_pct = n_active['current_hp'] / max(1, n_active.get('max_hp', 1))
-                                
-                                for m in available_moves:
-                                    async with db.execute("SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?", (m['name'],)) as cursor:
-                                        m_data = await cursor.fetchone()
-                                    
-                                    if m_data:
-                                        m_type, m_power, m_class, m_heal, m_target = m_data
-                                        m_power = m_power or 0
-                                        m_heal = m_heal or 0
+                                chosen_move, _score = await pick_npc_move(
+                                    db, available_moves, n_active, p_active, state)
 
-                                        # HP-scaled moves store the wrong power (0, or a flat 150 for
-                                        # Eruption). Recompute it for this exact matchup so the AI stops
-                                        # firing a full-strength Water Spout at 10% HP.
-                                        scaled_power = resolve_dynamic_power(m['name'], n_active, p_active)
-                                        if scaled_power is not None:
-                                            m_power = scaled_power
-
-                                        score = 10.0 # Base minimum score
-                                        
-                                        # 1. DAMAGE CALCULATION & THE EXECUTIONER
-                                        if m_class != 'status' and m_power > 0:
-                                            multiplier = 1.0
-                                            for p_type in p_types:
-                                                multiplier *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
-                                                
-                                            # STAB (Same Type Attack Bonus) calculation
-                                            if m_type in n_types:
-                                                multiplier *= 1.5
-                                                
-                                            estimated_damage = (m_power * multiplier)
-                                            score += estimated_damage
-                                            
-                                            # The Executioner: Massive bonus if this move is highly likely to KO
-                                            # (We use a rough estimate here to avoid running the full physics engine on every bench move)
-                                            if estimated_damage >= (p_active['current_hp'] * 0.8):
-                                                score += 10000.0
-
-                                        # 1b. FORMULA-BYPASS MOVES
-                                        # Set damage, level damage, HP-fraction cuts, Endeavor and the
-                                        # OHKO family all carry 0 power in the database, so the block
-                                        # above skips them. We score them on the HP they actually remove.
-                                        elif m['name'] in FORMULA_BYPASS_MOVES:
-                                            payload = estimate_bypass_payload(m['name'], m_type, n_active, p_active)
-
-                                            if payload <= 0:
-                                                # Immune, out-levelled, or otherwise guaranteed to fail
-                                                score -= 10000.0
-                                            else:
-                                                score += payload
-
-                                                if payload >= p_active['current_hp']:
-                                                    score += 10000.0 # It secures the KO!
-                                                elif m['name'] == 'final-gambit':
-                                                    # Suiciding without landing the kill is a pure loss
-                                                    score -= 5000.0
-
-                                        # 2. STATUS & UTILITY SCORING
-                                        if m_class == 'status':
-                                            
-                                            # Self-Preservation (Smart Healing)
-                                            if m_heal > 0 or m['name'] in ['roost', 'recover', 'soft-boiled', 'slack-off']:
-                                                if n_hp_pct < 0.4: score += 5000.0    # Bleeding out! Panicked healing!
-                                                elif n_hp_pct > 0.8: score -= 10000.0 # Don't waste a turn overhealing
-                                                else: score += 500.0
-                                                
-                                            # Pathogen Targeting (Smart Status Conditions)
-                                            if m['name'] in ['will-o-wisp', 'toxic', 'thunder-wave', 'spore', 'sleep-powder']:
-                                                if p_active.get('status_condition'):
-                                                    score -= 10000.0 # Do not try to burn a poisoned target!
-                                                else:
-                                                    score += 800.0
-                                                    
-                                            # Tactical Setup (Swords Dance, Calm Mind)
-                                            # 'target' 7 is usually "user" in the PokeAPI schema
-                                            if m_target == 7 and m['name'] not in ['protect', 'detect']:
-                                                if n_hp_pct > 0.7: score += 400.0     # Healthy? Set up!
-                                                elif n_hp_pct < 0.3: score -= 5000.0  # Dying? Do NOT set up!
-                                                
-                                            # Ability manipulation (Gastro Acid, Skill Swap...)
-                                            # Only worth a turn if it would actually land -
-                                            # most of these fail flat against the wrong target.
-                                            would_land = ability_move_would_land(m['name'], n_active, p_active)
-                                            if would_land is False:
-                                                score -= 10000.0
-                                            elif would_land:
-                                                score += 600.0
-
-                                            # Item manipulation (Trick, Bestow, Embargo...)
-                                            item_lands = item_move_would_land(
-                                                m['name'], n_active, p_active,
-                                                state.get('field', {}).get('magic_room', 0) > 0)
-                                            if item_lands is False:
-                                                score -= 10000.0
-                                            elif item_lands:
-                                                score += 600.0
-
-                                            # Stalling (Smart Protect)
-                                            if m['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield']:
-                                                if state.get('npc_used_protect_last_turn'):
-                                                    score -= 10000.0 # Never spam Protect twice
-                                                elif p_active.get('status_condition') or 'leech-seed' in p_active.get('volatile_statuses', {}):
-                                                    score += 2000.0 # Player is bleeding out. Stall them!
-                                                    
-                                        # Lock in the highest score
-                                        if score > highest_score:
-                                            highest_score = score
-                                            best_moves = [m] 
-                                        elif score == highest_score:
-                                            best_moves.append(m) 
-                                            
-                                chosen_move = random.choice(best_moves) if best_moves else random.choice(available_moves)
-                                
-                                # Remember if the NPC used Protect so it doesn't spam it next turn!
-                                state['npc_used_protect_last_turn'] = (chosen_move['name'] in ['protect', 'detect', 'spiky-shield', 'king-shield'])
-                                
                                 npc_move_name = chosen_move['name']
-                                print(f"DEBUG AI [ATTACK]: Selected '{npc_move_name}' (Score: {highest_score})")
                                 chosen_move['pp'] -= 1 
                                 
                                 async with db.execute("""
@@ -4587,52 +4630,9 @@ class BattleDashboard(discord.ui.View):
                     n_move_stats = struggle_move()
                 else:
                     async with aiosqlite.connect(DB_FILE) as db:
-                        best_moves = []
-                        highest_score = -10000.0
-                        
-                        for m in available_moves:
-                            async with db.execute("SELECT type, power, damage_class, healing, target FROM base_moves WHERE name = ?", (m['name'],)) as cursor:
-                                m_data = await cursor.fetchone()
-                                
-                            if m_data:
-                                m_type, m_power, m_class, m_heal, m_target = m_data
-                                m_power = m_power or 0
-
-                                # Recompute dynamic power for HP-scaled moves
-                                scaled_power = resolve_dynamic_power(m['name'], n_active, p_active)
-                                if scaled_power is not None:
-                                    m_power = scaled_power
-
-                                score = 10.0
-
-                                if m_class != 'status' and m_power > 0:
-                                    mult = 1.0
-                                    for p_type in p_active.get('types', []):
-                                        mult *= TYPE_CHART.get(m_type, {}).get(p_type, 1.0)
-                                    if m_type in n_active.get('types', []): mult *= 1.5
-                                    score += (m_power * mult)
-
-                                # Formula-bypass moves carry 0 power, so score them by real HP removed
-                                elif m['name'] in FORMULA_BYPASS_MOVES:
-                                    payload = estimate_bypass_payload(m['name'], m_type, n_active, p_active)
-
-                                    if payload <= 0:
-                                        score -= 10000.0
-                                    else:
-                                        score += payload
-
-                                        if payload >= p_active['current_hp']:
-                                            score += 10000.0
-                                        elif m['name'] == 'final-gambit':
-                                            score -= 5000.0
-
-                                if score > highest_score:
-                                    highest_score = score
-                                    best_moves = [m]
-                                elif score == highest_score:
-                                    best_moves.append(m)
-                                    
-                        chosen_move = random.choice(best_moves) if best_moves else random.choice(available_moves)
+                        chosen_move, _score = await pick_npc_move(
+                            db, available_moves, n_active, p_active, state,
+                            context='FREE SWING')
                         npc_move_name = chosen_move['name']
                         chosen_move['pp'] -= 1
                         
