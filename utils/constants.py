@@ -537,6 +537,8 @@ BIOLOGICAL_TRAITS = {
     #   weather   - only while one of these is on the field
     #   terrain   - only while one of these is underfoot
     #   hp_at_or_below - only at or under this fraction of max HP
+    #   unburdened - only while it has lost the item it came in holding
+    #   turns_on_field_below - only for its first N turns since arriving
     'stat_multipliers': {
         'huge-power':      {'stats': ['attack'], 'multiplier': 2.0},
         'pure-power':      {'stats': ['attack'], 'multiplier': 2.0},
@@ -550,6 +552,23 @@ BIOLOGICAL_TRAITS = {
                             'weather': ['sun', 'extremely-harsh-sunlight']},
         'defeatist':       {'stats': ['attack', 'sp_atk'], 'multiplier': 0.5,
                             'hp_at_or_below': 0.5},
+
+        # --- Block 3: conditional speed. Same table, same conditions - the only new ones
+        # are `unburdened` and `turns_on_field_below`. Slow Start halves Attack as well as
+        # Speed, and gets both from the one row.
+        'swift-swim':      {'stats': ['speed'], 'multiplier': 2.0,
+                            'weather': ['rain', 'heavy-rain']},
+        'chlorophyll':     {'stats': ['speed'], 'multiplier': 2.0,
+                            'weather': ['sun', 'extremely-harsh-sunlight']},
+        'sand-rush':       {'stats': ['speed'], 'multiplier': 2.0,
+                            'weather': ['sand', 'sandstorm']},
+        'slush-rush':      {'stats': ['speed'], 'multiplier': 2.0,
+                            'weather': ['hail', 'snow']},
+        'surge-surfer':    {'stats': ['speed'], 'multiplier': 2.0, 'terrain': ['electric']},
+        'quick-feet':      {'stats': ['speed'], 'multiplier': 1.5, 'status': '*'},
+        'unburden':        {'stats': ['speed'], 'multiplier': 2.0, 'unburdened': True},
+        'slow-start':      {'stats': ['attack', 'speed'], 'multiplier': 0.5,
+                            'turns_on_field_below': 5},
     },
     'end_of_turn': {
         'speed-boost': {'type': 'stat', 'stat': 'speed', 'value': 1},

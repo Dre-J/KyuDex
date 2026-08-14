@@ -2871,7 +2871,67 @@ def stat_multiplier_for(pokemon, stat, weather='none', terrain='none'):
         if share > trait['hp_at_or_below']:
             return 1.0
 
+    if trait.get('unburdened') and not is_unburdened(pokemon):
+        return 1.0
+
+    if 'turns_on_field_below' in trait:
+        if (pokemon.get('turns_on_field') or 0) >= trait['turns_on_field_below']:
+            return 1.0
+
     return trait['multiplier']
+
+
+def is_unburdened(pokemon):
+    """
+    True while the specimen has lost the item it walked in holding.
+
+    Reads the STORED item rather than the active one on purpose: Embargo and Magic Room
+    switch an item off without taking it away, and Unburden is about the weight being
+    gone, not the effect. `_entry_item` is written by the switch-in hook; `_original_item`
+    is the battle-start snapshot, and is the fallback for any entry path that misses it.
+    """
+    if pokemon is None:
+        return False
+    came_in_with = pokemon.get('_entry_item')
+    if came_in_with is None:
+        came_in_with = pokemon.get('_original_item')
+    if not came_in_with or came_in_with == 'none':
+        return False
+    return get_stored_item(pokemon) == 'none'
+
+
+def battle_speed(pokemon, has_tailwind=False, weather='none', terrain='none', magic_room=False):
+    """
+    How fast this specimen actually moves this turn, for the turn-order check.
+
+    One function for both engines. They each had their own nested copy, and the copies had
+    already drifted: one applied Tailwind before the paralysis cut and the other after,
+    and they rounded at different points. Order here is stages, then the ability, then the
+    Choice Scarf, then paralysis, then Tailwind.
+
+    Quick Feet is the reason paralysis is checked against the ability rather than applied
+    blindly: it takes the 1.5x for being statused AND ignores the speed cut that being
+    paralysed would otherwise bring.
+    """
+    if not pokemon:
+        return 0
+
+    raw = (pokemon.get('stats') or {}).get('speed', 50)
+    speed = apply_stat_stage(raw, (pokemon.get('stat_stages') or {}).get('speed', 0))
+
+    speed *= stat_multiplier_for(pokemon, 'speed', weather, terrain)
+
+    if get_active_item(pokemon, magic_room) == 'choice-scarf':
+        speed *= 1.5
+
+    status = (pokemon.get('status_condition') or {}).get('name')
+    if status == 'paralysis' and get_active_ability(pokemon) != 'quick-feet':
+        speed *= 0.5
+
+    if has_tailwind:
+        speed *= 2.0
+
+    return int(speed)
 
 
 def accuracy_multiplier(attacker):
