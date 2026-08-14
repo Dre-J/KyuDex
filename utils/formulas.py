@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -1720,7 +1720,11 @@ def magic_coat_bounces(defender, move):
     Only status moves aimed AT the coat holder bounce - a self-buff has nothing to
     reflect, and a damaging move goes straight through.
     """
-    if not (defender.get('volatile_statuses') or {}).get('magic_coat'):
+    # Magic Bounce is the same reflection as a permanent Magic Coat, so it reuses this
+    # predicate entirely rather than growing a parallel one.
+    has_coat = (defender.get('volatile_statuses') or {}).get('magic_coat')
+    has_bounce = get_active_ability(defender) in MAGIC_BOUNCE_ABILITIES
+    if not (has_coat or has_bounce):
         return False
     if move.get('class') != 'status':
         return False
@@ -2894,6 +2898,86 @@ def is_dance_move(move_name):
     """Dance moves, for Dancer. Rain Dance is not one of them."""
     return normalise_move_name(move_name) in DANCE_MOVES
 
+
+def refuses_status(defender, status, weather='none'):
+    """
+    Whether the target's ability refuses this condition outright.
+
+    Every condition on a row is optional and they AND together, so Leaf Guard only holds
+    while the sun is out and Flower Veil only while its owner is a Grass type.
+    """
+    if not status or status == 'none':
+        return False
+
+    trait = STATUS_IMMUNE_ABILITIES.get(get_active_ability(defender))
+    if not trait:
+        return False
+
+    statuses = trait['statuses']
+    if statuses != ALL_STATUSES and status not in statuses:
+        return False
+
+    if 'weather' in trait and weather not in trait['weather']:
+        return False
+    if 'self_type' in trait and trait['self_type'] not in (defender.get('types') or []):
+        return False
+
+    return True
+
+
+def refuses_volatile(defender, volatile):
+    """Whether the target's ability refuses this volatile. Inner Focus and flinching."""
+    return volatile in VOLATILE_IMMUNE_ABILITIES.get(get_active_ability(defender), ())
+
+
+def move_family(move_name):
+    """Which shut-out family this move belongs to, if any."""
+    name = normalise_move_name(move_name)
+    if name in SOUND_MOVES:
+        return 'sound'
+    if name in BULLET_MOVES:
+        return 'bullet'
+    if name in POWDER_MOVES:
+        return 'powder'
+    return None
+
+
+def move_family_blocked(defender, move_name):
+    """
+    The ability shutting this move out by its family, or None.
+
+    Soundproof, Bulletproof and Overcoat. Returned as a name rather than a boolean so the
+    log can say which one answered.
+    """
+    family = move_family(move_name)
+    if not family:
+        return None
+    ability = get_active_ability(defender)
+    return ability if MOVE_FAMILY_IMMUNE_ABILITIES.get(ability) == family else None
+
+
+def refuses_status_moves(defender):
+    """Good as Gold: a whole category of move simply does not apply."""
+    return get_active_ability(defender) in STATUS_MOVE_IMMUNE_ABILITIES
+
+
+def smothers_explosion(attacker, defender):
+    """
+    Damp, on either side of the field.
+
+    Checked against BOTH combatants because Damp stops the move being used at all, not
+    merely stops it landing - the user does not even hurt itself.
+    """
+    for specimen in (attacker, defender):
+        if get_active_ability(specimen) in EXPLOSION_BLOCKING_ABILITIES:
+            return specimen
+    return None
+
+
+def is_explosive_move(move_name):
+    """Explosion and its family, for Damp."""
+    return normalise_move_name(move_name) in EXPLOSIVE_MOVES
+
 # ==========================================
 # 🚨 OFFENSIVE / DEFENSIVE STAT OVERRIDES
 # ==========================================
@@ -3482,6 +3566,30 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # 🚨 FEINT only exists to punish a shield. With nothing to break, it fails outright.
     if move_name == 'feint' and not defender['volatile_statuses'].get('protected'):
         return 0, "But it failed! There was no barrier to break!", 'none', [], 0
+
+    # ==========================================
+    # 🔇 FAMILY SHUT-OUTS AND SMOTHERED EXPLOSIONS
+    # ==========================================
+    # Placed with the other refusals, well before the damage roll: these stop the move
+    # happening at all rather than reducing what it does.
+    damper = smothers_explosion(attacker, defender) if is_explosive_move(move_name) else None
+    if damper is not None:
+        return 0, (f"💧 {damper['name'].capitalize()}'s "
+                   f"{pretty_ability(get_active_ability(damper))} smothered the "
+                   f"explosion!"), 'none', [], 0
+
+    shut_out = move_family_blocked(defender, move_name)
+    if shut_out:
+        return 0, (f"🚫 {defender['name'].capitalize()}'s {pretty_ability(shut_out)} "
+                   f"shut the attack out!"), 'none', [], 0
+
+    # Good as Gold refuses a whole category rather than a family. Self-aimed moves are
+    # untouched: it answers what is thrown AT it, not what its user does to itself.
+    if (move_class == 'status' and refuses_status_moves(defender)
+            and 'user' not in str(move_target)):
+        return 0, (f"🥇 {defender['name'].capitalize()}'s "
+                   f"{pretty_ability(get_active_ability(defender))} left it "
+                   f"completely unbothered!"), 'none', [], 0
 
     # ==========================================
     # 2. CONTAINMENT FIELD COLLISION
@@ -5653,8 +5761,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # Abilities that simply refuse a condition. Worry Seed's whole purpose is to staple
     # Insomnia on, so the sleep lock it grants has to actually hold; Vital Spirit is the
     # same trait under a different name, and Water Bubble refuses burns.
-    refused = STATUS_IMMUNE_ABILITIES.get(def_ability, ())
-    if inflicted_status and (refused == ALL_STATUSES or inflicted_status in refused):
+    if inflicted_status and refuses_status(defender, inflicted_status, weather):
         blocked = inflicted_status
         inflicted_status = None
         verb = "keeps it wide awake" if blocked == 'sleep' else f"refuses the {blocked}"

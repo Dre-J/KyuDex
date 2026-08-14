@@ -614,12 +614,74 @@ BIOLOGICAL_TRAITS = {
 # '*' means every major status, not just the ones listed elsewhere.
 ALL_STATUSES = '*'
 
+# Each row is {'statuses': ...} plus optional conditions that AND together:
+#   weather   - only while one of these is on the field
+#   self_type - only while the owner is this element (Flower Veil's Grass clause)
 STATUS_IMMUNE_ABILITIES = {
-    'insomnia':       {'sleep'},
-    'vital-spirit':   {'sleep'},
-    'water-bubble':   {'burn'},
-    'purifying-salt': ALL_STATUSES,
+    'insomnia':       {'statuses': {'sleep'}},
+    'vital-spirit':   {'statuses': {'sleep'}},
+    'water-bubble':   {'statuses': {'burn'}},
+    'purifying-salt': {'statuses': ALL_STATUSES},
+
+    # --- Block 7 ---
+    'magma-armor':    {'statuses': {'freeze'}},
+    'water-veil':     {'statuses': {'burn'}},
+    'sweet-veil':     {'statuses': {'sleep'}},
+    'pastel-veil':    {'statuses': {'poison'}},
+    'leaf-guard':     {'statuses': ALL_STATUSES,
+                       'weather': ['sun', 'extremely-harsh-sunlight']},
+    'flower-veil':    {'statuses': ALL_STATUSES, 'self_type': 'grass'},
 }
+
+# Volatiles an ability simply refuses. Flinch is the only one this block needs, and it is
+# a volatile rather than a status, which is why it cannot ride the table above.
+VOLATILE_IMMUNE_ABILITIES = {
+    'inner-focus': {'flinch'},
+}
+
+# Move families an ability is deaf, armoured or sealed against. Sound already has its own
+# set in formulas.py, since Punk Rock and the Substitute bypass read it too.
+BULLET_MOVES = {
+    'acid-spray', 'aura-sphere', 'barrage', 'beak-blast', 'bullet-seed', 'egg-bomb',
+    'electro-ball', 'energy-ball', 'focus-blast', 'gyro-ball', 'ice-ball', 'magnet-bomb',
+    'mist-ball', 'mud-bomb', 'octazooka', 'pollen-puff', 'pyro-ball', 'rock-blast',
+    'rock-wrecker', 'searing-shot', 'seed-bomb', 'shadow-ball', 'sludge-bomb',
+    'weather-ball', 'zap-cannon',
+}
+
+POWDER_MOVES = {
+    'cotton-spore', 'magic-powder', 'poison-powder', 'powder', 'rage-powder',
+    'sleep-powder', 'spore', 'stun-spore',
+}
+
+# Damp smothers these outright - the user does not even hurt itself.
+EXPLOSIVE_MOVES = {'explosion', 'self-destruct', 'mind-blown', 'misty-explosion'}
+
+# Which family each ability shuts out. Overcoat also shrugs off the weather chip, which
+# it does through WEATHER_CHIP_IMMUNE_ABILITIES rather than here.
+MOVE_FAMILY_IMMUNE_ABILITIES = {
+    'soundproof':  'sound',
+    'bulletproof': 'bullet',
+    'overcoat':    'powder',
+}
+
+# Good as Gold refuses any status MOVE aimed at it - not a status condition, a whole
+# category of move.
+STATUS_MOVE_IMMUNE_ABILITIES = {'good-as-gold'}
+
+# Magic Bounce is Magic Coat as an ability, so it reuses that predicate entirely.
+MAGIC_BOUNCE_ABILITIES = {'magic-bounce'}
+
+# Damp, and anything else that refuses to let the field be blown up.
+EXPLOSION_BLOCKING_ABILITIES = {'damp'}
+
+# Early Bird burns through sleep at this rate.
+EARLY_BIRD_SLEEP_RATE = 2
+
+# Telepathy dodges an ALLY's damaging moves. With one Pokemon per side there is no ally
+# to dodge, so it has no effect in singles - recorded rather than faked, exactly like the
+# redirection pair in Block 6.
+ALLY_DODGE_ABILITIES = {'telepathy'}
 
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
@@ -767,6 +829,9 @@ WEATHER_CHIP_IMMUNE_ABILITIES = {
     'sand-force': {'sand', 'sandstorm'},
     'sand-veil':  {'sand', 'sandstorm'},
     'snow-cloak': {'hail', 'snow'},
+    # Overcoat and Magic Guard shelter from every kind of weather, not just their own
+    'overcoat':    {'sand', 'sandstorm', 'hail', 'snow'},
+    'magic-guard': {'sand', 'sandstorm', 'hail', 'snow'},
 }
 
 
