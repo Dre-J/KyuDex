@@ -725,6 +725,41 @@ POISON_CONFUSION_ABILITIES = {'poison-puppeteer'}
 # Adaptability's upgraded same-type bonus.
 ADAPTABILITY_STAB = 2.0
 
+# ==========================================
+# ⏱️ BLOCK 6: PRIORITY AND TURN ORDER
+# ==========================================
+# Abilities whose owner refuses to be hit by a priority move at all.
+PRIORITY_BLOCKING_ABILITIES = {'queenly-majesty', 'dazzling', 'armor-tail'}
+
+# Quick Draw's chance to jump to the front of its bracket.
+QUICK_DRAW_CHANCE = 30
+
+# Abilities that send their owner to the BACK of its bracket. Mycelium Might only does so
+# for status moves, which is why it is a mapping rather than a set.
+#   '*'      - every move
+#   'status' - status moves only
+LAST_IN_BRACKET_ABILITIES = {
+    'stall': '*',
+    'mycelium-might': 'status',
+}
+
+# Gale Wings only lifts Flying moves while its owner is untouched.
+GALE_WINGS_REQUIRES_FULL_HP = True
+TRIAGE_PRIORITY = 3
+
+# Dance moves, for Dancer. Rain Dance is NOT one of these - it is a weather move that
+# happens to be called a dance, and including it is the obvious mistake here.
+DANCE_MOVES = {
+    'aqua-step', 'clangorous-soul', 'dragon-dance', 'feather-dance', 'fiery-dance',
+    'lunar-dance', 'petal-dance', 'quiver-dance', 'revelation-dance', 'swords-dance',
+    'teeter-dance', 'victory-dance',
+}
+
+# Redirection is a doubles mechanic: with one Pokemon per side there is nothing to draw a
+# move away, so there is nothing for these to ignore. Recorded as decided rather than
+# forgotten, exactly like the Block 18 set.
+REDIRECTION_IGNORING_ABILITIES = {'propeller-tail', 'stalwart'}
+
 # Abilities that shrug off the end-of-turn weather chip, and WHICH weather each one
 # shelters from - Sand Veil is no help in hail. Type immunity is handled separately, on
 # the types themselves. Block 7 adds Overcoat and Magic Guard, which shelter from both.

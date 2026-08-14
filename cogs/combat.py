@@ -7,7 +7,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather
 from utils import checks
 import aiohttp
@@ -3944,26 +3944,27 @@ class BattleDashboard(discord.ui.View):
                         # The 'or 0' intercepts the None, and int() guarantees a mathematical integer!
                         # Terrain can shift a bracket (Grassy Glide on Grassy Terrain)
                         active_terrain = state.get('terrain', {'type': 'none'})['type']
-                        p_prio = get_effective_priority(p_move_stats.get('name'), p_move_stats.get('priority'), p_active, active_terrain)
-                        n_prio = get_effective_priority(n_move_stats.get('name'), n_move_stats.get('priority'), n_active, active_terrain)
-                        
-                        # 1. Compare Move Priority Brackets First
-                        if p_prio > n_prio:
+                        p_prio = get_effective_priority(p_move_stats.get('name'), p_move_stats.get('priority'), p_active, active_terrain, p_move_stats)
+                        n_prio = get_effective_priority(n_move_stats.get('name'), n_move_stats.get('priority'), n_active, active_terrain, n_move_stats)
+
+                        # Bracket, then tier inside it (Quick Draw / Stall), then speed -
+                        # with Trick Room inverting the speed component only. All three
+                        # live in turn_order_key so both engines cannot disagree; PvE used
+                        # to compute a trick_room flag here and then never consult it.
+                        is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
+                        p_key = turn_order_key(p_prio, priority_tier(p_active, p_move_stats),
+                                               p_speed, is_trick_room)
+                        n_key = turn_order_key(n_prio, priority_tier(n_active, n_move_stats),
+                                               n_speed, is_trick_room)
+
+                        if p_key > n_key:
                             action_queue = [player_action, npc_action]
-                        elif n_prio > p_prio:
+                        elif n_key > p_key:
                             action_queue = [npc_action, player_action]
                         else:
-                            is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
+                            # Absolute tie! Coin flip.
+                            action_queue = [player_action, npc_action] if random.choice([True, False]) else [npc_action, player_action]
 
-                            # 2. Priority Tie! Fall back to Biological Speed Calculation
-                            if p_speed > n_speed: 
-                                action_queue = [player_action, npc_action]
-                            elif n_speed > p_speed: 
-                                action_queue = [npc_action, player_action]
-                            else: 
-                                # 3. Absolute Tie! Coin flip.
-                                action_queue = [player_action, npc_action] if random.choice([True, False]) else [npc_action, player_action]
-                                
                     except Exception as e:
                         print("\n🚨 CRITICAL CRASH IN PRIORITY CHECKING")
                         import traceback
@@ -4097,6 +4098,21 @@ class BattleDashboard(discord.ui.View):
 
                     if can_attack:
                         # Prevent double-printing if Max Guard or Status Z-Moves already announced themselves in Phase 1
+                        # ==========================================
+                        # ⏱️ QUEENLY MAJESTY / DAZZLING / ARMOR TAIL
+                        # ==========================================
+                        # Refused outright rather than merely slowed: a raised bracket is
+                        # what they answer, so the check reads the EFFECTIVE priority,
+                        # which is what Gale Wings and Triage have already lifted.
+                        _prio = get_effective_priority(
+                            raw_move_name, move_stats.get('priority'), attacker,
+                            state.get('terrain', {'type': 'none'})['type'], move_stats)
+                        if _prio > 0 and blocks_priority_moves(defender):
+                            combat_log += (f"🛡️ **{defender['name'].capitalize()}**'s "
+                                           f"{get_active_ability(defender).replace('-', ' ').title()} "
+                                           f"forbade the priority move!\n")
+                            continue
+
                         is_status_gimmick = (is_z_action or is_max_action) and move_stats['class'] == 'status'
                         
                         if not is_status_gimmick:
@@ -4468,6 +4484,45 @@ class BattleDashboard(discord.ui.View):
 
                         # Execute the Stat Changes
                         combat_log += apply_stat_changes(attacker, defender, stat_chgs)
+
+                        # ==========================================
+                        # 💃 DANCER
+                        # ==========================================
+                        # The onlooker copies the dance the moment it finishes. Unlike the
+                        # copy family this is not a re-dispatch of the attacker's action -
+                        # it is a whole extra move by the DEFENDER, so it resolves here
+                        # rather than by swapping the queue entry.
+                        if (is_dance_move(raw_move_name)
+                                and get_active_ability(defender) == 'dancer'
+                                and defender['current_hp'] > 0
+                                and not attacker.get('_dancer_echo')):
+                            echo = await fetch_move_payload(raw_move_name)
+                            if echo:
+                                # Marked so a Dancer copying another Dancer cannot loop
+                                defender['_dancer_echo'] = True
+                                d_dmg, d_msg, d_status, d_stats, d_heal = calculate_damage(
+                                    defender, attacker, echo,
+                                    weather=state.get('weather', {'type': 'none'})['type'],
+                                    terrain=state.get('terrain', {'type': 'none'})['type'],
+                                    target_hazards=state['player_hazards'] if is_player else state['npc_hazards'],
+                                    user_hazards=state['npc_hazards'] if is_player else state['player_hazards'],
+                                    user_party=state['npc_team'] if is_player else state['player_team'],
+                                    wonder_room=state.get('field', {}).get('wonder_room', 0) > 0,
+                                    gravity=state.get('field', {}).get('gravity', 0) > 0,
+                                    magic_room=state.get('field', {}).get('magic_room', 0) > 0,
+                                    field=field_of(state))
+                                defender.pop('_dancer_echo', None)
+
+                                combat_log += (f"💃 **{defender['name'].capitalize()}** "
+                                               f"joined in with `{raw_move_name.replace('-', ' ').title()}`!\n")
+                                if d_dmg > 0:
+                                    attacker['current_hp'] = max(0, attacker['current_hp'] - d_dmg)
+                                    combat_log += f"↳ Dealt **{d_dmg}** damage.\n"
+                                if d_heal > 0:
+                                    defender['current_hp'] = min(defender.get('max_hp', 100),
+                                                                 defender['current_hp'] + d_heal)
+                                combat_log += apply_stat_changes(defender, attacker, d_stats)
+                                combat_log += apply_status_outcome(attacker, d_status, echo)
 
                         # Only apply the exhaustion tag if the attack actually dealt damage,
                         # and never while Dynamaxed - Max Moves leave no recharge window.
@@ -6748,7 +6803,8 @@ class Combat(commands.Cog):
                         commit['data'].get('name'),
                         commit['data'].get('priority', 0),
                         mover,
-                        state.get('terrain', {'type': 'none'})['type']
+                        state.get('terrain', {'type': 'none'})['type'],
+                        commit['data']
                     )
                 return 0
             
@@ -6775,22 +6831,24 @@ class Combat(commands.Cog):
             p1_has_tailwind = state.get('p1_hazards', {}).get('tailwind', 0) > 0
             p2_has_tailwind = state.get('p2_hazards', {}).get('tailwind', 0) > 0
             
-            p1_goes_first = False
-            if p1_prio > p2_prio: p1_goes_first = True
-            elif p2_prio > p1_prio: p1_goes_first = False
+            spd1 = get_combat_speed(p1_active, p1_has_tailwind)
+            spd2 = get_combat_speed(p2_active, p2_has_tailwind)
+            is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
+
+            # Bracket, then tier inside it (Quick Draw / Stall), then speed - with Trick
+            # Room inverting the speed component only. Shared with PvE so the two engines
+            # cannot order a turn differently.
+            _p1_move = c1.get('data') if c1.get('type') == 'attack' else None
+            _p2_move = c2.get('data') if c2.get('type') == 'attack' else None
+            key1 = turn_order_key(p1_prio, priority_tier(p1_active, _p1_move), spd1, is_trick_room)
+            key2 = turn_order_key(p2_prio, priority_tier(p2_active, _p2_move), spd2, is_trick_room)
+
+            if key1 > key2:
+                p1_goes_first = True
+            elif key2 > key1:
+                p1_goes_first = False
             else:
-                spd1 = get_combat_speed(p1_active, p1_has_tailwind)
-                spd2 = get_combat_speed(p2_active, p2_has_tailwind)
-
-                # TRICK ROOM INVERTER
-                is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
-
-                if spd1 > spd2: 
-                    p1_goes_first = not is_trick_room # 🟢 Slowest moves first!
-                elif spd2 > spd1: 
-                    p1_goes_first = is_trick_room     # 🟢 Slowest moves first!
-                else: 
-                    p1_goes_first = random.choice([True, False])
+                p1_goes_first = random.choice([True, False])
 
             execution_queue = []
             if p1_goes_first:
