@@ -511,6 +511,11 @@ BIOLOGICAL_TRAITS = {
                           'types': ['rock', 'ground', 'steel'], 'multiplier': 1.3},
         'neuroforce':    {'condition': 'super_effective', 'multiplier': 1.25},
         'rivalry':       {'condition': 'gender', 'same': 1.25, 'opposite': 0.75},
+
+        # --- Block 4: conditions read off the turn rather than the move
+        'tinted-lens':   {'condition': 'not_very_effective', 'multiplier': 2.0},
+        'analytic':      {'condition': 'moving_last', 'multiplier': 1.3},
+        'stakeout':      {'condition': 'target_just_arrived', 'multiplier': 2.0},
     },
 
     # The defensive half of the same idea: a multiplier on damage COMING IN, keyed on the
@@ -630,16 +635,45 @@ CHOICE_LOCK_ABILITIES = {'gorilla-tactics'}
 # Abilities that halve the end-of-turn burn toll.
 BURN_TOLL_HALVED_BY = {'heatproof'}
 
-# What an ability does to the accuracy of the move its owner throws. Hustle pays for its
-# Attack boost here. Block 4 adds Compound Eyes and Victory Star.
+# What an ability does to the accuracy of the move its owner throws.
 ACCURACY_MULTIPLIER_ABILITIES = {
-    'hustle': 0.8,
+    'hustle': 0.8,           # pays for its Attack boost
+    'compound-eyes': 1.3,
+    'victory-star': 1.1,
 }
 
-# Abilities that shrug off the sandstorm/hail chip damage. Type immunity is handled
-# separately, on the types themselves. Block 7 adds Overcoat and Magic Guard here, and
-# Block 4 adds Sand Veil and Snow Cloak.
-WEATHER_CHIP_IMMUNE_ABILITIES = {'sand-force'}
+# The other side of the same roll: what an ability does to its owner's EVASION. A higher
+# number is harder to hit, so these divide the attacker's chance rather than multiplying
+# it. Conditions are optional and AND together, as in stat_multipliers.
+EVASION_MULTIPLIER_ABILITIES = {
+    'sand-veil':    {'multiplier': 1.25, 'weather': ['sand', 'sandstorm']},
+    'snow-cloak':   {'multiplier': 1.25, 'weather': ['hail', 'snow']},
+    'tangled-feet': {'multiplier': 2.0, 'confused': True},
+}
+
+# Wonder Skin drags an incoming STATUS move down to a coin flip - and only ever downwards,
+# so it cannot make a shaky move more likely to land.
+WONDER_SKIN_ACCURACY = 50
+
+# Abilities that add crit stages. Super Luck is the only one; Merciless forces the crit
+# outright rather than nudging the odds, so it lives with the guaranteed-crit rule.
+CRIT_STAGE_ABILITIES = {
+    'super-luck': 1,
+}
+
+# Abilities that shrug off the end-of-turn weather chip, and WHICH weather each one
+# shelters from - Sand Veil is no help in hail. Type immunity is handled separately, on
+# the types themselves. Block 7 adds Overcoat and Magic Guard, which shelter from both.
+WEATHER_CHIP_IMMUNE_ABILITIES = {
+    'sand-force': {'sand', 'sandstorm'},
+    'sand-veil':  {'sand', 'sandstorm'},
+    'snow-cloak': {'hail', 'snow'},
+}
+
+
+def shrugs_off_weather(ability, weather):
+    """True when this ability shelters its owner from this weather's chip damage."""
+    return weather in WEATHER_CHIP_IMMUNE_ABILITIES.get(ability, ())
 
 # ==========================================
 # KINETIC MULTI-STRIKE PROFILES

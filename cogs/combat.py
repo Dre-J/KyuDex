@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -4304,23 +4304,12 @@ class BattleDashboard(discord.ui.View):
 
                         if not is_ohko and not has_no_guard and not target_is_vulnerable and not is_guaranteed:
                             
-                            # 1. Fetch Biological Stages (Default to 0 if missing)
-                            acc_stage = attacker.get('stat_stages', {}).get('accuracy', 0)
-                            eva_stage = defender.get('stat_stages', {}).get('evasion', 0)
-                            # Telekinesis holds the target up where it cannot dodge
-                            if defender.get('volatile_statuses', {}).get('telekinesis'):
-                                eva_stage = 0
-                            
-                            # 2. Calculate the Net Multiplier (Capped between -6 and +6)
-                            net_stage = max(-6, min(6, acc_stage - eva_stage))
-                            
-                            if net_stage >= 0:
-                                acc_multiplier = (3.0 + net_stage) / 3.0
-                            else:
-                                acc_multiplier = 3.0 / (3.0 + abs(net_stage))
-                                
-                            # Hustle pays for its Attack boost here
-                            final_acc = move_acc * acc_multiplier * accuracy_multiplier(attacker)
+                            # Stages, the accuracy and evasion abilities, and Wonder Skin
+                            # all live in one shared function so the two engines' copies
+                            # of this cannot drift apart.
+                            final_acc = hit_chance(
+                                attacker, defender, move_stats,
+                                weather=state.get('weather', {'type': 'none'})['type'])
 
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:
@@ -5049,12 +5038,14 @@ class BattleDashboard(discord.ui.View):
                                 c_types = combatant.get('types', [])
                                 
                                 # Check biological immunities
+                                chip_weather = weather['type']
                                 if weather['type'] == 'sand' and any(t in ['rock', 'ground', 'steel'] for t in c_types):
                                     is_immune = True
                                 if weather['type'] == 'hail' and 'ice' in c_types:
                                     is_immune = True
-                                # Sand Force weathers its own storm
-                                if get_active_ability(combatant) in WEATHER_CHIP_IMMUNE_ABILITIES:
+                                # Sand Force, Sand Veil and Snow Cloak each weather their
+                                # OWN storm - a Sand Veil is no help in hail.
+                                if shrugs_off_weather(get_active_ability(combatant), chip_weather):
                                     is_immune = True
 
 
@@ -7239,23 +7230,12 @@ class Combat(commands.Cog):
 
                         if not is_ohko and not has_no_guard and not target_is_vulnerable and not is_guaranteed:
                             
-                            # 1. Fetch Biological Stages (Default to 0 if missing)
-                            acc_stage = attacker.get('stat_stages', {}).get('accuracy', 0)
-                            eva_stage = defender.get('stat_stages', {}).get('evasion', 0)
-                            # Telekinesis holds the target up where it cannot dodge
-                            if defender.get('volatile_statuses', {}).get('telekinesis'):
-                                eva_stage = 0
-                            
-                            # 2. Calculate the Net Multiplier (Capped between -6 and +6)
-                            net_stage = max(-6, min(6, acc_stage - eva_stage))
-                            
-                            if net_stage >= 0:
-                                acc_multiplier = (3.0 + net_stage) / 3.0
-                            else:
-                                acc_multiplier = 3.0 / (3.0 + abs(net_stage))
-                                
-                            # Hustle pays for its Attack boost here
-                            final_acc = move_acc * acc_multiplier * accuracy_multiplier(attacker)
+                            # Stages, the accuracy and evasion abilities, and Wonder Skin
+                            # all live in one shared function so the two engines' copies
+                            # of this cannot drift apart.
+                            final_acc = hit_chance(
+                                attacker, defender, move_stats,
+                                weather=state.get('weather', {'type': 'none'})['type'])
 
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:
@@ -7675,12 +7655,14 @@ class Combat(commands.Cog):
                                 is_immune = False
                                 c_types = combatant.get('types', [])
                                 
+                                chip_weather = state['weather']['type']
                                 if state['weather']['type'] == 'sand' and any(t in ['rock', 'ground', 'steel'] for t in c_types):
                                     is_immune = True
                                 if state['weather']['type'] == 'hail' and 'ice' in c_types:
                                     is_immune = True
-                                # Sand Force weathers its own storm
-                                if get_active_ability(combatant) in WEATHER_CHIP_IMMUNE_ABILITIES:
+                                # Sand Force, Sand Veil and Snow Cloak each weather their
+                                # OWN storm - a Sand Veil is no help in hail.
+                                if shrugs_off_weather(get_active_ability(combatant), chip_weather):
                                     is_immune = True
 
 
