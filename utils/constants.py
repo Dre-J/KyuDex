@@ -661,6 +661,70 @@ CRIT_STAGE_ABILITIES = {
     'super-luck': 1,
 }
 
+# ==========================================
+# 🎭 BLOCK 5: MOVE-PROPERTY REWRITES
+# ==========================================
+# Everything here changes what the move IS before anything reads it.
+#
+# The -ate family carries the CURRENT generation's 1.2x. They were nerfed from 1.3 in
+# Gen 7, which is why PokeAPI's older text still says 1.3 for three of them.
+#
+#   from       - only rewrites moves of this element ('*' for every move)
+#   sound      - rewrites sound moves instead, whatever their element
+TYPE_REWRITE_ABILITIES = {
+    'aerilate':     {'from': 'normal', 'to': 'flying',   'multiplier': 1.2},
+    'pixilate':     {'from': 'normal', 'to': 'fairy',    'multiplier': 1.2},
+    'refrigerate':  {'from': 'normal', 'to': 'ice',      'multiplier': 1.2},
+    'galvanize':    {'from': 'normal', 'to': 'electric', 'multiplier': 1.2},
+    'dragonize':    {'from': 'normal', 'to': 'dragon',   'multiplier': 1.2},
+    'normalize':    {'from': '*',      'to': 'normal',   'multiplier': 1.2},
+    'liquid-voice': {'sound': True,    'to': 'water',    'multiplier': 1.0},
+}
+
+# The user takes on the element of the move it is throwing, before it lands.
+PROTEAN_ABILITIES = {'protean', 'libero'}
+
+# Mimicry wears the terrain.
+MIMICRY_TYPES = {'electric': 'electric', 'grassy': 'grass',
+                 'misty': 'fairy', 'psychic': 'psychic'}
+
+# Normal and Fighting reach Ghost types.
+GHOST_PIERCING_ABILITIES = {'scrappy', 'minds-eye'}
+
+# The target's evasion is ignored entirely.
+EVASION_IGNORING_ABILITIES = {'minds-eye'}
+
+# These moves never make contact, so nothing that punishes contact can answer them.
+NO_CONTACT_ABILITIES = {'long-reach'}
+
+# Contact moves punch straight through Protect and Detect.
+PROTECT_PIERCING_ABILITIES = {'unseen-fist', 'piercing-drill'}
+
+# Poison lands on Poison and Steel types anyway.
+CORROSIVE_ABILITIES = {'corrosion'}
+
+# What an ability does to the chance of a move's SECONDARY effect firing, and who ignores
+# those effects altogether.
+SECONDARY_CHANCE_ABILITIES = {'serene-grace': 2.0}
+SECONDARY_IMMUNE_ABILITIES = {'shield-dust'}
+
+# A flinch chance stapled onto every damaging move the owner throws.
+FLINCH_ON_HIT_ABILITIES = {'stench': 10}
+
+# Parental Bond's second strike, at the current generation's quarter power rather than
+# the half PokeAPI's Gen 6 text describes.
+PARENTAL_BOND_SECOND_HIT = 0.25
+
+# Toxic Chain's chance to poison on contact with a move. The schema has no separate bad
+# poison, so this lands as ordinary poison - the same simplification Toxic already makes.
+TOXIC_CHAIN_CHANCE = 30
+
+# Poison Puppeteer adds confusion to anything ITS OWNER poisons.
+POISON_CONFUSION_ABILITIES = {'poison-puppeteer'}
+
+# Adaptability's upgraded same-type bonus.
+ADAPTABILITY_STAB = 2.0
+
 # Abilities that shrug off the end-of-turn weather chip, and WHICH weather each one
 # shelters from - Sand Veil is no help in hail. Type immunity is handled separately, on
 # the types themselves. Block 7 adds Overcoat and Magic Guard, which shelter from both.
