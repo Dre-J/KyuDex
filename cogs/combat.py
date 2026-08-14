@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -679,6 +679,11 @@ def apply_status_outcome(defender, inflicted, move_stats):
         payload = move_stats or {}
         flinched = (payload.get('ailment') == 'flinch'
                     and random.randint(1, 100) <= (payload.get('ailment_chance') or 0))
+
+    # Inner Focus refuses to be rattled. Checked here rather than at each flinch source
+    # so Stench, King's Rock and an ordinary flinch chance all meet it.
+    if flinched and refuses_volatile(defender, 'flinch'):
+        flinched = False
 
     if flinched:
         defender.setdefault('volatile_statuses', {})['flinch'] = True
@@ -4070,7 +4075,10 @@ class BattleDashboard(discord.ui.View):
                             combat_log += f"⚡ {owner_prefix}**{attacker['name'].capitalize()}** is fully paralyzed!\n"
                             can_attack = False
                         elif s_name == 'sleep':
-                            status['duration'] -= 1
+                            # Early Bird burns through sleep at twice the rate
+                            status['duration'] -= (EARLY_BIRD_SLEEP_RATE
+                                                   if get_active_ability(attacker) == 'early-bird'
+                                                   else 1)
                             if status['duration'] <= 0:
                                 combat_log += f"☀️ {owner_prefix}**{attacker['name'].capitalize()}** woke up!\n"
                                 attacker['status_condition'] = None
@@ -7010,7 +7018,10 @@ class Combat(commands.Cog):
                             combat_log += f"⚡ **{owner_name}'s** {attacker['name'].capitalize()} is fully paralyzed!\n"
                             can_attack = False
                         elif s_name == 'sleep':
-                            status['duration'] -= 1
+                            # Early Bird burns through sleep at twice the rate
+                            status['duration'] -= (EARLY_BIRD_SLEEP_RATE
+                                                   if get_active_ability(attacker) == 'early-bird'
+                                                   else 1)
                             if status['duration'] <= 0:
                                 combat_log += f"☀️ **{owner_name}'s** {attacker['name'].capitalize()} woke up!\n"
                                 attacker['status_condition'] = None
