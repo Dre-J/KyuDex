@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -1016,9 +1016,18 @@ GUARANTEED_HIT_MOVES = [
     'swift', 'vital-throw',
 ]
 
-def is_crit_guaranteed(move_name, attacker):
-    """True when this strike is a certainty rather than a roll."""
+def is_crit_guaranteed(move_name, attacker, defender=None):
+    """
+    True when this strike is a certainty rather than a roll.
+
+    Merciless takes the defender, which is why this grew a third argument: it is the one
+    guaranteed crit that depends on the state of the TARGET rather than the user.
+    """
     if move_name in ALWAYS_CRIT_MOVES:
+        return True
+    if (get_active_ability(attacker) == 'merciless'
+            and (defender or {}).get('status_condition')
+            and (defender['status_condition'] or {}).get('name') == 'poison'):
         return True
     return bool((attacker.get('volatile_statuses') or {}).get('laser_focus'))
 
@@ -2938,11 +2947,64 @@ def accuracy_multiplier(attacker):
     """
     What an ability does to the accuracy of the move its owner is throwing.
 
-    Hustle's 1.5x Attack is paid for here. Shared by both engines' accuracy rolls so the
-    two copies of that block cannot disagree, and so Block 4 has somewhere to put
-    Compound Eyes and Victory Star.
+    Hustle's 1.5x Attack is paid for here; Compound Eyes and Victory Star sharpen it.
     """
     return ACCURACY_MULTIPLIER_ABILITIES.get(get_active_ability(attacker), 1.0)
+
+
+def evasion_multiplier(defender, weather='none'):
+    """
+    What an ability does to its owner's evasion. Higher means harder to hit.
+
+    Returned as a number to DIVIDE the attacker's chance by, so 1.25 is a quarter harder
+    rather than a quarter easier.
+    """
+    trait = EVASION_MULTIPLIER_ABILITIES.get(get_active_ability(defender))
+    if not trait:
+        return 1.0
+    if 'weather' in trait and weather not in trait['weather']:
+        return 1.0
+    if trait.get('confused') and 'confusion' not in (defender.get('volatile_statuses') or {}):
+        return 1.0
+    return trait['multiplier']
+
+
+def hit_chance(attacker, defender, move, weather='none'):
+    """
+    The percentage chance this move connects, before the roll is made.
+
+    One function for both engines. They each had their own copy of the stage maths, and
+    the copies were identical only by luck - Block 3 found the speed pair had already
+    drifted, and this block is the same shape of risk.
+
+    Callers still decide whether to consult it at all: OHKO moves, No Guard, Lock-On and
+    a standing Glaive Rush all skip the roll entirely, and those checks stay with the
+    engines because they also decide what the log says.
+    """
+    move_acc = (move or {}).get('accuracy')
+    if not isinstance(move_acc, int):
+        move_acc = 100
+
+    # Wonder Skin drags an incoming status move down to a coin flip, and only downwards
+    if ((move or {}).get('class') == 'status'
+            and get_active_ability(defender) == 'wonder-skin'
+            and move_acc > WONDER_SKIN_ACCURACY):
+        move_acc = WONDER_SKIN_ACCURACY
+
+    acc_stage = (attacker.get('stat_stages') or {}).get('accuracy', 0)
+    eva_stage = (defender.get('stat_stages') or {}).get('evasion', 0)
+    # Telekinesis holds the target up where it cannot dodge
+    if (defender.get('volatile_statuses') or {}).get('telekinesis'):
+        eva_stage = 0
+
+    net_stage = max(-6, min(6, acc_stage - eva_stage))
+    if net_stage >= 0:
+        stage_mod = (3.0 + net_stage) / 3.0
+    else:
+        stage_mod = 3.0 / (3.0 + abs(net_stage))
+
+    return (move_acc * stage_mod * accuracy_multiplier(attacker)
+            / max(0.01, evasion_multiplier(defender, weather)))
 
 
 def effective_weight(pokemon):
@@ -4774,6 +4836,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif cond == 'super_effective' and type_multiplier > 1.0: ability_mod *= mult
             elif (cond == 'weather_type' and weather in amplifier['weather']
                   and move_type in amplifier['types']): ability_mod *= mult
+            elif cond == 'not_very_effective' and 0 < type_multiplier < 1.0:
+                ability_mod *= mult
+            # "Moving last" is read off the TARGET: if it has already acted this turn,
+            # the attacker is the one going second.
+            elif cond == 'moving_last' and defender.get('acted_this_turn'):
+                ability_mod *= mult
+            # Stakeout. Fires on the opening turn too, since a lead has not finished a
+            # turn on the field either - the same reading Fake Out already uses.
+            elif cond == 'target_just_arrived' and is_first_turn_out(defender):
+                ability_mod *= mult
             elif cond == 'gender':
                 # Rivalry cuts both ways, and does nothing at all if either side's gender
                 # is unknown - the same rule Attract obeys.
@@ -4899,7 +4971,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 crit_stage += 2
             if attacker_item == 'scope-lens' or attacker_item == 'razor-claw':
                 crit_stage += 1
-                
+
+            # Super Luck. Merciless is not here: it forces the crit outright rather than
+            # nudging the odds, so it sits with the guaranteed-crit rule below.
+            crit_stage += CRIT_STAGE_ABILITIES.get(atk_ability, 0)
+
+
             # Calculate the final threshold based on modern ecosystem rules
             if crit_stage == 0: crit_chance = 24  # ~4.17%
             elif crit_stage == 1: crit_chance = 8 # 12.5%
@@ -4913,7 +4990,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 is_crit = False
             elif is_crit_shielded(target_hazards):
                 is_crit = False
-            elif is_crit_guaranteed(move_name, attacker):
+            elif is_crit_guaranteed(move_name, attacker, defender):
                 is_crit = True
             else:
                 is_crit = (random.randint(1, crit_chance) == 1)
