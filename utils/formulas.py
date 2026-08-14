@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2824,10 +2824,14 @@ def resolve_delayed_strike(pending, defender, weather='none', terrain='none'):
 
     return damage, msg
 
-def get_effective_priority(move_name, base_priority, attacker, terrain='none'):
+def get_effective_priority(move_name, base_priority, attacker, terrain='none', move=None):
     """
-    The priority bracket a move actually moves in, after terrain effects. Grassy Glide
-    jumps a bracket on Grassy Terrain, but only while the user is touching the ground.
+    The priority bracket a move actually moves in, after terrain and abilities.
+
+    Grassy Glide jumps a bracket on Grassy Terrain, but only while the user is touching
+    the ground. Gale Wings lifts Flying moves, but only while its owner is untouched.
+    Triage lifts anything that heals - read off the move's own healing and drain figures
+    rather than a list, so it cannot fall behind the database.
     """
     priority = int(base_priority or 0)
 
@@ -2835,7 +2839,60 @@ def get_effective_priority(move_name, base_priority, attacker, terrain='none'):
     if shift and terrain == shift[0] and is_grounded(attacker):
         priority += shift[1]
 
+    ability = get_active_ability(attacker)
+    payload = move or {}
+
+    if ability == 'gale-wings' and payload.get('type') == 'flying':
+        at_full = (attacker or {}).get('current_hp', 0) >= (attacker or {}).get('max_hp', 1)
+        if at_full or not GALE_WINGS_REQUIRES_FULL_HP:
+            priority += 1
+
+    if ability == 'triage' and ((payload.get('healing') or 0) > 0
+                                or (payload.get('drain') or 0) > 0):
+        priority += TRIAGE_PRIORITY
+
     return priority
+
+
+def priority_tier(attacker, move=None):
+    """
+    Where inside its bracket this action sits. Higher goes first, 0 is ordinary.
+
+    Two brackets is enough for everything here: Quick Draw jumps to the front, Stall and
+    Mycelium Might drop to the back. Speed only breaks ties within the same tier, which
+    is what makes Stall lose to a slower opponent rather than merely to a faster one.
+    """
+    ability = get_active_ability(attacker)
+
+    scope = LAST_IN_BRACKET_ABILITIES.get(ability)
+    if scope == '*' or (scope == 'status' and (move or {}).get('class') == 'status'):
+        return -1
+
+    if ability == 'quick-draw' and random.randint(1, 100) <= QUICK_DRAW_CHANCE:
+        return 1
+
+    return 0
+
+
+def turn_order_key(priority, tier, speed, trick_room=False):
+    """
+    The sort key both engines order a turn by - higher resolves first.
+
+    Trick Room inverts the SPEED component only: it has never reordered priority
+    brackets, and folding it in here is what stops the two engines disagreeing about
+    that. PvE used to compute a trick_room flag and then never consult it.
+    """
+    return (priority, tier, -speed if trick_room else speed)
+
+
+def blocks_priority_moves(defender):
+    """True when this specimen refuses to be hit by anything with raised priority."""
+    return get_active_ability(defender) in PRIORITY_BLOCKING_ABILITIES
+
+
+def is_dance_move(move_name):
+    """Dance moves, for Dancer. Rain Dance is not one of them."""
+    return normalise_move_name(move_name) in DANCE_MOVES
 
 # ==========================================
 # 🚨 OFFENSIVE / DEFENSIVE STAT OVERRIDES
