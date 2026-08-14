@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2023,8 +2023,16 @@ STATUS_TYPE_IMMUNITY = {
 }
 
 
-def status_type_immune(status, types):
-    """True when the target's typing refuses the condition outright."""
+def status_type_immune(status, types, attacker=None):
+    """
+    True when the target's typing refuses the condition outright.
+
+    Corrosion is the exception the games carved out: it poisons Poison and Steel types
+    that nothing else can touch.
+    """
+    if (status == 'poison' and attacker is not None
+            and get_active_ability(attacker) in CORROSIVE_ABILITIES):
+        return False
     return bool(STATUS_TYPE_IMMUNITY.get(status, set()) & set(types or []))
 
 
@@ -2952,6 +2960,48 @@ def accuracy_multiplier(attacker):
     return ACCURACY_MULTIPLIER_ABILITIES.get(get_active_ability(attacker), 1.0)
 
 
+def mimicry_types(pokemon, terrain='none'):
+    """
+    The elements this specimen counts as, with Mimicry's terrain swap applied.
+
+    Returned rather than written onto the specimen: the change is meant to last exactly
+    as long as the terrain, and there is nowhere yet that would put the original types
+    back when the terrain expires. That means it reaches the damage calculation - STAB
+    and the type chart - but not the places that read `types` directly, such as hazard
+    immunity. Documented rather than hidden.
+    """
+    stored = list((pokemon or {}).get('types') or [])
+    if not pokemon or get_active_ability(pokemon) != 'mimicry':
+        return stored
+    worn = MIMICRY_TYPES.get(terrain)
+    return [worn] if worn else stored
+
+
+def makes_contact(move, attacker=None):
+    """
+    Whether this strike physically touches the target.
+
+    The engine's proxy for contact has always been the physical class, which is close
+    enough for every move that matters here. Long Reach overrides it outright.
+    """
+    if attacker is not None and get_active_ability(attacker) in NO_CONTACT_ABILITIES:
+        return False
+    return (move or {}).get('class') == 'physical'
+
+
+def secondary_chance(base_chance, attacker, defender):
+    """
+    The odds of a move's SECONDARY effect firing, once the abilities have had their say.
+
+    Serene Grace doubles it; Shield Dust refuses it outright. A move's primary effect -
+    a status move whose whole point is the status - is not a secondary effect, so
+    callers pass those through without consulting this.
+    """
+    if get_active_ability(defender) in SECONDARY_IMMUNE_ABILITIES:
+        return 0
+    return base_chance * SECONDARY_CHANCE_ABILITIES.get(get_active_ability(attacker), 1.0)
+
+
 def evasion_multiplier(defender, weather='none'):
     """
     What an ability does to its owner's evasion. Higher means harder to hit.
@@ -2996,6 +3046,12 @@ def hit_chance(attacker, defender, move, weather='none'):
     # Telekinesis holds the target up where it cannot dodge
     if (defender.get('volatile_statuses') or {}).get('telekinesis'):
         eva_stage = 0
+
+    # Mind's Eye ignores whatever the target has done to its evasion, and refuses to have
+    # its own accuracy lowered.
+    if get_active_ability(attacker) in EVASION_IGNORING_ABILITIES:
+        eva_stage = min(0, eva_stage)
+        acc_stage = max(0, acc_stage)
 
     net_stage = max(-6, min(6, acc_stage - eva_stage))
     if net_stage >= 0:
@@ -3379,8 +3435,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
     if defender['volatile_statuses'].get('protected') and shield_stops_this and 'user' not in move_target:
         BYPASS_MOVES = ['feint', 'phantom-force', 'shadow-force', 'hyperspace-fury', 'hyperspace-hole']
+        # Unseen Fist and Piercing Drill reach through a shield with anything that touches
+        punches_through = (get_active_ability(attacker) in PROTECT_PIERCING_ABILITIES
+                           and makes_contact(move, attacker))
 
-        if move_name in BYPASS_MOVES:
+        if move_name in BYPASS_MOVES or punches_through:
             defender['volatile_statuses']['protected'] = False
             defender['volatile_statuses'].pop('protect_type', None)
             msg += f"💥 **{attacker['name'].capitalize()}** broke through the protection! "
@@ -3530,6 +3589,33 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     if move_name == 'tera-blast' and attacker.get('tera_type'):
         move_type = attacker['tera_type']
 
+    # ==========================================
+    # 🎭 THE -ATE FAMILY, AND THE REST OF THE TYPE REWRITES
+    # ==========================================
+    # This has to be the LAST word on move_type, and it has to be here: the immunity
+    # table and the type chart are both a few lines below, and the Natural Gift bug was
+    # exactly a rewrite that landed after them.
+    ate_multiplier = 1.0
+    rewrite = TYPE_REWRITE_ABILITIES.get(atk_ability)
+    if rewrite and move.get('class') != 'status':
+        applies = (rewrite.get('sound') and is_sound_move(move_name)) or \
+                  (rewrite.get('from') in ('*', move_type))
+        if applies and move_type != rewrite['to']:
+            move_type = rewrite['to']
+            ate_multiplier = rewrite['multiplier']
+
+    # Protean and Libero: the user becomes the element it is about to throw
+    if atk_ability in PROTEAN_ABILITIES and move.get('class') != 'status':
+        if (attacker.get('types') or []) != [move_type]:
+            attacker['types'] = [move_type]
+            msg += f" 🎨 {attacker['name'].capitalize()} became the {move_type.title()} type!"
+
+    # Mimicry wears the terrain. Applied as an override for THIS calculation rather than
+    # written onto the specimen: the type is meant to last only as long as the terrain,
+    # and there is nowhere yet that would put it back when the terrain expires.
+    atk_types = mimicry_types(attacker, terrain)
+    def_types = mimicry_types(defender, terrain)
+
     if move_name in ['jump-kick', 'high-jump-kick']:
         crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
         attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
@@ -3575,9 +3661,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 return 0, f"🎈 {defender['name'].capitalize()} is immune to the attack due to its {ability_name}!", None, [], 0
             
     type_multiplier = 1.0
-    for def_type in (defender.get('types') or []):
-        type_multiplier *= TYPE_CHART.get(move_type, {}).get(def_type, 1.0)
-        
+    for def_type in def_types:
+        step = TYPE_CHART.get(move_type, {}).get(def_type, 1.0)
+        # Scrappy and Mind's Eye reach Ghost types with Normal and Fighting, which the
+        # chart records as a flat immunity.
+        if (step == 0 and def_type == 'ghost' and move_type in ('normal', 'fighting')
+                and atk_ability in GHOST_PIERCING_ABILITIES):
+            step = 1.0
+        type_multiplier *= step
+
+
     # ==========================================
     # THE WONDER GUARD SHIELD
     # ==========================================
@@ -4801,7 +4894,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             base_damage_unmodified *= 2.0
             msg += " It struck the target up in the air! "
             
-        stab = 1.5 if move_type in (attacker.get('types') or []) else 1.0
+        stab_bonus = ADAPTABILITY_STAB if atk_ability == 'adaptability' else 1.5
+        stab = stab_bonus if move_type in atk_types else 1.0
 
         weather_mod = 1.0
         if weather in ['sun', 'extremely-harsh-sunlight']:
@@ -4820,7 +4914,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # environmental damper on one type, applied once per strike.
         weather_mod *= sport_multiplier(move_type, field)
 
-        ability_mod = 1.0
+        # The -ate family's boost, decided when the element was rewritten far above
+        ability_mod = ate_multiplier
         amplifier = BIOLOGICAL_TRAITS.get('damage_multipliers', {}).get(atk_ability)
         if amplifier:
             cond = amplifier['condition']
@@ -4887,6 +4982,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # 🚨 THE MULTI-STRIKE EVALUATOR
         # ==========================================
         target_hits = 1
+        # Parental Bond's second strike. Handled as a hit count with a reduced payload
+        # rather than a bespoke branch, so it rides the multi-strike loop already here.
+        parental_bond = (atk_ability == 'parental-bond'
+                         and move.get('class') != 'status'
+                         and move_name not in MULTI_STRIKE_MOVES)
         
         # 1. Fixed-Hit Anomalies
         if move_name == 'water-shuriken' and atk_ability == 'battle-bond':
@@ -4909,6 +5009,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 else: target_hits = 5
             else:
                 target_hits = random.randint(hit_data['min'], hit_data['max'])
+
+        if parental_bond:
+            target_hits = 2
 
         hits_landed = 0
         total_damage = 0
@@ -4949,6 +5052,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif move_name == 'population-bomb':
                 current_power = 20
                 base_damage_unmodified = (((2 * level / 5) + 2) * current_power * (a / max(1, d))) / 50 + 2
+
+            # Parental Bond's follow-up is the same swing at a fraction of the force
+            strike_scale = PARENTAL_BOND_SECOND_HIT if (parental_bond and strike > 0) else 1.0
 
             # Now that accuracy and power are locked, record the hit!
             hits_landed += 1
@@ -4997,7 +5103,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
             if is_crit: crit_occurred = True
             
-            hit_modifier = type_multiplier * stab * weather_mod * ability_mod * random.uniform(0.85, 1.00)
+            hit_modifier = (type_multiplier * stab * weather_mod * ability_mod
+                            * strike_scale * random.uniform(0.85, 1.00))
             
             # 🚨 GLAIVE RUSH VULNERABILITY
             if defender.get('volatile_statuses', {}).get('glaive_rush'):
@@ -5061,7 +5168,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                     spike_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 6))
                     attacker['current_hp'] = max(0, attacker['current_hp'] - spike_dmg)
                     msg += f" 💥 {attacker['name'].capitalize()} was hurt by the Rocky Helmet!"
-                if def_ability in BIOLOGICAL_TRAITS.get('contact_damage', []):
+                if (def_ability in BIOLOGICAL_TRAITS.get('contact_damage', [])
+                and makes_contact(move, attacker)):
                     skin_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 8))
                     attacker['current_hp'] = max(0, attacker['current_hp'] - skin_dmg)
                     msg += f" 💥 {attacker['name'].capitalize()} was hurt by {defender['name'].capitalize()}'s {def_ability.replace('-', ' ').title()}!"
@@ -5104,8 +5212,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if not is_afflicted or ailment == 'trap': # 🚨 Allow traps even if they are poisoned/burned!
             chance = move.get('ailment_chance', 0)
             if chance == 0 and move.get('class') == 'status':
+                # A status move's whole point is its ailment, so it is a PRIMARY effect
+                # and neither Serene Grace nor Shield Dust has any say over it.
                 chance = 100
-                
+            else:
+                chance = secondary_chance(chance, attacker, defender)
+
             if random.randint(1, 100) <= chance:
                 inflicted_status = ailment
         else:
@@ -5224,8 +5336,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # HOOK 3: POST-STRIKE RETALIATION (Contact)
     # ==========================================
     # We use the 'physical' class as our proxy for kinetic contact moves
-    if move.get('class') == 'physical' and damage > 0:
-        atk_types = attacker.get('types') or []
+    if makes_contact(move, attacker) and damage > 0:
+        contact_types = attacker.get('types') or []
         
         # 1. CONTACT STATUS (Static, Flame Body, Poison Point, Effect Spore)
         contact_trait = BIOLOGICAL_TRAITS.get('contact_status', {}).get(def_ability)
@@ -5235,9 +5347,19 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 # Ensure the attacker isn't biologically immune to the pathogen!
                 # Read off the shared table rather than the row's single 'immune' type,
                 # which knew about Poison but not Steel.
-                if not status_type_immune(contact_trait['status'], atk_types):
+                if not status_type_immune(contact_trait['status'], contact_types):
                     attacker['status_condition'] = {'name': contact_trait['status'], 'duration': -1}
                     msg += f" {attacker['name'].capitalize()} was afflicted with {contact_trait['status']} by {defender['name'].capitalize()}'s {def_ability.replace('-', ' ').title()}!"
+
+        # 1a. TOXIC CHAIN - poison on contact with the move, not with the specimen.
+        # The schema has no separate bad poison, so this lands as ordinary poison, the
+        # same simplification Toxic already makes.
+        if (atk_ability == 'toxic-chain' and not defender.get('status_condition')
+                and random.randint(1, 100) <= TOXIC_CHAIN_CHANCE):
+            if not status_type_immune('poison', defender.get('types'), attacker):
+                defender['status_condition'] = {'name': 'poison', 'duration': -1}
+                msg += (f" ☣️ {defender['name'].capitalize()} was poisoned by "
+                        f"{attacker['name'].capitalize()}'s Toxic Chain!")
 
         # 1b. OFFENSIVE CONTACT STATUS (Poison Touch) - the attacker infecting what it hits
         touch_trait = BIOLOGICAL_TRAITS.get('contact_status_offensive', {}).get(atk_ability)
@@ -5259,6 +5381,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 msg += (f" 💘 {attacker['name'].capitalize()} fell in love with "
                         f"{defender['name'].capitalize()}'s Cute Charm!")
 
+
+    # COLOUR CHANGE - the target takes on the element that just hit it
+    if (def_ability == 'color-change' and damage > 0 and move.get('class') != 'status'
+            and (defender.get('types') or []) != [move_type]):
+        defender['types'] = [move_type]
+        msg += f" 🎨 {defender['name'].capitalize()} became the {move_type.title()} type!"
 
     # ==========================================
     # PHASE 3: STAT MODIFIERS
@@ -5330,6 +5458,8 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             chance = move.get('stat_chance', 0)
             if chance == 0 and move_class == 'status':
                 chance = 100
+            else:
+                chance = secondary_chance(chance, attacker, defender)
                 
             # Ensures secondary stat drops from attacks (like Moonblast) only happen if damage > 0
             if random.randint(1, 100) <= chance and (move_class == 'status' or damage > 0):
@@ -5454,7 +5584,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     elif inflicted_status == 'burn' and 'fire' in def_types:
         inflicted_status = None
         msg += f" {defender['name'].capitalize()}'s Fire typing makes it immune to burns!"
-    elif inflicted_status == 'poison' and ('poison' in def_types or 'steel' in def_types):
+    # Read through the shared table rather than testing the types here, so Corrosion -
+    # which exists precisely to poison these two - is not undone one line later.
+    elif inflicted_status == 'poison' and status_type_immune('poison', def_types, attacker):
         inflicted_status = None
         msg += f" {defender['name'].capitalize()}'s typing makes it immune to poison!"
     elif inflicted_status == 'freeze' and 'ice' in def_types:
@@ -5471,6 +5603,25 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         verb = "keeps it wide awake" if blocked == 'sleep' else f"refuses the {blocked}"
         msg += (f" {defender['name'].capitalize()}'s {pretty_ability(def_ability)} "
                 f"{verb}!")
+
+    # STENCH staples a flinch chance onto every damaging move its owner throws. Routed
+    # through inflicted_status so it reaches apply_status_outcome, which is the one place
+    # that knows flinch is a volatile rather than a status.
+    if (atk_ability in FLINCH_ON_HIT_ABILITIES and damage > 0
+            and move.get('class') != 'status' and not inflicted_status):
+        if random.randint(1, 100) <= FLINCH_ON_HIT_ABILITIES[atk_ability]:
+            inflicted_status = 'flinch'
+
+    # POISON PUPPETEER confuses whatever ITS OWNER poisons - including the poison Toxic
+    # Chain just applied directly, which is why this reads the target rather than only
+    # the pending status.
+    if atk_ability in POISON_CONFUSION_ABILITIES:
+        landed_poison = (inflicted_status == 'poison'
+                         or (defender.get('status_condition') or {}).get('name') == 'poison')
+        volatiles = defender.setdefault('volatile_statuses', {})
+        if landed_poison and 'confusion' not in volatiles:
+            volatiles['confusion'] = random.randint(2, 5)
+            msg += f" 💫 {defender['name'].capitalize()} was confused by the poison!"
 
     # ==========================================
     # PHASE 6: THERMODYNAMIC REACTIONS
