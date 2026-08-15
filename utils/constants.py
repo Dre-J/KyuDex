@@ -521,6 +521,10 @@ BIOLOGICAL_TRAITS = {
     # The defensive half of the same idea: a multiplier on damage COMING IN, keyed on the
     # target's ability. Punk Rock and Water Bubble each cut the very thing they amplify,
     # so both sit in this table and the one above.
+    #
+    # An entry may be a single rule or a LIST of them, in which case every rule that
+    # matches applies. Fluffy is the reason: it halves contact damage and doubles Fire
+    # damage, and a Fire punch meets both - which is exactly how it nets out in the games.
     'incoming_multipliers': {
         'punk-rock':    {'condition': 'sound', 'multiplier': 0.5},
         'water-bubble': {'condition': 'move_type', 'types': ['fire'], 'multiplier': 0.5},
@@ -531,6 +535,21 @@ BIOLOGICAL_TRAITS = {
         'purifying-salt': {'condition': 'move_type', 'types': ['ghost'], 'multiplier': 0.5},
         'fur-coat':       {'condition': 'move_class', 'classes': ['physical'], 'multiplier': 0.5},
         'ice-scales':     {'condition': 'move_class', 'classes': ['special'], 'multiplier': 0.5},
+
+        # --- Block 9: damage reduction and survival ---
+        # Filter, Solid Rock and Prism Armor are the same ability three times over: they
+        # take a quarter off anything the chart calls super effective. Read off the
+        # multiplier rather than off the element, so a 4x hit is blunted too.
+        'filter':         {'condition': 'super_effective', 'multiplier': 0.75},
+        'solid-rock':     {'condition': 'super_effective', 'multiplier': 0.75},
+        'prism-armor':    {'condition': 'super_effective', 'multiplier': 0.75},
+
+        # Multiscale and Shadow Shield are likewise twins - half damage while untouched.
+        'multiscale':     {'condition': 'at_full_hp', 'multiplier': 0.5},
+        'shadow-shield':  {'condition': 'at_full_hp', 'multiplier': 0.5},
+
+        'fluffy': [{'condition': 'contact', 'multiplier': 0.5},
+                   {'condition': 'move_type', 'types': ['fire'], 'multiplier': 2.0}],
     },
 
     # A flat multiplier on one of the specimen's OWN stats, read where the damage formula
@@ -748,6 +767,32 @@ STAT_DROP_RETALIATION_ABILITIES = {
 # the one on arrival. Scrappy is not intimidated by a scary face, Own Tempo and Inner
 # Focus do not rattle, and Oblivious does not notice.
 INTIMIDATE_IMMUNE_ABILITIES = {'inner-focus', 'own-tempo', 'oblivious', 'scrappy'}
+
+# ==========================================
+# 🪨 BLOCK 9: DAMAGE REDUCTION AND SURVIVAL
+# ==========================================
+# Most of this block is table rows in `incoming_multipliers` above. What is left are the
+# two things that will not fit there: one reads BOTH sides of the field, and one rewrites
+# the type chart rather than multiplying its result.
+
+# The auras reach across the whole field. Whoever is carrying one, the element it names
+# is strengthened for everybody - the holder's own attacks and the attacks aimed at it
+# alike. That is why they cannot live in either of the one-sided tables.
+AURA_ABILITIES = {'dark-aura': 'dark', 'fairy-aura': 'fairy'}
+AURA_MULTIPLIER = 4.0 / 3.0
+
+# Aura Break does not switch an aura off, it turns it upside down: the same element is
+# weakened by the same fraction instead. With no aura on the field it does nothing at all.
+AURA_BREAK_ABILITIES = {'aura-break'}
+AURA_BREAK_MULTIPLIER = 3.0 / 4.0
+
+# Tera Shell answers every damaging move at full HP as though the target resisted it -
+# it OVERWRITES the chart rather than multiplying it, which is why it is not a row in
+# incoming_multipliers. Faithful to the games, that means a move which was already worse
+# than not-very-effective is nudged UP to 0.5x; the only thing it cannot touch is a
+# genuine immunity.
+TERA_SHELL_ABILITIES = {'tera-shell'}
+TERA_SHELL_MULTIPLIER = 0.5
 
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
