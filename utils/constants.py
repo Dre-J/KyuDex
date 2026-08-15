@@ -683,6 +683,72 @@ EARLY_BIRD_SLEEP_RATE = 2
 # redirection pair in Block 6.
 ALLY_DODGE_ABILITIES = {'telepathy'}
 
+# ==========================================
+# 🛡️ BLOCK 8: STAT-STAGE PROTECTION AND RETALIATION
+# ==========================================
+# Everything here reads the same event: ANOTHER specimen lowering a stage. A specimen's
+# own drops are its own business - Close Combat's Defense and Overheat's Sp. Atk are the
+# price of the move, and nothing on this page refuses them.
+ALL_STATS = '*'
+
+# The payload speaks PokeAPI's stat names, the stage block speaks the database's. This
+# mapping is the only bridge between them, so anything not named here is not a stage and
+# is ignored rather than written somewhere odd.
+STAT_STAGE_KEYS = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk',
+                   'special-defense': 'sp_def', 'speed': 'speed',
+                   'accuracy': 'accuracy', 'evasion': 'evasion'}
+
+# A stand-in for "the other side did this" when there is no specimen to point at -
+# Sticky Web's Speed drop belongs to whoever laid the web, who may not even be on the
+# field any more. Marked unreflectable at the call site, so Mirror Armor refuses the drop
+# rather than trying to hand it to a ghost.
+HAZARD_SOURCE = {'name': 'the hazard'}
+
+# Which stages an ability refuses to let the other side lower. '*' guards every stage;
+# anything else names the ones it guards and lets the rest through, so a Hyper Cutter
+# still loses Speed to Icy Wind.
+STAT_DROP_IMMUNE_ABILITIES = {
+    'clear-body':      ALL_STATS,
+    'white-smoke':     ALL_STATS,
+    'full-metal-body': ALL_STATS,
+    'mirror-armor':    ALL_STATS,   # refuses AND returns - see the reflecting set below
+    'hyper-cutter':    {'attack'},
+    'big-pecks':       {'defense'},
+    'keen-eye':        {'accuracy'},
+    # PokeAPI still carries Illuminate's old "doubles the wild encounter rate" text.
+    # Gen 9 rebuilt it as a battle ability: accuracy cannot be lowered, and the target's
+    # evasion is ignored (the second half lives in EVASION_IGNORING_ABILITIES).
+    'illuminate':      {'accuracy'},
+    'minds-eye':       {'accuracy'},
+    # Flower Veil shields stages the same way Block 7 had it shield status, and on the
+    # same condition - see the type gate below.
+    'flower-veil':     ALL_STATS,
+}
+
+# Abilities from the table above that only shield while their owner is the right element.
+# Flower Veil on a non-Grass specimen guards nothing, exactly as its status half already
+# behaves in STATUS_IMMUNE_ABILITIES.
+STAT_DROP_IMMUNE_TYPE_GATE = {'flower-veil': 'grass'}
+
+# Mirror Armor does not simply refuse the drop, it hands it straight back. The returned
+# drop is screened again at the far end, so a Mirror Armor facing a Clear Body fizzles -
+# but it is never reflected twice, which is what stops the two of them bouncing one drop
+# between them for ever.
+STAT_DROP_REFLECTING_ABILITIES = {'mirror-armor'}
+
+# Losing a stage makes these angry. The stat each one raises, and by how much. They only
+# fire when the drop actually LANDS: a stat already pinned at -6 cannot fall, so there is
+# nothing to be angry about.
+STAT_DROP_RETALIATION_ABILITIES = {
+    'defiant':     ('attack', 2),
+    'competitive': ('special-attack', 2),
+}
+
+# Since Gen 8 these four refuse Intimidate specifically - not stat drops in general, just
+# the one on arrival. Scrappy is not intimidated by a scary face, Own Tempo and Inner
+# Focus do not rattle, and Oblivious does not notice.
+INTIMIDATE_IMMUNE_ABILITIES = {'inner-focus', 'own-tempo', 'oblivious', 'scrappy'}
+
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
 WEIGHT_MULTIPLIER_ABILITIES = {
@@ -753,8 +819,8 @@ MIMICRY_TYPES = {'electric': 'electric', 'grassy': 'grass',
 # Normal and Fighting reach Ghost types.
 GHOST_PIERCING_ABILITIES = {'scrappy', 'minds-eye'}
 
-# The target's evasion is ignored entirely.
-EVASION_IGNORING_ABILITIES = {'minds-eye'}
+# The target's evasion is ignored entirely. Illuminate joins Mind's Eye here from Gen 9.
+EVASION_IGNORING_ABILITIES = {'minds-eye', 'illuminate'}
 
 # These moves never make contact, so nothing that punishes contact can answer them.
 NO_CONTACT_ABILITIES = {'long-reach'}
