@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2004,8 +2004,19 @@ def is_trapped(pokemon, opponent=None):
 
     if volatiles.get('partially_trapped', 0) > 0 or volatiles.get('hard_trapped'):
         return True
-    if opponent is not None and get_active_ability(opponent) == 'shadow-tag':
-        return True
+
+    # What the specimen OPPOSITE is holding it with. Shadow Tag holds everything; Arena
+    # Trap only reaches what is standing on the ground, and Magnet Pull only Steel - so
+    # the table says what each one can catch rather than adding a branch per ability.
+    if opponent is not None:
+        catches = get_active_ability(opponent)
+        if catches in TRAPPING_ABILITIES:
+            reach = TRAPPING_ABILITIES[catches]
+            if reach is None:
+                return True
+            if reach == 'grounded':
+                return is_grounded(pokemon)
+            return reach in (pokemon.get('types') or [])
 
     return False
 
@@ -2636,13 +2647,23 @@ def break_stale_charge(pokemon):
 
 
 def leave_field(pokemon):
-    """Everything that comes off a specimen when it is withdrawn."""
+    """
+    Everything that comes off a specimen when it is withdrawn.
+
+    Returns a log line for the things that are worth announcing - Natural Cure and
+    Regenerator - or "" for the ordinary case. Callers that have no log to write to can
+    keep ignoring the return value; the healing happens either way.
+    """
+    note = ""
     if pokemon is not None:
         # Coming back in counts as arriving fresh, which is what re-arms Fake Out
         pokemon['turns_on_field'] = 0
         # Infatuation is an attachment to the specimen that was standing opposite, so it
         # cannot survive either of them leaving.
         (pokemon.get('volatile_statuses') or {}).pop('infatuation', None)
+        # ...and so is having already bailed out. Re-entering re-arms Wimp Out.
+        pokemon.pop(BAIL_OUT_MARKER, None)
+        note = collect_switch_out_perks(pokemon)
     reset_stat_stages(pokemon)
     # Undone before the stat/ability restores, so those put back the specimen's OWN
     # figures rather than the borrowed ones it was wearing.
@@ -2650,6 +2671,68 @@ def leave_field(pokemon):
     restore_base_stats(pokemon)
     restore_base_ability(pokemon)
     end_charge(pokemon)
+    return note
+
+
+def collect_switch_out_perks(pokemon):
+    """
+    Natural Cure and Regenerator, paid at the door on the way out.
+
+    A fainted specimen collects neither. It is not switching out - it is gone - and
+    letting Regenerator heal a corpse would quietly resurrect it, since the engines read
+    current_hp to decide whether a replacement is even needed.
+    """
+    if (pokemon.get('current_hp') or 0) <= 0:
+        return ""
+
+    note = ""
+    ability = get_active_ability(pokemon)
+    name = pokemon.get('name', 'it').capitalize()
+
+    if ability in SWITCH_OUT_CURE_ABILITIES:
+        condition = (pokemon.get('status_condition') or {}).get('name')
+        if condition and condition != 'none':
+            pokemon['status_condition'] = None
+            note += (f"💫 **{name}**'s Natural Cure shed its {condition} "
+                     f"as it withdrew!\n")
+
+    fraction = SWITCH_OUT_HEAL_FRACTION.get(ability)
+    if fraction:
+        ceiling = pokemon.get('max_hp', 1)
+        healed = min(ceiling, pokemon['current_hp'] + math.floor(ceiling * fraction))
+        if healed > pokemon['current_hp']:
+            pokemon['current_hp'] = healed
+            note += f"💚 **{name}**'s Regenerator knitted it back together!\n"
+
+    return note
+
+
+def resists_forced_switch(pokemon):
+    """Suction Cups and Guard Dog: Whirlwind and Roar cannot move these."""
+    return get_active_ability(pokemon) in FORCED_SWITCH_IMMUNE_ABILITIES
+
+
+def intimidate_reversal(pokemon):
+    """Guard Dog's answer to Intimidate: (stat, stages), or None. It gains rather than loses."""
+    return INTIMIDATE_REVERSING_ABILITIES.get(get_active_ability(pokemon))
+
+
+def wants_to_bail_out(pokemon):
+    """
+    Wimp Out and Emergency Exit: hurt past half, still standing, and not already gone.
+
+    The marker is what makes this fire on the way DOWN rather than every turn it spends
+    below half, and leave_field clears it so coming back in re-arms the ability.
+    """
+    if not pokemon or get_active_ability(pokemon) not in BAIL_OUT_ABILITIES:
+        return False
+    if pokemon.get(BAIL_OUT_MARKER):
+        return False
+
+    ceiling = max(1, pokemon.get('max_hp', 1))
+    standing = pokemon.get('current_hp', 0)
+    return 0 < standing < ceiling * BAIL_OUT_THRESHOLD
+
 
 def baton_pass_state(outgoing, incoming):
     """
