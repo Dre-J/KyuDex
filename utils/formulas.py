@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -3031,6 +3031,51 @@ def shrugs_off_intimidate(target):
     return get_active_ability(target) in INTIMIDATE_IMMUNE_ABILITIES
 
 
+# ==========================================
+# 🪨 BLOCK 9: DAMAGE REDUCTION AND SURVIVAL
+# ==========================================
+
+def aura_multiplier(move_type, attacker, defender):
+    """
+    Dark Aura and Fairy Aura, read off BOTH sides of the field.
+
+    An aura is a property of the battlefield rather than of one combatant: whoever is
+    carrying it, the element it names is strengthened for everybody. Aura Break inverts
+    it rather than cancelling it, and does nothing when there is no aura to invert.
+
+    Two auras of the same element do not stack - one Dark Aura and a second Dark Aura
+    still leave the field boosted once, which is what the flag rather than a running
+    product gets right here.
+    """
+    if not any(AURA_ABILITIES.get(get_active_ability(s)) == move_type
+               for s in (attacker, defender)):
+        return 1.0
+
+    broken = any(get_active_ability(s) in AURA_BREAK_ABILITIES
+                 for s in (attacker, defender))
+    return AURA_BREAK_MULTIPLIER if broken else AURA_MULTIPLIER
+
+
+def tera_shell_multiplier(defender, move_class, type_multiplier, ability=None):
+    """
+    What the type chart reads as once Tera Shell has had its say, at full HP.
+
+    Returns the multiplier unchanged when the shell does not apply. A genuine immunity
+    survives it - the shell resists attacks, it does not invent a weakness to them.
+
+    `ability` lets the caller hand in the ability the rest of the formula is working
+    with, so a G-Max move that ignores the target's ability ignores this one too.
+    """
+    if (ability if ability is not None else get_active_ability(defender)) \
+            not in TERA_SHELL_ABILITIES:
+        return type_multiplier
+    if move_class == 'status' or type_multiplier == 0:
+        return type_multiplier
+    if defender.get('current_hp', 0) < defender.get('max_hp', 1):
+        return type_multiplier
+    return TERA_SHELL_MULTIPLIER
+
+
 def resolve_stat_stages(pending, prefix=""):
     """
     Walk a queue of stage changes and move the ones that survive.
@@ -4014,7 +4059,18 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # Delta stream removes Flying-type weaknesses
         if TYPE_CHART.get(move_type, {}).get('flying', 1.0) > 1.0:
             type_multiplier /= 2.0 # Halves the super-effective damage back to neutral!
-    
+
+    # ==========================================
+    # 🐢 TERA SHELL
+    # ==========================================
+    # Placed here, after every other adjustment to the chart, because it OVERWRITES the
+    # result rather than multiplying it - anything applied afterwards would be lost. It
+    # has to land before the multiplier is read by Filter's condition or by the damage
+    # formula itself, which is the same rule the Block 5 rewrites obey.
+    type_multiplier = tera_shell_multiplier(defender, move_class, type_multiplier,
+                                            def_ability)
+
+
     # ==========================================
     # 🚨 TYPE REWRITES
     # ==========================================
@@ -5256,16 +5312,35 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # The defensive half, keyed on the TARGET's ability. Punk Rock and Water Bubble
         # each blunt exactly what they amplify, so they appear in both tables.
         blunter = BIOLOGICAL_TRAITS.get('incoming_multipliers', {}).get(def_ability)
-        if blunter:
-            cond = blunter['condition']
+        # An ability may carry one rule or several. Fluffy is the reason for the list:
+        # it halves contact damage AND doubles Fire damage, so a Fire punch meets both
+        # and comes out level - which is how it reads in the games.
+        for rule in ([blunter] if isinstance(blunter, dict) else (blunter or [])):
+            cond = rule['condition']
             if cond == 'sound' and is_sound_move(move_name):
-                ability_mod *= blunter['multiplier']
-            elif cond == 'move_type' and move_type in blunter['types']:
-                ability_mod *= blunter['multiplier']
+                ability_mod *= rule['multiplier']
+            elif cond == 'move_type' and move_type in rule['types']:
+                ability_mod *= rule['multiplier']
             # Fur Coat and Ice Scales blunt a whole category. Read off the category the
             # move RESOLVED as, so a Photon Geyser that turned physical meets Fur Coat.
-            elif cond == 'move_class' and effective_class in blunter['classes']:
-                ability_mod *= blunter['multiplier']
+            elif cond == 'move_class' and effective_class in rule['classes']:
+                ability_mod *= rule['multiplier']
+            # Filter, Solid Rock and Prism Armor take the edge off anything the chart
+            # calls super effective, however super effective it was.
+            elif cond == 'super_effective' and type_multiplier > 1.0:
+                ability_mod *= rule['multiplier']
+            # Multiscale and Shadow Shield, only while the target is untouched.
+            elif (cond == 'at_full_hp'
+                  and defender.get('current_hp', 0) >= defender.get('max_hp', 1)):
+                ability_mod *= rule['multiplier']
+            # Fluffy's contact half. Long Reach denies it the same way it denies Rough
+            # Skin, because it is the same question being asked.
+            elif cond == 'contact' and makes_contact(move, attacker):
+                ability_mod *= rule['multiplier']
+
+        # Dark Aura and Fairy Aura strengthen their element for EVERYONE on the field, so
+        # this is read off both sides rather than off either table above.
+        ability_mod *= aura_multiplier(move_type, attacker, defender)
 
 
         if atk_ability == 'flash-fire' and move_type == 'fire' and attacker.get('volatile_statuses', {}).get('flash_fire'):
