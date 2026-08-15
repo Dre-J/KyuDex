@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2666,6 +2666,13 @@ def leave_field(pokemon):
         # line rather than sitting under it.
         pokemon.pop(BAIL_OUT_MARKER, None)
         pokemon.pop(HP_THRESHOLD_MARKER, None)
+        # Palafin transforms on the way OUT, and comes back a hero. Requested here
+        # rather than done here for the usual reason: this function is synchronous
+        # and the species tables are not.
+        _hero = hero_form_for(pokemon)
+        if _hero:
+            pokemon[ZERO_TO_HERO_MARKER] = True
+            request_form_flip(pokemon, _hero, 'burst into its Hero Form')
         note = collect_switch_out_perks(pokemon)
     reset_stat_stages(pokemon)
     # Undone before the stat/ability restores, so those put back the specimen's OWN
@@ -3438,6 +3445,129 @@ def faint_recoil(fainted, killer, move, was_contact):
     if ability in INNARDS_OUT_ABILITIES:
         return max(0, fainted.get('_hp_before_blow', 0)), ability
     return 0, None
+
+
+# ==========================================
+# 🦋 BLOCK 16: EVENT-DRIVEN FORM FLIPS
+# ==========================================
+# Every one of these answers the same question - which body should this specimen be
+# wearing right now - so they are predicates that NAME a form rather than functions
+# that change one. The changing is done by assume_species_form, which is async and
+# needs a database, and keeping that on the far side of the answer is what lets these
+# be tested without standing a battle up.
+
+def request_form_flip(pokemon, form, flavour=''):
+    """Bank a form change for the engines to cash in. Returns whether one was owed."""
+    if not pokemon or not form:
+        return False
+    pokemon[FORM_FLIP_REQUEST] = (form, flavour)
+    return True
+
+
+def _wearing(pokemon):
+    return str(pokemon.get('name') or '').lower()
+
+
+def hp_form_for(pokemon):
+    """
+    The form an HP-watching ability says this specimen should be in, or None.
+
+    Zen Mode, Schooling, Shields Down and Power Construct. `reverts` is what separates
+    Zygarde from the rest: coming back above the line puts the others back, and leaves
+    Complete alone.
+    """
+    rule = HP_FORM_FLIPS.get(get_active_ability(pokemon))
+    if not rule:
+        return None
+    if pokemon.get('level', 100) < rule.get('min_level', 0):
+        return None
+
+    share = pokemon.get('current_hp', 0) / max(1, pokemon.get('max_hp', 1))
+    if 'below' in rule:
+        transformed = share < rule['below']
+    else:
+        transformed = share > rule['above']
+
+    here = _wearing(pokemon)
+    if transformed:
+        return rule['pairs'].get(here)
+
+    if not rule.get('reverts'):
+        return None
+    back = {v: k for k, v in rule['pairs'].items()}
+    return back.get(here)
+
+
+def hit_breaks_form(defender, move):
+    """
+    Disguise and Ice Face: (broken_form, toll) when this hit comes off the costume.
+
+    Returns None when the specimen is already unmasked, or when Ice Face is looking at
+    a special move, which it simply stands there and takes.
+    """
+    rule = BROKEN_BY_A_HIT.get(get_active_ability(defender))
+    if not rule or (move or {}).get('class') == 'status':
+        return None
+    if rule['physical_only'] and (move or {}).get('class') != 'physical':
+        return None
+
+    broken = rule['pairs'].get(_wearing(defender))
+    if not broken:
+        return None
+    return broken, math.floor(max(1, defender.get('max_hp', 1)) * rule['toll'])
+
+
+def stance_form_for(attacker, move_name, move):
+    """Aegislash: the blade for a damaging move, the shield for King's Shield."""
+    if get_active_ability(attacker) not in STANCE_CHANGE_ABILITIES:
+        return None
+    here = _wearing(attacker)
+    if normalise_move_name(move_name) in STANCE_SHIELD_MOVES:
+        return STANCE_SHIELD.get(here)
+    if (move or {}).get('class') == 'status':
+        return None
+    return STANCE_BLADE.get(here)
+
+
+def hunger_form_for(pokemon):
+    """Morpeko, which is hungry every other turn whatever else is happening."""
+    if get_active_ability(pokemon) not in HUNGER_SWITCH_ABILITIES:
+        return None
+    return HUNGER_PAIRS.get(_wearing(pokemon))
+
+
+def hero_form_for(pokemon):
+    """Palafin, on the way OUT. One way, and once a battle."""
+    if get_active_ability(pokemon) not in ZERO_TO_HERO_ABILITIES:
+        return None
+    if pokemon.get(ZERO_TO_HERO_MARKER):
+        return None
+    return ZERO_TO_HERO_PAIRS.get(_wearing(pokemon))
+
+
+def gulp_catch_for(attacker, move_name):
+    """
+    What Cramorant surfaces holding, or None.
+
+    Which mouthful it caught depends on how hurt it was when it went under, which is
+    why this reads the HP rather than just the move.
+    """
+    if get_active_ability(attacker) not in GULP_MISSILE_ABILITIES:
+        return None
+    if normalise_move_name(move_name) not in GULP_TRIGGER_MOVES:
+        return None
+    if _wearing(attacker) != GULP_BASE_FORM:
+        return None
+
+    share = attacker.get('current_hp', 0) / max(1, attacker.get('max_hp', 1))
+    return GULP_HURT_FORM if share <= GULP_HURT_THRESHOLD else GULP_HEALTHY_FORM
+
+
+def gulp_payload_for(defender):
+    """What a mouthful-holding Cramorant spits at whatever just hit it."""
+    if get_active_ability(defender) not in GULP_MISSILE_ABILITIES:
+        return None
+    return GULP_PAYLOADS.get(_wearing(defender))
 
 
 def paradox_engine_running(pokemon, weather='none', terrain='none'):
@@ -4353,6 +4483,21 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         return 0, (f"\U0001f32c\ufe0f {defender['name'].capitalize()} rode the wind "
                    f"and was unharmed!"), None, [(TARGET_DEFENDER_SELF, _gained,
                                                   _stages)], 0
+
+    # ==========================================
+    # DISGUISE AND ICE FACE
+    # ==========================================
+    # The costume takes the hit. Answered up here with the other immunities because
+    # the move must not be allowed to happen at all - anything further down would be
+    # reading a hit that never landed.
+    _costume = hit_breaks_form(defender, move)
+    if _costume:
+        _broken, _toll = _costume
+        request_form_flip(defender, _broken, 'was knocked out of its disguise')
+        if _toll:
+            defender['current_hp'] = max(1, defender['current_hp'] - _toll)
+        return 0, (f"\U0001f3ad {defender['name'].capitalize()}'s disguise took "
+                   f"the hit!"), None, [], 0
 
     type_multiplier = 1.0
     for def_type in def_types:
@@ -6703,6 +6848,47 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
         inflicted_status = None
         stat_changes = [c for c in stat_changes if c[0] != 'defender']
+
+    # ==========================================
+    # BLOCK 16: WHAT THROWING THE MOVE DID TO THE THROWER
+    # ==========================================
+    # Aegislash draws its blade, and Cramorant surfaces with a mouthful. Requested
+    # here because this is the one place both engines agree a move is being used.
+    #
+    # Divergence, stated rather than hidden: the games change Aegislash BEFORE the
+    # move lands, so the blade's own attack swings with the blade's Attack stat.
+    # Here the request is cashed in afterwards, so the stance is a beat late and the
+    # first swing of a battle is made in the wrong one. Doing it properly means
+    # resolving a form change mid-formula, which needs the species tables this
+    # function has no way to reach.
+    _stance = stance_form_for(attacker, move_name, move)
+    if _stance:
+        request_form_flip(attacker, _stance, 'changed stance')
+
+    _caught = gulp_catch_for(attacker, move_name)
+    if _caught:
+        request_form_flip(attacker, _caught, 'surfaced with a mouthful')
+
+    # ==========================================
+    # BLOCK 16: GULP MISSILE SPITS BACK
+    # ==========================================
+    # Whatever Cramorant surfaced holding goes at the next thing that hurts it, and
+    # the mouthful it caught decides what that costs - a Defense stage from the
+    # little one, paralysis from the big one.
+    _mouthful = gulp_payload_for(defender) if damage > 0 else None
+    if _mouthful:
+        request_form_flip(defender, GULP_BASE_FORM, 'spat out its catch')
+        _recoil = math.floor(max(1, attacker.get('max_hp', 1)) * GULP_RECOIL_FRACTION)
+        attacker['current_hp'] = max(0, attacker['current_hp'] - _recoil)
+        msg += (f" \U0001f41f {defender['name'].capitalize()} spat its catch at "
+                f"{attacker['name'].capitalize()} for {_recoil}!")
+        if _mouthful.get('stat'):
+            _stat, _stages = _mouthful['stat']
+            stat_changes.append((TARGET_ATTACKER_FROM_FOE, _stat, _stages))
+        elif _mouthful.get('status') and not attacker.get('status_condition'):
+            if not status_type_immune(_mouthful['status'], attacker.get('types')):
+                attacker['status_condition'] = {'name': _mouthful['status'],
+                                                'duration': -1}
 
     # ==========================================
     # BLOCK 15: SYNCHRONIZE

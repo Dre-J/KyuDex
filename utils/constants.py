@@ -1173,6 +1173,110 @@ AFTERMATH_ABILITIES = {'aftermath'}
 AFTERMATH_FRACTION = 0.25
 INNARDS_OUT_ABILITIES = {'innards-out'}
 
+# ==========================================
+# 🦋 BLOCK 16: EVENT-DRIVEN FORM FLIPS
+# ==========================================
+# Ten phantoms that share one shape: watch for an event, then swap the specimen to another
+# form. Every one of them was counted as implemented because it appears in
+# FORM_LOCKED_ABILITIES - a set that stops an ability being REMOVED, which says nothing
+# about whether it ever did anything.
+#
+# They are split by WHAT they watch, not by what they turn into, because that is what
+# decides which hook each one can hang off.
+
+# --- watching its own HP, at the end of the turn -----------------------------------
+# Every one of these is "past this fraction, wear the other body". `reverts` says whether
+# coming back above the line puts it back: Power Construct is a one-way door, the rest
+# breathe in and out with the damage.
+#
+#   below / above - the side of the fraction the SECOND form is worn on
+#   pairs         - first form -> second form
+#   min_level     - Wishiwashi is a solitary fish until it is old enough to shoal
+_MINIOR_COLOURS = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet']
+
+HP_FORM_FLIPS = {
+    'zen-mode': {
+        'below': 0.5, 'reverts': True,
+        'pairs': {'darmanitan-standard': 'darmanitan-zen',
+                  'darmanitan-galar-standard': 'darmanitan-galar-zen'},
+    },
+    # The one that reads the other way round: Wishiwashi shoals while it is HEALTHY.
+    'schooling': {
+        'above': 0.25, 'reverts': True, 'min_level': 20,
+        'pairs': {'wishiwashi-solo': 'wishiwashi-school'},
+    },
+    'shields-down': {
+        'below': 0.5, 'reverts': True,
+        'pairs': {f'minior-{c}-meteor': f'minior-{c}' for c in _MINIOR_COLOURS},
+    },
+    # Zygarde does not go back. Once it is Complete it stays Complete.
+    'power-construct': {
+        'below': 0.5, 'reverts': False,
+        'pairs': {'zygarde-10-power-construct': 'zygarde-complete',
+                  'zygarde-50-power-construct': 'zygarde-complete'},
+    },
+}
+
+# --- watching what hit it ----------------------------------------------------------
+# Disguise and Ice Face are the same trick: the first qualifying hit is refused outright
+# and the disguise comes off instead. Disguise pays a token of its own maximum HP for the
+# privilege; Ice Face pays nothing but only ever stops a PHYSICAL move.
+#
+#   physical_only - Ice Face stands there and takes a special move
+#   toll          - fraction of its own maximum the specimen pays to break
+BROKEN_BY_A_HIT = {
+    'disguise': {'pairs': {'mimikyu-disguised': 'mimikyu-busted',
+                           'mimikyu-totem-disguised': 'mimikyu-totem-busted'},
+                 'physical_only': False, 'toll': 1.0 / 8.0},
+    'ice-face': {'pairs': {'eiscue-ice': 'eiscue-noice'},
+                 'physical_only': True, 'toll': 0.0},
+}
+
+# --- watching what it threw --------------------------------------------------------
+# Stance Change draws its blade for a damaging move and raises the shield for King's
+# Shield. The only form flip here that happens BEFORE the move lands rather than after.
+STANCE_CHANGE_ABILITIES = {'stance-change'}
+STANCE_BLADE = {'aegislash-shield': 'aegislash-blade'}
+STANCE_SHIELD = {'aegislash-blade': 'aegislash-shield'}
+STANCE_SHIELD_MOVES = {'kings-shield'}
+
+# --- watching the clock ------------------------------------------------------------
+# Morpeko is hungry every other turn, for ever, whatever else happens.
+HUNGER_SWITCH_ABILITIES = {'hunger-switch'}
+HUNGER_PAIRS = {'morpeko-full-belly': 'morpeko-hangry',
+                'morpeko-hangry': 'morpeko-full-belly'}
+
+# --- watching itself leave ----------------------------------------------------------
+# Palafin transforms on the way OUT and comes back a hero. One way, once a battle.
+ZERO_TO_HERO_ABILITIES = {'zero-to-hero'}
+ZERO_TO_HERO_PAIRS = {'palafin-zero': 'palafin-hero'}
+ZERO_TO_HERO_MARKER = '_became_hero'
+
+# --- Gulp Missile -------------------------------------------------------------------
+# Two form flips in one: Cramorant surfaces holding something after Surf or Dive, and
+# spits it at whatever hits it next. Which mouthful it caught depends on how hurt it was
+# when it dived, and each spits back differently.
+# Where a pending form change waits. Deciding a form is synchronous and cheap;
+# CHANGING one is async and needs the species tables, and calculate_damage is
+# neither async nor holding a database. So the predicates write a request here and
+# the engines cash it in - the same trick Block 14 used to smuggle a Sand Spit
+# sandstorm out of the formula.
+FORM_FLIP_REQUEST = '_form_flip_request'
+
+GULP_MISSILE_ABILITIES = {'gulp-missile'}
+GULP_TRIGGER_MOVES = {'surf', 'dive'}
+GULP_BASE_FORM = 'cramorant'
+GULP_HEALTHY_FORM = 'cramorant-gulping'
+GULP_HURT_FORM = 'cramorant-gorging'
+GULP_HURT_THRESHOLD = 0.5
+GULP_RECOIL_FRACTION = 0.25
+# What the mouthful does on the way out: a Defense drop from the little one, paralysis
+# from the big one.
+GULP_PAYLOADS = {
+    'cramorant-gulping': {'stat': ('defense', -1)},
+    'cramorant-gorging': {'status': 'paralysis'},
+}
+
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
 # should be built from the rules something you could have caught was built from.
