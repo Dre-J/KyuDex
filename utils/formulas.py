@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2661,8 +2661,11 @@ def leave_field(pokemon):
         # Infatuation is an attachment to the specimen that was standing opposite, so it
         # cannot survive either of them leaving.
         (pokemon.get('volatile_statuses') or {}).pop('infatuation', None)
-        # ...and so is having already bailed out. Re-entering re-arms Wimp Out.
+        # ...and so is having already bailed out. Re-entering re-arms Wimp Out, and
+        # Berserk and Anger Shell for the same reason: both answer HP CROSSING the
+        # line rather than sitting under it.
         pokemon.pop(BAIL_OUT_MARKER, None)
+        pokemon.pop(HP_THRESHOLD_MARKER, None)
         note = collect_switch_out_perks(pokemon)
     reset_stat_stages(pokemon)
     # Undone before the stat/ability restores, so those put back the specimen's OWN
@@ -3382,6 +3385,59 @@ def charge_multiplier(attacker, move_type):
         return 1.0
     volatiles.pop(CHARGE_VOLATILE, None)
     return CHARGE_MULTIPLIER
+
+
+# ==========================================
+# 🩸 BLOCK 15: REACTIONS TO SOMETHING OTHER THAN THE HIT
+# ==========================================
+
+def crossed_below_half(pokemon):
+    """
+    Whether this specimen has just fallen past half health and not yet answered it.
+
+    Berserk and Anger Shell answer HP CROSSING the line rather than sitting below it, so
+    the marker is what stops them firing every turn afterwards. leave_field clears it, so
+    switching out and back in re-arms them - the same arrangement Block 13's Wimp Out uses,
+    and for the same reason.
+    """
+    if not pokemon or get_active_ability(pokemon) not in HP_THRESHOLD_REACTIONS:
+        return False
+    if pokemon.get(HP_THRESHOLD_MARKER):
+        return False
+
+    ceiling = max(1, pokemon.get('max_hp', 1))
+    return 0 < pokemon.get('current_hp', 0) < ceiling * HP_THRESHOLD
+
+
+def hp_threshold_stages(pokemon):
+    """The stage changes owed for having crossed below half."""
+    return HP_THRESHOLD_REACTIONS.get(get_active_ability(pokemon), [])
+
+
+def flinch_reaction(pokemon):
+    """Steadfast: (stat, stages) owed for having flinched, or None."""
+    return FLINCH_REACTIONS.get(get_active_ability(pokemon))
+
+
+def liquid_ooze_backfires(defender):
+    """Liquid Ooze: what the attacker meant to drain, it takes instead."""
+    return get_active_ability(defender) in LIQUID_OOZE_ABILITIES
+
+
+def faint_recoil(fainted, killer, move, was_contact):
+    """
+    What the specimen that just died does to whatever killed it.
+
+    Aftermath needs the killing blow to have been a touch. Innards Out does not care how
+    it died - it hands over whatever it had left, which is why the caller has to pass the
+    HP it held BEFORE the blow rather than the zero it holds now.
+    """
+    ability = get_active_ability(fainted)
+    if ability in AFTERMATH_ABILITIES and was_contact:
+        return math.floor(max(1, killer.get('max_hp', 1)) * AFTERMATH_FRACTION), ability
+    if ability in INNARDS_OUT_ABILITIES:
+        return max(0, fainted.get('_hp_before_blow', 0)), ability
+    return 0, None
 
 
 def paradox_engine_running(pokemon, weather='none', terrain='none'):
@@ -5875,7 +5931,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if hits_landed > 1: msg += f"Hit {hits_landed} times! "
         
         if move.get('drain', 0) > 0:
-            healing_amount += math.floor(damage * (move['drain'] / 100.0))
+            # Liquid Ooze turns the leech around: what the attacker meant to gain, it
+            # loses instead. Kept as a negative healing_amount so it rides the channel
+            # the engines already read rather than needing a sixth return value.
+            _sapped = math.floor(damage * (move['drain'] / 100.0))
+            if liquid_ooze_backfires(defender):
+                healing_amount -= _sapped
+                msg += (f" \U0001f7e2 {attacker['name'].capitalize()} was hurt by "
+                        f"{defender['name'].capitalize()}'s Liquid Ooze!")
+            else:
+                healing_amount += _sapped
 
     # ==========================================
     # PHASE 2: PATHOGENS, AILMENTS, & SECONDARY EFFECTS
@@ -6058,6 +6123,50 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 msg += (f" 💘 {attacker['name'].capitalize()} fell in love with "
                         f"{defender['name'].capitalize()}'s Cute Charm!")
 
+        # ==========================================
+        # BLOCK 15: WHAT THE TOUCH COSTS THE ATTACKER
+        # ==========================================
+        # Mummy and Lingering Aroma paint their own name onto whoever touched them;
+        # Wandering Spirit trades instead. Both go through the protection tables the
+        # equivalent MOVES already obey - a Mummy cannot paint over a Stance Change,
+        # and Skill Swap could not either.
+        if def_ability in ABILITY_PAINT_ON_CONTACT:
+            if (atk_ability not in UNREPLACEABLE_ABILITIES
+                    and atk_ability != def_ability):
+                set_active_ability(attacker, def_ability)
+                msg += (f" \U0001f9ff {attacker['name'].capitalize()}'s ability became "
+                        f"{pretty_ability(def_ability)}!")
+
+        elif def_ability in ABILITY_SWAP_ON_CONTACT:
+            if (atk_ability not in UNSWAPPABLE_ABILITIES
+                    and def_ability not in UNSWAPPABLE_ABILITIES
+                    and atk_ability != def_ability):
+                set_active_ability(attacker, def_ability)
+                set_active_ability(defender, atk_ability)
+                msg += (f" \U0001f47b {attacker['name'].capitalize()} and "
+                        f"{defender['name'].capitalize()} swapped abilities!")
+
+        # Pickpocket lifts whatever touched it - but only if its own hands are empty,
+        # and only something that can actually be taken.
+        if def_ability in ITEM_THIEF_ON_CONTACT:
+            _loot = get_stored_item(attacker)
+            if (_loot and _loot != 'none' and is_transferable_item(_loot)
+                    and get_stored_item(defender) in (None, '', 'none')):
+                attacker['held_item'] = 'none'
+                defender['held_item'] = _loot
+                msg += (f" \U0001f45c {defender['name'].capitalize()} pickpocketed the "
+                        f"{_loot.replace('-', ' ').title()}!")
+
+        # Perish Body starts the count on BOTH of them - the price of touching it.
+        if def_ability in PERISH_BODY_ABILITIES:
+            _theirs = attacker.setdefault('volatile_statuses', {})
+            if 'perish-song' not in _theirs:
+                _theirs['perish-song'] = PERISH_BODY_COUNT
+                defender.setdefault('volatile_statuses', {}).setdefault(
+                    'perish-song', PERISH_BODY_COUNT)
+                msg += (f" \U0001f480 Both specimens will faint in "
+                        f"{PERISH_BODY_COUNT} turns!")
+
 
     # ==========================================
     # HOOK 3b: BLOCK 14 - REACTIONS TO THE HIT ITSELF
@@ -6093,6 +6202,47 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             defender.setdefault('volatile_statuses', {})[_reaction['volatile']] = True
             msg += (f" \u26a1 {defender['name'].capitalize()} became charged - its next "
                     f"Electric move will hit twice as hard!")
+
+
+    # ==========================================
+    # BLOCK 15: MAGICIAN
+    # ==========================================
+    # The only thief here that works the other way round: the ATTACKER lifts the item
+    # off whatever it hits. Not contact-gated - a Magician's Flamethrower steals just
+    # as happily - and, like Pickpocket, only ever when its own hands are empty.
+    if (atk_ability in ITEM_THIEF_ON_ATTACK and damage > 0
+            and move.get('class') != 'status'):
+        _prize = get_stored_item(defender)
+        if (_prize and _prize != 'none' and is_transferable_item(_prize)
+                and get_stored_item(attacker) in (None, '', 'none')):
+            defender['held_item'] = 'none'
+            attacker['held_item'] = _prize
+            msg += (f" \U0001f3a9 {attacker['name'].capitalize()} conjured away the "
+                    f"{_prize.replace('-', ' ').title()}!")
+
+    # ==========================================
+    # BLOCK 15: WHAT BEING HURT COSTS THE ATTACKER
+    # ==========================================
+    # These answer any damaging move rather than a touch, so they sit outside the
+    # contact block above.
+    if damage > 0 and move.get('class') != 'status':
+        # Cursed Body seals the move that hit it.
+        if def_ability in CURSED_BODY_ABILITIES and move_name:
+            _sealed = (attacker.get('volatile_statuses') or {}).get('disable') or {}
+            if not _sealed.get('move') and random.randint(1, 100) <= CURSED_BODY_CHANCE:
+                attacker.setdefault('volatile_statuses', {})['disable'] = {
+                    'move': move_name, 'turns': CURSED_BODY_TURNS}
+                msg += (f" \U0001f512 {attacker['name'].capitalize()}'s "
+                        f"{move_name.replace('-', ' ').title()} was sealed by "
+                        f"{defender['name'].capitalize()}'s Cursed Body!")
+
+        # Spicy Spray burns whatever hurt it, if a burn can land there at all.
+        if (def_ability in RETALIATORY_BURN_ABILITIES
+                and not attacker.get('status_condition')):
+            if not status_type_immune('burn', attacker.get('types'), defender):
+                attacker['status_condition'] = {'name': 'burn', 'duration': -1}
+                msg += (f" \U0001f336\ufe0f {attacker['name'].capitalize()} was burned "
+                        f"by {defender['name'].capitalize()}'s Spicy Spray!")
 
     # COLOUR CHANGE - the target takes on the element that just hit it
     if (def_ability == 'color-change' and damage > 0 and move.get('class') != 'status'
@@ -6266,7 +6416,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     
     # 1. Parasitic Healing (Giga Drain, Horn Leech)
     if drain_pct > 0:
-        healing_amount += math.floor(damage * (drain_pct / 100.0))
+        # ...unless the thing being drained is full of Liquid Ooze.
+        _sapped = math.floor(damage * (drain_pct / 100.0))
+        if liquid_ooze_backfires(defender):
+            healing_amount -= _sapped
+            msg += (f" \U0001f7e2 {attacker['name'].capitalize()} was hurt by "
+                    f"{defender['name'].capitalize()}'s Liquid Ooze!")
+        else:
+            healing_amount += _sapped
         
     # 2. Kinetic Recoil (Double-Edge, Flare Blitz, Wild Charge)
     elif drain_pct < 0:
@@ -6546,6 +6703,27 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
 
         inflicted_status = None
         stat_changes = [c for c in stat_changes if c[0] != 'defender']
+
+    # ==========================================
+    # BLOCK 15: SYNCHRONIZE
+    # ==========================================
+    # Placed here, at the very end, because it reads inflicted_status - the condition
+    # this move is about to land - and that is not final until every phase above has
+    # had its say. Only the three transferable conditions travel; sleep and freeze stay
+    # where they landed, which is the rule in the games.
+    if (get_active_ability(defender) in SYNCHRONIZE_ABILITIES
+            and inflicted_status in SYNCHRONIZE_STATUSES
+            and not attacker.get('status_condition')):
+        if not status_type_immune(inflicted_status, attacker.get('types'), defender):
+            attacker['status_condition'] = {'name': inflicted_status, 'duration': -1}
+            msg += (f" \U0001f501 {defender['name'].capitalize()}'s Synchronize passed "
+                    f"the {inflicted_status} back to "
+                    f"{attacker['name'].capitalize()}!")
+
+    # Innards Out pays out whatever the specimen had left, and by the time the engines
+    # see the faint that is already zero. Recorded here, where the figure still exists.
+    defender['_hp_before_blow'] = defender.get('current_hp', 0)
+    defender['_killed_by_contact'] = bool(damage > 0 and makes_contact(move, attacker))
 
     return damage, msg.strip(), inflicted_status, stat_changes, healing_amount
 

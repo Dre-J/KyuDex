@@ -1107,6 +1107,72 @@ TARGET_DEFENDER_SELF = 'defender_self'             # defender, its own doing
 # lay a new one, but the engines that call it can.
 TARGET_FIELD = 'field'
 
+# ==========================================
+# 🩸 BLOCK 15: REACTIONS TO SOMETHING OTHER THAN THE HIT
+# ==========================================
+# The other half of the old on-being-hit block. None of these can be answered by the move
+# that just landed, so each one hangs off a different hook: an HP threshold, a flinch, a
+# faint, or the item and ability layers.
+
+# --- the HP threshold -------------------------------------------------------------
+# Fired where Block 13's Wimp Out is fired, for the same reason: that is the one place
+# both engines already look at what the turn did to a specimen's HP.
+HP_THRESHOLD_REACTIONS = {
+    'berserk':     [('special-attack', 1)],
+    'anger-shell': [('defense', -1), ('special-defense', -1),
+                    ('attack', 1), ('special-attack', 1), ('speed', 1)],
+}
+HP_THRESHOLD = 0.5
+# Cleared on the way out, exactly like the bail-out marker: these answer HP CROSSING the
+# line, not sitting below it, so without a marker they would fire every single turn.
+HP_THRESHOLD_MARKER = '_crossed_half'
+
+# --- the flinch -------------------------------------------------------------------
+FLINCH_REACTIONS = {'steadfast': ('speed', 1)}
+
+# --- contact, rewriting the attacker's ability ------------------------------------
+# Mummy and Lingering Aroma paint their own name onto whoever touched them. Wandering
+# Spirit trades instead. Both must respect the protection sets - a Mummy cannot paint over
+# a Stance Change, and the engine's existing UNREPLACEABLE / UNSWAPPABLE tables already
+# say so for the MOVES that do the same thing.
+ABILITY_PAINT_ON_CONTACT = {'mummy', 'lingering-aroma'}
+ABILITY_SWAP_ON_CONTACT = {'wandering-spirit'}
+
+# --- contact and attack, moving an item -------------------------------------------
+# Pickpocket takes from whoever touched it; Magician takes from whatever it hits. Both
+# only ever take from a specimen that HAS something, and only when they are empty-handed.
+ITEM_THIEF_ON_CONTACT = {'pickpocket'}
+ITEM_THIEF_ON_ATTACK = {'magician'}
+
+# --- being hurt, answering with a condition ---------------------------------------
+# PokeAPI's text for spicy-spray is "when the Pokemon takes damage from a move, it burns
+# the attacker" - any damaging move rather than a touch, which is why it is not in the
+# contact set above.
+RETALIATORY_BURN_ABILITIES = {'spicy-spray'}
+
+# Synchronize hands the condition straight back. Only these three travel; sleep and freeze
+# stay where they landed, which is the rule in the games.
+SYNCHRONIZE_ABILITIES = {'synchronize'}
+SYNCHRONIZE_STATUSES = {'burn', 'paralysis', 'poison'}
+
+CURSED_BODY_ABILITIES = {'cursed-body'}
+CURSED_BODY_CHANCE = 30
+CURSED_BODY_TURNS = 4
+
+PERISH_BODY_ABILITIES = {'perish-body'}
+PERISH_BODY_COUNT = 3
+
+# --- the drain ---------------------------------------------------------------------
+# Liquid Ooze turns a leech into a poisoning: the attacker takes what it meant to gain.
+LIQUID_OOZE_ABILITIES = {'liquid-ooze'}
+
+# --- the faint ---------------------------------------------------------------------
+# Answered where Grudge and Destiny Bond already resolve. Aftermath needs the killing blow
+# to have been a touch; Innards Out does not care how it died.
+AFTERMATH_ABILITIES = {'aftermath'}
+AFTERMATH_FRACTION = 0.25
+INNARDS_OUT_ABILITIES = {'innards-out'}
+
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
 # should be built from the rules something you could have caught was built from.
