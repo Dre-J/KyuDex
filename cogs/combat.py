@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -589,11 +589,14 @@ def deploy_weather(state, move_name, attacker, magic_room=False):
     return f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
 
 
-def deploy_terrain(state, move_name, attacker, magic_room=False, max_move_type=None):
-    """Lay a terrain, from a terrain move or from the Max move that carries one."""
-    new_terrain = TERRAIN_MOVES.get(str(move_name))
-    if not new_terrain and max_move_type:
-        new_terrain = (MAX_MOVES.get(max_move_type) or {}).get('terrain')
+def lay_terrain(state, new_terrain, attacker, magic_room=False):
+    """
+    Put a terrain down. The one place a terrain is ever written.
+
+    Extracted from deploy_terrain in Block 11 so the four surge abilities can lay one
+    without inventing a move name to look up - the Terrain Extender clause and the
+    already-standing check belong to the terrain, not to how it was asked for.
+    """
     if not new_terrain:
         return ""
 
@@ -605,6 +608,14 @@ def deploy_terrain(state, move_name, attacker, magic_room=False, max_move_type=N
     duration = 8 if get_active_item(attacker, magic_room) == 'terrain-extender' else 5
     state['terrain'] = {'type': new_terrain, 'duration': duration}
     return f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+
+
+def deploy_terrain(state, move_name, attacker, magic_room=False, max_move_type=None):
+    """Lay a terrain, from a terrain move or from the Max move that carries one."""
+    new_terrain = TERRAIN_MOVES.get(str(move_name))
+    if not new_terrain and max_move_type:
+        new_terrain = (MAX_MOVES.get(max_move_type) or {}).get('terrain')
+    return lay_terrain(state, new_terrain, attacker, magic_room)
 
 
 def deploy_field_toggle(state, move_name, attacker, defender, user_hazards, team_label=None):
@@ -1500,6 +1511,46 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
         combat_log += (f"🏺 **{owner_str.strip()} {name}**'s "
                        f"{ability.replace('-', ' ').title()} weakened "
                        f"{opp_name}'s {RUIN_ABILITIES[ability].replace('_', '. ').title()}!\n")
+
+    # ==========================================
+    # 1k. THE TERRAIN SURGES
+    # ==========================================
+    # The terrain twins of the weather setters below. Hadron Engine is in this table too:
+    # it lays the Electric Terrain that its own Sp. Atk row then feeds on.
+    elif ability in TERRAIN_SETTER_ABILITIES:
+        laid = lay_terrain(state, TERRAIN_SETTER_ABILITIES[ability], entering_combatant,
+                           state.get('field', {}).get('magic_room', 0) > 0)
+        if laid:
+            combat_log += (f"⚡ **{owner_str.strip()} {name}**'s "
+                           f"{ability.replace('-', ' ').title()} charged the ground!\n")
+            combat_log += laid
+
+    # ==========================================
+    # 1l. THE PARADOX ENGINES
+    # ==========================================
+    # Protosynthesis and Quark Drive are read live from the field on every calculation, so
+    # nothing has to be written down for the ordinary case - this branch exists for the
+    # OTHER way in. When the field will not run the engine, a Booster Energy will, and
+    # that one has to be remembered: once drunk the boost holds for the rest of the
+    # battle whatever the weather then does.
+    elif ability in PARADOX_ABILITIES:
+        magic_room = state.get('field', {}).get('magic_room', 0) > 0
+        weather_now = state.get('weather', {}).get('type', 'none')
+        terrain_now = state.get('terrain', {}).get('type', 'none')
+
+        if paradox_engine_running(entering_combatant, weather_now, terrain_now):
+            boosted = paradox_best_stat(entering_combatant)
+            combat_log += (f"🔬 **{owner_str.strip()} {name}**'s "
+                           f"{ability.replace('-', ' ').title()} raised its "
+                           f"{boosted.replace('_', '. ').title()}!\n")
+        elif (get_active_item(entering_combatant, magic_room) == BOOSTER_ENERGY
+                and not entering_combatant.get(BOOSTER_SPENT_MARKER)):
+            entering_combatant[BOOSTER_SPENT_MARKER] = True
+            entering_combatant['held_item'] = 'none'
+            mark_item_consumed(entering_combatant, BOOSTER_ENERGY)
+            boosted = paradox_best_stat(entering_combatant)
+            combat_log += (f"🧪 **{owner_str.strip()} {name}** drank its Booster Energy "
+                           f"and raised its {boosted.replace('_', '. ').title()}!\n")
 
     # ==========================================
     # 1j. THE ALLY-ONLY THREE

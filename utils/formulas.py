@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -3209,6 +3209,52 @@ def ruin_multiplier(stat, opponent):
             if RUIN_ABILITIES.get(get_active_ability(opponent)) == stat else 1.0)
 
 
+def paradox_engine_running(pokemon, weather='none', terrain='none'):
+    """
+    Whether Protosynthesis or Quark Drive is currently engaged.
+
+    Two ways in. The field condition is read live, so the boost lapses of its own accord
+    the moment the sun goes in - no bookkeeping needed. Booster Energy is the other, and
+    that one IS remembered: once drunk the engine runs for the rest of the battle whatever
+    the weather does.
+    """
+    engine = PARADOX_ABILITIES.get(get_active_ability(pokemon))
+    if not engine:
+        return False
+
+    if pokemon.get(BOOSTER_SPENT_MARKER):
+        return True
+    if 'weather' in engine and weather in engine['weather']:
+        return True
+    return 'terrain' in engine and terrain in engine['terrain']
+
+
+def paradox_best_stat(pokemon):
+    """
+    Which stat the engine picks: the highest of the five, stages included.
+
+    Ties go to whichever comes first in PARADOX_STAT_ORDER, which is the order the games
+    break them in. HP is not a candidate - the engine boosts what a specimen fights with.
+    """
+    stats = pokemon.get('stats') or {}
+    stages = pokemon.get('stat_stages') or {}
+    best, best_value = None, None
+    for key in PARADOX_STAT_ORDER:
+        value = apply_stat_stage(stats.get(key, 0), stages.get(key, 0))
+        if best_value is None or value > best_value:
+            best, best_value = key, value
+    return best
+
+
+def paradox_multiplier(pokemon, stat, weather='none', terrain='none'):
+    """The Protosynthesis / Quark Drive boost, on the one stat it picked."""
+    if not paradox_engine_running(pokemon, weather, terrain):
+        return 1.0
+    if paradox_best_stat(pokemon) != stat:
+        return 1.0
+    return PARADOX_SPEED_BOOST if stat == 'speed' else PARADOX_BOOST
+
+
 def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=None):
     """
     The flat multiplier an ability puts on one of its owner's own stats.
@@ -3224,7 +3270,11 @@ def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=
     if not pokemon:
         return 1.0
 
-    against = ruin_multiplier(stat, opponent)
+    # Two multipliers that do not come from the table: what the specimen OPPOSITE is doing
+    # (the Ruin quartet) and the Paradox engines, whose stat is chosen at runtime rather
+    # than named in a row. Both ride alongside the table row rather than replacing it.
+    against = ruin_multiplier(stat, opponent) * paradox_multiplier(
+        pokemon, stat, weather, terrain)
 
     trait = BIOLOGICAL_TRAITS.get('stat_multipliers', {}).get(get_active_ability(pokemon))
     if not trait or stat not in trait['stats']:

@@ -363,6 +363,7 @@ EQUIPMENT_CATALOG = {
     "rusted-shield":  {"name": "Rusted Shield", "price": 0, "desc": "Zamazenta takes its Crowned form while holding this.", "emoji": "🛡️", "category": "formitems", "purchasable": False},
     "red-orb":  {"name": "Red Orb", "price": 0, "desc": "Groudon undergoes Primal Reversion while holding this.", "emoji": "🔴", "category": "formitems", "purchasable": False},
     "blue-orb":  {"name": "Blue Orb", "price": 0, "desc": "Kyogre undergoes Primal Reversion while holding this.", "emoji": "🔵", "category": "formitems", "purchasable": False},
+    "booster-energy":  {"name": "Booster Energy", "price": 0, "desc": "Runs a Paradox specimen's Protosynthesis or Quark Drive when the field will not. Single use.", "emoji": "🧪", "category": "formitems", "purchasable": False},
     
     # Evolution Items
     "water-stone":    {"name": "Water Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, blue and glistens.", "emoji": "💎", "category": "evoitems"},
@@ -463,7 +464,10 @@ BIOLOGICAL_TRAITS = {
         'drizzle': ('rain', "🌧️ **{owner} {name}**'s Drizzle made it rain!\n"),
         'drought': ('sun', "☀️ **{owner} {name}**'s Drought turned the sunlight harsh!\n"),
         'sand-stream': ('sand', "🌪️ **{owner} {name}**'s Sand Stream whipped up a sandstorm!\n"),
-        'snow-warning': ('hail', "❄️ **{owner} {name}**'s Snow Warning whipped up a hailstorm!\n")
+        'snow-warning': ('hail', "❄️ **{owner} {name}**'s Snow Warning whipped up a hailstorm!\n"),
+        # Block 11. Orichalcum Pulse is Drought with an Attack boost attached; the boost
+        # half is an ordinary row in stat_multipliers, gated on the very sun it makes.
+        'orichalcum-pulse': ('sun', "🔆 **{owner} {name}**'s Orichalcum Pulse turned the sunlight harsh!\n"),
     },
     'immunities': {
         'water-absorb': {'type': 'water', 'heal': 0.25},
@@ -593,6 +597,15 @@ BIOLOGICAL_TRAITS = {
         'unburden':        {'stats': ['speed'], 'multiplier': 2.0, 'unburdened': True},
         'slow-start':      {'stats': ['attack', 'speed'], 'multiplier': 0.5,
                             'turns_on_field_below': 5},
+
+        # --- Block 11: the boost half of the two pulse engines. Each makes the very
+        # condition it then feeds on, but the two halves stay separate: the weather and
+        # terrain are laid at the switch-in, and these rows are read fresh on every
+        # calculation - so the boost lapses of its own accord when the field does.
+        'orichalcum-pulse': {'stats': ['attack'], 'multiplier': 4.0 / 3.0,
+                             'weather': ['sun', 'extremely-harsh-sunlight']},
+        'hadron-engine':    {'stats': ['sp_atk'], 'multiplier': 4.0 / 3.0,
+                             'terrain': ['electric']},
     },
     'end_of_turn': {
         'speed-boost': {'type': 'stat', 'stat': 'speed', 'value': 1},
@@ -876,6 +889,47 @@ ALLY_ONLY_ENTRY_ABILITIES = {
     'costar',            # copies an ally's stages
     'hospitality',       # heals an ally
 }
+
+# ==========================================
+# ⚡ BLOCK 11: TERRAIN SETTERS AND THE PARADOX ENGINES
+# ==========================================
+# The four surges are the terrain twins of the weather_setters table above. Kept as their
+# own mapping rather than folded in there because terrain and weather are separate slots
+# on the field - a specimen can stand in rain on Electric Terrain.
+TERRAIN_SETTER_ABILITIES = {
+    'electric-surge': 'electric',
+    'psychic-surge':  'psychic',
+    'misty-surge':    'misty',
+    'grassy-surge':   'grassy',
+    # Hadron Engine lays the terrain it then feeds on; the Sp. Atk half is a row in
+    # stat_multipliers, gated on that same terrain.
+    'hadron-engine':  'electric',
+}
+
+# Protosynthesis and Quark Drive are the first abilities here whose EFFECT is chosen at
+# runtime: they boost whichever of the five stats is highest at the moment they engage,
+# rather than one named in a table. Everything else about them is ordinary.
+#
+#   weather / terrain - the field condition that runs the engine
+PARADOX_ABILITIES = {
+    'protosynthesis': {'weather': ['sun', 'extremely-harsh-sunlight']},
+    'quark-drive':    {'terrain': ['electric']},
+}
+
+# 1.3x on any stat except Speed, which gets 1.5x instead.
+PARADOX_BOOST = 1.3
+PARADOX_SPEED_BOOST = 1.5
+
+# Which stat the engine picks. Ties are broken by this order, highest priority first,
+# which is the order the games use.
+PARADOX_STAT_ORDER = ('attack', 'defense', 'sp_atk', 'sp_def', 'speed')
+
+# Booster Energy runs the engine when the field will not. Once drunk the boost holds for
+# the rest of the battle whatever the weather does, so the marker goes on the specimen
+# rather than into volatile_statuses - the same reasoning as the once-per-battle entry
+# abilities in Block 10.
+BOOSTER_ENERGY = 'booster-energy'
+BOOSTER_SPENT_MARKER = '_booster_energy_spent'
 
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
