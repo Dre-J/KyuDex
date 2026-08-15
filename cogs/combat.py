@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -679,6 +679,7 @@ def apply_status_outcome(defender, inflicted, move_stats):
     Flinch is intercepted rather than written to the status slot - it is a volatile that
     lasts only until the target's next attempt to move.
     """
+    flinch_log = ""
     if inflicted == 'flinch':
         inflicted, flinched = None, True
     else:
@@ -693,15 +694,23 @@ def apply_status_outcome(defender, inflicted, move_stats):
 
     if flinched:
         defender.setdefault('volatile_statuses', {})['flinch'] = True
+        # Steadfast answers the flinch itself rather than the move that caused it,
+        # so it belongs here - the one place every flinch source arrives at. The
+        # boost is its own doing, so nothing screens it.
+        _startled = flinch_reaction(defender)
+        if _startled:
+            _stat, _stages = _startled
+            flinch_log = resolve_stat_stages([(defender, _stat, _stages, None)])
 
     if not inflicted or inflicted == 'none':
-        return ""
+        return flinch_log
 
     duration = random.randint(1, 3) if inflicted == 'sleep' else -1
     defender['status_condition'] = {'name': inflicted, 'duration': duration}
     icons = {'burn': '🔥', 'poison': '☣️', 'paralysis': '⚡', 'sleep': '💤', 'freeze': '🧊'}
-    return (f"{icons.get(inflicted, '⚠️')} **{defender['name'].capitalize()}** "
-            f"was afflicted with {inflicted}!\n")
+    return flinch_log + (f"{icons.get(inflicted, '⚠️')} "
+                         f"**{defender['name'].capitalize()}** was afflicted "
+                         f"with {inflicted}!\n")
 
 
 # Where a payload entry lands, and whose doing it was. Two of these are the engine's
@@ -806,6 +815,29 @@ def apply_stat_changes(attacker, defender, stat_chgs, prefix="", state=None):
 NPC_HEAL_MOVES = ['roost', 'recover', 'soft-boiled', 'slack-off']
 NPC_PATHOGEN_MOVES = ['will-o-wisp', 'toxic', 'thunder-wave', 'spore', 'sleep-powder']
 NPC_PROTECT_MOVES = ['protect', 'detect', 'spiky-shield', 'king-shield']
+
+
+def apply_faint_recoil(fainted, killer):
+    """
+    What a specimen takes with it when it dies. Aftermath and Innards Out.
+
+    Called from the same place as apply_grudge - the faint check both engines already
+    run - so neither ability needs a hook of its own. The figures come from the
+    formula, which recorded what the specimen was holding before the blow landed;
+    reading current_hp here would be too late, because it is already zero.
+    """
+    if not fainted or not killer or killer.get('current_hp', 0) <= 0:
+        return ""
+
+    toll, ability = faint_recoil(fainted, killer, None,
+                                 bool(fainted.get('_killed_by_contact')))
+    if toll <= 0 or not ability:
+        return ""
+
+    killer['current_hp'] = max(0, killer['current_hp'] - toll)
+    return (f"\U0001f4a5 **{fainted['name'].capitalize()}**'s "
+            f"{pretty_ability(ability)} took **{toll}** HP from "
+            f"**{killer['name'].capitalize()}** on the way down!\n")
 
 
 async def pick_npc_move(db, available_moves, npc, foe, state, context='ATTACK'):
@@ -4810,6 +4842,7 @@ class BattleDashboard(discord.ui.View):
                         # move that did it loses every last PP.
                         if defender['current_hp'] <= 0:
                             grudge_log = apply_grudge(defender, attacker)
+                            combat_log += apply_faint_recoil(defender, attacker)
                             if grudge_log:
                                 combat_log += grudge_log.strip() + "\n"
 
@@ -5914,6 +5947,21 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
 
             # --- PHASE 4: SURVIVAL & SWAP CHECK ---
+            # Berserk and Anger Shell answer HP having CROSSED below half. Raised in
+            # the same place as Block 13's bail-out, and for the same reason: this is
+            # the one point both engines already look at what the turn did to a
+            # specimen's HP, rather than the dozen places damage is applied.
+            for _hurt, _owner in [(p_active, 'Your'), (n_active, "The rival's")]:
+                if crossed_below_half(_hurt):
+                    _hurt[HP_THRESHOLD_MARKER] = True
+                    combat_log += (f"\U0001f621 {_owner} "
+                                   f"**{_hurt['name'].capitalize()}**'s "
+                                   f"{pretty_ability(get_active_ability(_hurt))} "
+                                   f"flared up!\n")
+                    combat_log += resolve_stat_stages(
+                        [(_hurt, _stat, _stages, None)
+                         for _stat, _stages in hp_threshold_stages(_hurt)])
+
             # Wimp Out and Emergency Exit bolt for the bench. Raised here rather than
             # at each of the dozen places damage is applied, because this is where the
             # must_pivot flags are already read - one hook instead of twelve.
@@ -7837,6 +7885,7 @@ class Combat(commands.Cog):
                     # that did it loses every last PP.
                     if defender['current_hp'] <= 0:
                         grudge_log = apply_grudge(defender, attacker)
+                        combat_log += apply_faint_recoil(defender, attacker)
                         if grudge_log:
                             combat_log += grudge_log.strip() + "\n"
 
