@@ -8,7 +8,7 @@ import random
 import asyncio
 import math
 from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -1023,6 +1023,36 @@ async def fetch_gender_rate(db, pokedex_id):
     ) as cursor:
         row = await cursor.fetchone()
     return row[0] if row and row[0] is not None else 4
+
+
+async def roll_species_ability(db, pokedex_id, rng=random):
+    """
+    Pick an ability for a GENERATED specimen, the way a wild capture does.
+
+    The hidden ability comes up one time in five, which is the figure the capture path in
+    cogs/ecology.py already uses. Kept to the same odds deliberately: two places that
+    disagreed about a specimen's genetics would be worse than either being wrong, and a
+    rival should be built from the same rules as something you could have caught.
+
+    The species table stores 'None' as a STRING for a species with no hidden ability,
+    which is why that is tested rather than falsiness.
+    """
+    async with db.execute(
+            "SELECT standard_abilities, hidden_ability FROM base_pokemon_species "
+            "WHERE pokedex_id = ?", (pokedex_id,)) as cursor:
+        row = await cursor.fetchone()
+
+    if not row:
+        return 'none'
+
+    standard, hidden = row
+    if hidden and str(hidden).strip().lower() not in ('none', ''):
+        if rng.random() <= HIDDEN_ABILITY_CHANCE:
+            return str(hidden).strip().lower().replace(' ', '-')
+
+    pool = [a.strip().lower().replace(' ', '-')
+            for a in str(standard or '').split(',') if a.strip()]
+    return rng.choice(pool) if pool else 'none'
 
 
 def roll_gender(gender_rate, rng=random):
@@ -6404,21 +6434,39 @@ class Combat(commands.Cog):
             return False, "❌ A critical error occurred while processing your stamina."
 
     async def build_npc_combatant(self, db, pokedex_id, name, level, moves, types):
-        """Generates a wild ecological variant for the rival team."""
+        """
+        Generates a wild ecological variant for the rival team.
+
+        Reported bug: an Eelektross shrugged off Mud Shot in PvP and ate it in PvE. The
+        cause was not Levitate and not the engines diverging - it was this builder, which
+        never gave the specimen an ability at all. get_active_ability read a missing key
+        as 'none', so EVERY ability was inert on a generated rival, and the gym-leader
+        rosters only worked because they name theirs by hand.
+
+        volatile_statuses is here for the same reason the player's dict carries it: the
+        engines subscript it directly in dozens of places, and those were only safe while
+        no generated rival had an ability capable of reaching them.
+        """
         base_stats = await fetch_base_stats(db, pokedex_id)
-        
+
         ivs = {stat: random.randint(0, 31) for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
         evs = {stat: 0 for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
         nature = random.choice(list(NATURE_MULTIPLIERS.keys()))
-        
+
         final_stats = calculate_stats(base_stats, ivs, evs, level, nature)
         gender = roll_gender(await fetch_gender_rate(db, pokedex_id))
+        ability = await roll_species_ability(db, pokedex_id)
 
         return {
             'pokedex_id': pokedex_id, 'name': name, 'level': level, 'types': types,
             'max_hp': final_stats['hp'], 'current_hp': final_stats['hp'],
             'stats': final_stats, 'moves': moves, 'status_condition': None,
-            'gender': gender
+            'gender': gender,
+            'ability': ability,
+            'volatile_statuses': {},
+            'held_item': 'none',
+            # Read by the Primal and Crowned form changes, which re-derive the stats
+            'ivs': ivs, 'evs': evs, 'nature': nature,
         }
     
     @commands.command(name="tutor", aliases=["relearn", "teach_move"])
