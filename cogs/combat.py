@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -566,11 +566,6 @@ TERRAIN_MESSAGES = {
 WEATHER_ROCKS = {'sun': 'heat-rock', 'rain': 'damp-rock',
                  'sand': 'smooth-rock', 'hail': 'icy-rock'}
 
-STAT_STAGE_KEYS = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk',
-                   'special-defense': 'sp_def', 'speed': 'speed',
-                   'accuracy': 'accuracy', 'evasion': 'evasion'}
-
-
 def deploy_weather(state, move_name, attacker, magic_room=False):
     """
     Put a weather setter's climate on the field. Returns '' if the move sets none.
@@ -698,9 +693,18 @@ def apply_status_outcome(defender, inflicted, move_stats):
             f"was afflicted with {inflicted}!\n")
 
 
-def apply_stat_changes(attacker, defender, stat_chgs):
-    """Move every stage the physics engine asked for, and log each one."""
+def apply_stat_changes(attacker, defender, stat_chgs, prefix=""):
+    """
+    Move every stage the physics engine asked for, and log each one.
+
+    Volatiles arriving disguised as stat changes are intercepted here; the real stages
+    are handed to resolve_stat_stages, which is where Block 8's protection and
+    retaliation live. `prefix` is stitched onto each line for the PvP engine, whose log
+    indents everything under the move that caused it.
+    """
     log = ""
+    pending = []
+
     for tgt, s_name, chg in (stat_chgs or []):
         target_specimen = attacker if tgt == 'attacker' else defender
         volatiles = target_specimen.setdefault('volatile_statuses', {})
@@ -717,28 +721,16 @@ def apply_stat_changes(attacker, defender, stat_chgs):
             volatiles.setdefault('perish-song', 3)
             continue
 
-        db_stat = STAT_STAGE_KEYS.get(s_name)
-        if not db_stat:
+        if s_name not in STAT_STAGE_KEYS:
             continue
 
-        if 'stat_stages' not in target_specimen:
-            target_specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0,
-                                              'sp_def': 0, 'speed': 0}
-        stages = target_specimen['stat_stages']
-        # .get, not [] - accuracy and evasion are absent from a fresh stage block
-        stages[db_stat] = max(-6, min(6, stages.get(db_stat, 0) + chg))
+        # Who is responsible. 'attacker' is the specimen that used the move, so a drop
+        # aimed at it is self-inflicted - Close Combat's Defense, Overheat's Sp. Atk -
+        # and nothing refuses those. Only what the other side inflicts is screened.
+        source = None if tgt == 'attacker' else attacker
+        pending.append((target_specimen, s_name, chg, source))
 
-        direction = "fell" if chg < 0 else "rose"
-        icon = "📉" if chg < 0 else "📈"
-        log += (f"{icon} **{target_specimen['name'].capitalize()}**'s "
-                f"{s_name.replace('-', ' ')} {direction}!\n")
-
-        # ==========================================
-        # LASH OUT TRACKER
-        # ==========================================
-        if chg < 0:
-            volatiles['stats_lowered_this_turn'] = True
-    return log
+    return log + resolve_stat_stages(pending, prefix=prefix)
 
 
 # ==========================================
@@ -1278,15 +1270,19 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
     name = entering_combatant['name'].capitalize()
     opp_name = opponent['name'].capitalize()
 
-    # 1. THE INTIMIDATE HOOK 
+    # 1. THE INTIMIDATE HOOK
+    # Routed through resolve_stat_stages rather than writing the stage itself, so the
+    # commonest stat drop in the game meets Clear Body, Hyper Cutter, Mirror Armor and
+    # Defiant the same way every other drop does.
     if ability == 'intimidate':
-        if 'stat_stages' not in opponent:
-            opponent['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
-            
-        current_atk = opponent['stat_stages']['attack']
-        if current_atk > -6:
-            opponent['stat_stages']['attack'] = max(-6, current_atk - 1)
-            combat_log += f"💢 **{owner_str.strip()} {name}**'s Intimidate cuts {opp_name}'s Attack!\n"
+        if shrugs_off_intimidate(opponent):
+            combat_log += (f"😐 **{opp_name}**'s "
+                           f"{get_active_ability(opponent).replace('-', ' ').title()} "
+                           f"left it unimpressed by the Intimidate!\n")
+        else:
+            combat_log += f"💢 **{owner_str.strip()} {name}**'s Intimidate glares at {opp_name}!\n"
+            combat_log += resolve_stat_stages(
+                [(opponent, 'attack', -1, entering_combatant)])
 
     # ==========================================
     # 2. ATMOSPHERIC SUPPRESSION
@@ -7436,27 +7432,14 @@ class Combat(commands.Cog):
                     if berry_log: combat_log += berry_log
 
                     # Apply Stat Changes (Swords Dance, Max Strike speed drop, etc.)
-                    for tgt_str, s_name, chg in stat_changes:
-                        target_specimen = attacker if tgt_str == 'attacker' else defender
-                        
-                        stat_map = {'attack': 'attack', 'defense': 'defense', 'special-attack': 'sp_atk', 'special-defense': 'sp_def', 'speed': 'speed', 'accuracy':'accuracy', 'evasion': 'evasion'}
-                        db_stat = stat_map.get(s_name)
-                        if db_stat:
-                            if 'stat_stages' not in target_specimen:
-                                target_specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
-                            curr_stg = target_specimen['stat_stages'].get(db_stat, 0)
-                            target_specimen['stat_stages'][db_stat] = max(-6, min(6, curr_stg + chg))
-                            
-                            direction = "fell" if chg < 0 else "rose"
-                            icon = "📉" if chg < 0 else "📈"
-                            combat_log += f"↳ {icon} **{target_specimen['name'].capitalize()}**'s {s_name.replace('-', ' ')} {direction}!\n"
+                    # PvP kept its own copy of this loop, which had drifted: it knew only
+                    # about real stages, so the volatiles the physics engine smuggles
+                    # through this channel - Leech Seed and Perish Song - were dropped on
+                    # the floor here. The shared helper handles both, and brings Block 8's
+                    # stage protection with it.
+                    combat_log += apply_stat_changes(attacker, defender, stat_changes,
+                                                     prefix="↳ ")
 
-                            # ==========================================
-                            # LASH OUT TRACKER
-                            # ==========================================
-                            if chg < 0:
-                                target_specimen['volatile_statuses']['stats_lowered_this_turn'] = True
-                                
                     if status and  status != 'none':
                         defender['status_condition'] = {'name': status, 'duration': -1}
                         combat_log += f"↳ **{opp_name}'s** {defender['name'].capitalize()} was afflicted with {status}!\n"

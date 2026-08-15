@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -97,13 +97,19 @@ def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
     # 4. STICKY WEB (Grounded only)
     # ==========================================
     if hazards.get('sticky-web') and is_grounded:
-        if 'stat_stages' not in specimen:
-            specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0, 'sp_def': 0, 'speed': 0}
-            
-        if specimen['stat_stages']['speed'] > -6:
-            specimen['stat_stages']['speed'] -= 1
-            log += f"🕸️ {owner_prefix.strip()} **{specimen['name'].capitalize()}** was caught in a sticky web! Its Speed fell!\n"
-            
+        # Routed through the shared resolver rather than writing the stage here, so the
+        # web meets Clear Body and rouses Defiant exactly as any other drop does. The
+        # source is a stand-in - whoever laid the web may be long gone - and the entry is
+        # marked unreflectable so Mirror Armor refuses the drop instead of trying to hand
+        # it back to nobody.
+        web_log = resolve_stat_stages(
+            [(specimen, 'speed', -1, HAZARD_SOURCE, False)])
+        if web_log:
+            log += (f"🕸️ {owner_prefix.strip()} **{specimen['name'].capitalize()}** "
+                    f"was caught in a sticky web!\n")
+            log += web_log
+
+
     return log
 
 def calculate_real_stat(stat_name, base, iv, ev, level):
@@ -2977,6 +2983,140 @@ def smothers_explosion(attacker, defender):
 def is_explosive_move(move_name):
     """Explosion and its family, for Damp."""
     return normalise_move_name(move_name) in EXPLOSIVE_MOVES
+
+
+# ==========================================
+# 🛡️ BLOCK 8: STAT-STAGE PROTECTION AND RETALIATION
+# ==========================================
+# Four small predicates rather than one big one, because the engines ask three different
+# questions of the same event and the answers do not compose: Mirror Armor both refuses a
+# drop and returns it, while Clear Body only refuses it.
+
+def refuses_stat_drop(target, stat):
+    """
+    Whether this specimen's ability forbids ANOTHER specimen lowering `stat`.
+
+    Never consulted for a specimen's own drops - the callers screen those out first,
+    because Clear Body has never stopped Close Combat costing its owner Defense.
+    """
+    ability = get_active_ability(target)
+    guarded = STAT_DROP_IMMUNE_ABILITIES.get(ability)
+    if guarded is None:
+        return False
+
+    required_type = STAT_DROP_IMMUNE_TYPE_GATE.get(ability)
+    if required_type and required_type not in (target.get('types') or []):
+        return False
+
+    return guarded == ALL_STATS or stat in guarded
+
+
+def reflects_stat_drop(target):
+    """Mirror Armor: the drop goes back to whoever threw it instead of landing."""
+    return get_active_ability(target) in STAT_DROP_REFLECTING_ABILITIES
+
+
+def stat_drop_retaliation(target):
+    """
+    What this specimen does about having lost a stage: (stat, stages), or None.
+
+    Defiant and Competitive answer per stat lowered, not per move, so Parting Shot -
+    which takes two stages off two different stats - wakes them up twice.
+    """
+    return STAT_DROP_RETALIATION_ABILITIES.get(get_active_ability(target))
+
+
+def shrugs_off_intimidate(target):
+    """Gen 8 gave four abilities a flat refusal of Intimidate, and only Intimidate."""
+    return get_active_ability(target) in INTIMIDATE_IMMUNE_ABILITIES
+
+
+def resolve_stat_stages(pending, prefix=""):
+    """
+    Walk a queue of stage changes and move the ones that survive.
+
+    Each entry is (specimen, stat, change, source[, may_reflect]):
+
+      source      - the specimen responsible, or None when this one did it to itself.
+                    Only another specimen's drops are screened at all.
+      may_reflect - False once a drop has already been sent back, which is the single
+                    thing that stops two Mirror Armors passing one drop between them
+                    for ever. A returned drop is still REFUSABLE, so Mirror Armor into
+                    Clear Body simply dies, and Mirror Armor into Mirror Armor dies at
+                    the second one rather than bouncing again.
+
+    Refusals, Mirror Armor's return and the Defiant/Competitive answer all resolve here
+    so that every path through both engines gets them for free.
+    """
+    log = ""
+    queue = [(entry + (True,))[:5] for entry in pending]
+    # A hard stop on the queue. Nothing should be able to grow it without bound now that
+    # reflections cannot bounce, but a runaway here would hang a battle rather than
+    # merely misreport one.
+    for _ in range(64):
+        if not queue:
+            break
+        specimen, s_name, chg, source, may_reflect = queue.pop(0)
+        db_stat = STAT_STAGE_KEYS.get(s_name)
+        if not db_stat:
+            continue
+
+        name = specimen['name'].capitalize()
+        pretty_stat = s_name.replace('-', ' ')
+
+        if chg < 0 and source is not None:
+            # Mirror Armor answers before anything else looks at the drop.
+            if may_reflect and reflects_stat_drop(specimen):
+                log += (f"{prefix}🪞 **{name}**'s Mirror Armor sent the "
+                        f"{pretty_stat} drop straight back!\n")
+                queue.append((source, s_name, chg, specimen, False))
+                continue
+
+            if refuses_stat_drop(specimen, s_name):
+                shield = get_active_ability(specimen).replace('-', ' ').title()
+                log += (f"{prefix}🛡️ **{name}**'s {shield} "
+                        f"held its {pretty_stat} steady!\n")
+                continue
+
+        if 'stat_stages' not in specimen:
+            specimen['stat_stages'] = {'attack': 0, 'defense': 0, 'sp_atk': 0,
+                                       'sp_def': 0, 'speed': 0}
+        stages = specimen['stat_stages']
+        # .get, not [] - accuracy and evasion are absent from a fresh stage block
+        before = stages.get(db_stat, 0)
+        after = max(-6, min(6, before + chg))
+
+        if after == before:
+            # Pinned at the end of the scale. Reported honestly rather than logged as a
+            # change that did not happen - and Defiant stays asleep, because nothing was
+            # taken from it.
+            log += (f"{prefix}↔️ **{name}**'s {pretty_stat} won't go any "
+                    f"{'lower' if chg < 0 else 'higher'}!\n")
+            continue
+
+        stages[db_stat] = after
+        direction = "fell" if chg < 0 else "rose"
+        icon = "📉" if chg < 0 else "📈"
+        log += f"{prefix}{icon} **{name}**'s {pretty_stat} {direction}!\n"
+
+        if chg < 0:
+            # ==========================================
+            # LASH OUT TRACKER
+            # ==========================================
+            specimen.setdefault('volatile_statuses', {})['stats_lowered_this_turn'] = True
+
+            # Defiant and Competitive only wake for the OTHER side's doing, and only once
+            # the drop has actually landed.
+            if source is not None:
+                answer = stat_drop_retaliation(specimen)
+                if answer:
+                    a_stat, a_chg = answer
+                    log += (f"{prefix}😤 **{name}**'s "
+                            f"{get_active_ability(specimen).replace('-', ' ').title()} "
+                            f"flared up!\n")
+                    queue.append((specimen, a_stat, a_chg, None, False))
+
+    return log
 
 # ==========================================
 # 🚨 OFFENSIVE / DEFENSIVE STAT OVERRIDES
