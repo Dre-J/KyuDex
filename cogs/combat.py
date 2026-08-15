@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, NO_FLEE_MECHANIC_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -1384,7 +1384,17 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
     # commonest stat drop in the game meets Clear Body, Hyper Cutter, Mirror Armor and
     # Defiant the same way every other drop does.
     if ability == 'intimidate':
-        if shrugs_off_intimidate(opponent):
+        # Guard Dog is neither cowed nor merely unbothered - it squares up. Asked
+        # before the refusals, because gaining a stage is a different outcome from
+        # refusing to lose one and a set cannot say which.
+        squares_up = intimidate_reversal(opponent)
+        if squares_up:
+            gained, stages = squares_up
+            combat_log += (f"🐺 **{opp_name}**'s "
+                           f"{pretty_ability(get_active_ability(opponent))} "
+                           f"answered the Intimidate!\n")
+            combat_log += resolve_stat_stages([(opponent, gained, stages, None)])
+        elif shrugs_off_intimidate(opponent):
             combat_log += (f"😐 **{opp_name}**'s "
                            f"{get_active_ability(opponent).replace('-', ' ').title()} "
                            f"left it unimpressed by the Intimidate!\n")
@@ -4923,7 +4933,17 @@ class BattleDashboard(discord.ui.View):
                         # Dragon Tail thrown as Max Wyrmwind deals its damage and nothing
                         # else: a Max move keeps none of the base move's secondary effects,
                         # so nobody is dragged out.
-                        if raw_move_name in phaze_moves and not attacker_is_maxed and defender['current_hp'] > 0 and (dmg > 0 or move_stats['class'] == 'status'):
+                        _is_phazing = (raw_move_name in phaze_moves and not attacker_is_maxed
+                              and defender['current_hp'] > 0
+                              and (dmg > 0 or move_stats['class'] == 'status'))
+                        # Suction Cups and Guard Dog plant themselves. Answered before the bench
+                        # search so the refusal is reported for the right reason - "it failed,
+                        # no bench" would be a different and wrong explanation.
+                        if _is_phazing and resists_forced_switch(defender):
+                            combat_log += (f"🦶 **{defender['name'].capitalize()}**'s "
+                                           f"{pretty_ability(get_active_ability(defender))} "
+                                           f"kept it rooted to the spot!\n")
+                        elif _is_phazing:
                             
                             # 1. Find valid benched targets for the DEFENDER
                             if is_player: # The Player is attacking the NPC
@@ -5813,6 +5833,24 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
 
             # --- PHASE 4: SURVIVAL & SWAP CHECK ---
+            # Wimp Out and Emergency Exit bolt for the bench. Raised here rather than
+            # at each of the dozen places damage is applied, because this is where the
+            # must_pivot flags are already read - one hook instead of twelve.
+            #
+            # Divergence, stated rather than hidden: the games move the specimen the
+            # instant its HP crosses below half, mid-turn. Here it leaves at the end of
+            # the turn it was hurt in, so it takes the rest of that turn's chip damage
+            # first. That reuses the replacement path faint already drives instead of
+            # standing up a second, parallel mid-turn pause.
+            for _fleer, _flag, _owner in [(p_active, 'player_must_pivot', 'Your'),
+                                          (n_active, 'npc_must_pivot', "The rival's")]:
+                if wants_to_bail_out(_fleer):
+                    _fleer[BAIL_OUT_MARKER] = True
+                    state[_flag] = True
+                    combat_log += (f"🚪 {_owner} **{_fleer['name'].capitalize()}**'s "
+                                   f"{pretty_ability(get_active_ability(_fleer))} "
+                                   f"sent it running for the bench!\n")
+
             n_needs_swap = n_active['current_hp'] <= 0 or state.get('npc_must_pivot')
             p_needs_swap = p_active['current_hp'] <= 0 or state.get('player_must_pivot')
             
@@ -7794,7 +7832,17 @@ class Combat(commands.Cog):
                     # ==========================================
                     # Ensure the move successfully executed (either dealing damage or landing a status)
                     # As in PvE: Dragon Tail thrown as Max Wyrmwind drags nobody out.
-                    if raw_move_name in phaze_moves and not attacker_is_maxed and defender['current_hp'] > 0 and (dmg > 0 or move.get('class') == 'status'):
+                    _is_phazing = (raw_move_name in phaze_moves and not attacker_is_maxed
+                          and defender['current_hp'] > 0
+                          and (dmg > 0 or move.get('class') == 'status'))
+                    # Suction Cups and Guard Dog plant themselves. Answered before the bench
+                    # search so the refusal is reported for the right reason - "it failed,
+                    # no bench" would be a different and wrong explanation.
+                    if _is_phazing and resists_forced_switch(defender):
+                        combat_log += (f"🦶 **{defender['name'].capitalize()}**'s "
+                                       f"{pretty_ability(get_active_ability(defender))} "
+                                       f"kept it rooted to the spot!\n")
+                    elif _is_phazing:
                         
                         # 1. Find valid benched targets for the DEFENDER
                         opp_active_idx = state[f"{opp_tag}_active_index"]

@@ -974,6 +974,50 @@ SLICING_MOVES = {
     'slash', 'solar-blade', 'stone-axe', 'tachyon-cutter', 'x-scissor',
 }
 
+# ==========================================
+# 🚪 BLOCK 13: SWITCH-OUT, TRAPPING AND PIVOTING
+# ==========================================
+# These decide whether a switch happens at all, or what it costs. Two of them fire on the
+# way OUT, two hold the other side in place, two refuse to be moved, and two leave of
+# their own accord.
+
+# Paid on the way out, before the replacement arrives. A fainted specimen collects
+# neither: it is not switching out, it is gone.
+SWITCH_OUT_HEAL_FRACTION = {'regenerator': 1.0 / 3.0}
+SWITCH_OUT_CURE_ABILITIES = {'natural-cure'}
+
+# Abilities that hold the specimen OPPOSITE in place, and what they can hold.
+#   None      - everything
+#   'grounded' - only what is standing on the ground; Flying, Levitate and an Air Balloon
+#                all walk out over the top of an Arena Trap
+#   a type     - only specimens of that element
+TRAPPING_ABILITIES = {
+    'shadow-tag':  None,
+    'arena-trap':  'grounded',
+    'magnet-pull': 'steel',
+}
+
+# Whirlwind, Roar, Dragon Tail and the rest cannot move these. Guard Dog is in both this
+# set and the Intimidate table below - refusing to be shoved is half of what it does.
+FORCED_SWITCH_IMMUNE_ABILITIES = {'suction-cups', 'guard-dog'}
+
+# Intimidate makes Guard Dog angry rather than nervous: it gains a stage instead of losing
+# one. Kept apart from INTIMIDATE_IMMUNE_ABILITIES because refusing a drop and answering
+# it are different outcomes, and a set cannot say which.
+INTIMIDATE_REVERSING_ABILITIES = {'guard-dog': ('attack', 1)}
+
+# Wimp Out and Emergency Exit leave the moment they are badly hurt.
+BAIL_OUT_ABILITIES = {'wimp-out', 'emergency-exit'}
+BAIL_OUT_THRESHOLD = 0.5
+# Cleared on the way out, so coming back in re-arms it. Without this a specimen sitting
+# below half would try to leave again every single turn.
+BAIL_OUT_MARKER = '_bailed_out'
+
+# Run Away guarantees an escape from a WILD battle. KyuDex has no such thing - battles are
+# against trainers and the Forfeit button always works - so there is nothing for it to
+# make more certain. Recorded as decided rather than faked, like Telepathy in Block 7.
+NO_FLEE_MECHANIC_ABILITIES = {'run-away'}
+
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
 WEIGHT_MULTIPLIER_ABILITIES = {
