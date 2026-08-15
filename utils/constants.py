@@ -794,6 +794,89 @@ AURA_BREAK_MULTIPLIER = 3.0 / 4.0
 TERA_SHELL_ABILITIES = {'tera-shell'}
 TERA_SHELL_MULTIPLIER = 0.5
 
+# ==========================================
+# 🚪 BLOCK 10: SWITCH-IN TRIGGERS
+# ==========================================
+# Almost all of this fires from one function - trigger_single_entry_ability, which every
+# entry path already calls. The exception is the Ruin quartet, which PokeAPI describes as
+# though it happened on arrival but which is really a standing multiplier; see below.
+
+# Boosts the arrival gives itself. Once per battle since Gen 9 - a Zacian that switches
+# out and back in does not get a second sword.
+ENTRY_STAT_BOOST_ABILITIES = {
+    'intrepid-sword':   ('attack', 1),
+    'dauntless-shield': ('defense', 1),
+}
+
+# What the arrival does TO the specimen opposite, and how much of it. Unlike the boosts
+# above these are ordinary drops, so Clear Body refuses them and Mirror Armor sends them
+# back - the Block 8 resolver is what makes that automatic.
+ENTRY_STAT_DROP_ABILITIES = {
+    'supersweet-syrup': ('evasion', -1),
+}
+
+# Abilities on this list fire once and then never again for the rest of the battle. The
+# marker is written onto the specimen itself rather than into volatile_statuses, because
+# volatiles are wiped on the way out and "once per battle" has to survive that.
+ONCE_PER_BATTLE_ENTRY = set(ENTRY_STAT_BOOST_ABILITIES) | {'supersweet-syrup'}
+ONCE_PER_BATTLE_MARKER = '_entry_abilities_spent'
+
+# Download reads the target's two walls and arms itself against the softer one.
+DOWNLOAD_ABILITIES = {'download'}
+
+# What the arrival reveals about the specimen opposite. Information rather than effect -
+# these change what the trainer knows, not what the battle does.
+FRISK_ABILITIES = {'frisk'}
+FOREWARN_ABILITIES = {'forewarn'}
+ANTICIPATION_ABILITIES = {'anticipation'}
+
+# Unnerve reaches across the field and stops the OTHER side eating its berries. Read at
+# the moment a berry would be consumed rather than at entry, so it lapses the instant its
+# owner leaves - which is what "while the Pokemon is in battle" means.
+BERRY_BLOCKING_ABILITIES = {'unnerve'}
+
+# Screen Cleaner sweeps both sides, not just the opponent's.
+SCREEN_CLEANING_ABILITIES = {'screen-cleaner'}
+SIDE_SCREEN_KEYS = ('reflect', 'light-screen', 'aurora-veil')
+
+# Teraform Zero flattens the field on arrival: no weather, no terrain.
+FIELD_NEUTRALISING_ABILITIES = {'teraform-zero'}
+
+# Terapagos rearranges itself on the way in, exactly as Zacian does - and the form it
+# becomes carries Tera Shell, which Block 9 implemented.
+# `becomes_ability` is named here rather than re-read from the species tables because
+# the two Crowned forms in Block 1 keep the ability they arrived with, and reading the table would
+# quietly change them too. Terapagos is the first form shift in the project where the new
+# body carries a different trait - the whole point of it, since Tera Shell is what
+# Terastal Form is FOR.
+ENTRY_FORM_SHIFTS = {
+    'tera-shift': {'species': 'terapagos', 'form': 'terapagos-terastal',
+                   'becomes_ability': 'tera-shell',
+                   'flavour': 'rearranged itself'},
+}
+
+# The Ruin quartet. PokeAPI's text - "Lowers Attack of all Pokemon except itself" - reads
+# like a switch-in trigger, and implementing it as one would have been wrong twice over:
+# it is a standing 0.75x on the stat itself rather than a stage change, so it is neither
+# refused by Clear Body nor cleared by Haze, and it lifts the moment its owner leaves.
+# The entry hook only announces it; the arithmetic lives in stat_multiplier_for.
+RUIN_ABILITIES = {
+    'tablets-of-ruin': 'attack',
+    'sword-of-ruin':   'defense',
+    'vessel-of-ruin':  'sp_atk',
+    'beads-of-ruin':   'sp_def',
+}
+RUIN_MULTIPLIER = 0.75
+
+# Three entry abilities that need an ALLY to do anything, and KyuDex is singles. Recorded
+# as decided rather than forgotten, exactly like the redirection pair in Block 6 and
+# Telepathy in Block 7.
+ALLY_ONLY_ENTRY_ABILITIES = {
+    'curious-medicine',  # resets adjacent ALLIES' stages, not its own
+    'costar',            # copies an ally's stages
+    'hospitality',       # heals an ally
+}
+
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
 WEIGHT_MULTIPLIER_ABILITIES = {
