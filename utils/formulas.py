@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -3319,6 +3319,71 @@ def ruin_multiplier(stat, opponent):
             if RUIN_ABILITIES.get(get_active_ability(opponent)) == stat else 1.0)
 
 
+# ==========================================
+# 💥 BLOCK 14: REACTIONS TO THE HIT ITSELF
+# ==========================================
+
+def is_wind_move(move_name):
+    """Wind-based, for Wind Rider and Wind Power. Listed rather than guessed."""
+    return normalise_move_name(move_name) in WIND_MOVES
+
+
+def refuses_wind(defender):
+    """Wind Rider does not merely answer a wind move - it refuses one."""
+    return get_active_ability(defender) in WIND_IMMUNE_ABILITIES
+
+
+def on_hit_reaction(defender, move_name, move, attacker, damage, was_crit):
+    """
+    What the specimen that was just hit does about it, or None.
+
+    Returns the row from ON_HIT_REACTIONS once its trigger is satisfied. Kept separate
+    from applying it so the engines can ask the question without the answer having side
+    effects, and so the trigger logic is testable on its own.
+    """
+    row = ON_HIT_REACTIONS.get(get_active_ability(defender))
+    if not row:
+        return None
+
+    trigger = row['trigger']
+    if trigger == 'crit':
+        if not was_crit or damage <= 0:
+            return None
+    elif trigger == 'contact':
+        if damage <= 0 or not makes_contact(move, attacker):
+            return None
+    elif trigger == 'physical':
+        if damage <= 0 or (move or {}).get('class') != 'physical':
+            return None
+    else:  # 'damaged'
+        if damage <= 0:
+            return None
+
+    if 'types' in row and (move or {}).get('type') not in row['types']:
+        return None
+    if row.get('wind') and not is_wind_move(move_name):
+        return None
+
+    return row
+
+
+def charge_multiplier(attacker, move_type):
+    """
+    What a banked charge is worth to the move being thrown, and spends it.
+
+    Wind Power and Electromorphosis bank exactly one charge, worth double power on the
+    next ELECTRIC move. Reading it consumes it, which is why this is a function rather
+    than a lookup - a non-Electric move in between leaves the charge alone.
+    """
+    if move_type != 'electric':
+        return 1.0
+    volatiles = (attacker or {}).get('volatile_statuses') or {}
+    if not volatiles.get(CHARGE_VOLATILE):
+        return 1.0
+    volatiles.pop(CHARGE_VOLATILE, None)
+    return CHARGE_MULTIPLIER
+
+
 def paradox_engine_running(pokemon, weather='none', terrain='none'):
     """
     Whether Protosynthesis or Quark Drive is currently engaged.
@@ -3851,6 +3916,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     msg = ""
     inflicted_status = None
     stat_changes = [] 
+    # Bound here as well as inside the damage branch: a STATUS move never reaches
+    # that branch, and Block 14's reaction hook asks about crits on every path.
+    crit_occurred = False
     healing_amount = 0
 
     move_name = move.get('name', '').lower().replace(' ', '-')
@@ -4216,6 +4284,20 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             else:
                 return 0, f"🎈 {defender['name'].capitalize()} is immune to the attack due to its {ability_name}!", None, [], 0
             
+    # ==========================================
+    # WIND RIDER
+    # ==========================================
+    # Answered here rather than in the reaction table, because its trigger is being
+    # MISSED rather than being hurt: it refuses the wind move outright and takes a
+    # stage for it. The boost rides out on the payload so it meets Block 8's resolver
+    # like every other stage change.
+    if (refuses_wind(defender) and is_wind_move(move_name)
+            and move.get('class') != 'status'):
+        _gained, _stages = WIND_RIDER_BOOST
+        return 0, (f"\U0001f32c\ufe0f {defender['name'].capitalize()} rode the wind "
+                   f"and was unharmed!"), None, [(TARGET_DEFENDER_SELF, _gained,
+                                                  _stages)], 0
+
     type_multiplier = 1.0
     for def_type in def_types:
         step = TYPE_CHART.get(move_type, {}).get(def_type, 1.0)
@@ -5549,6 +5631,10 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # this is read off both sides rather than off either table above.
         ability_mod *= aura_multiplier(move_type, attacker, defender)
 
+        # A charge banked by Wind Power or Electromorphosis. Reading it spends it, so
+        # this must sit where the move is definitely being thrown.
+        ability_mod *= charge_multiplier(attacker, move_type)
+
 
         if atk_ability == 'flash-fire' and move_type == 'fire' and attacker.get('volatile_statuses', {}).get('flash_fire'):
             ability_mod *= 1.5
@@ -5972,6 +6058,41 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 msg += (f" 💘 {attacker['name'].capitalize()} fell in love with "
                         f"{defender['name'].capitalize()}'s Cute Charm!")
 
+
+    # ==========================================
+    # HOOK 3b: BLOCK 14 - REACTIONS TO THE HIT ITSELF
+    # ==========================================
+    # One table for seventeen abilities. The stage changes are appended to the payload  rather than written here, so they meet Block 8's resolver on the way out - which is
+    # what makes a Gooey Speed drop refusable by Clear Body and interesting to Defiant.
+    _reaction = on_hit_reaction(defender, move_name, move, attacker, damage,
+                                crit_occurred)
+    if _reaction:
+        for _stat, _stages in _reaction.get('self', []):
+            stat_changes.append((TARGET_DEFENDER_SELF, _stat, _stages))
+        for _stat, _stages in _reaction.get('foe', []):
+            stat_changes.append((TARGET_ATTACKER_FROM_FOE, _stat, _stages))
+
+        # Weather and terrain cannot be laid from here - this function is handed the
+        # weather as a string. Smuggled out through the payload instead, exactly as
+        # Leech Seed and Perish Song already are.
+        if _reaction.get('weather'):
+            stat_changes.append((TARGET_FIELD, 'weather:' + _reaction['weather'], 0))
+        if _reaction.get('terrain'):
+            stat_changes.append((TARGET_FIELD, 'terrain:' + _reaction['terrain'], 0))
+
+        # Toxic Debris scatters spikes at the feet of whoever threw the move, which is
+        # the USER's side from this function's point of view.
+        if _reaction.get('hazard') and user_hazards is not None:
+            _layer = user_hazards.get(_reaction['hazard'], 0) or 0
+            if _layer < 2:
+                user_hazards[_reaction['hazard']] = _layer + 1
+                msg += (f" \U0001f9ea {defender['name'].capitalize()}'s Toxic Debris "
+                        f"scattered poison spikes!")
+
+        if _reaction.get('volatile'):
+            defender.setdefault('volatile_statuses', {})[_reaction['volatile']] = True
+            msg += (f" \u26a1 {defender['name'].capitalize()} became charged - its next "
+                    f"Electric move will hit twice as hard!")
 
     # COLOUR CHANGE - the target takes on the element that just hit it
     if (def_ability == 'color-change' and damage > 0 and move.get('class') != 'status'

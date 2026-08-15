@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, NO_FLEE_MECHANIC_ABILITIES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -704,7 +704,50 @@ def apply_status_outcome(defender, inflicted, move_stats):
             f"was afflicted with {inflicted}!\n")
 
 
-def apply_stat_changes(attacker, defender, stat_chgs, prefix=""):
+# Where a payload entry lands, and whose doing it was. Two of these are the engine's
+# originals; Block 14 added the other two, because 'the attacker's Speed fell, and the
+# DEFENDER did it' had no way to be said.
+TARGET_ROUTING = {
+    TARGET_ATTACKER:           (lambda a, d: a, lambda a, d: None),
+    TARGET_DEFENDER:           (lambda a, d: d, lambda a, d: a),
+    TARGET_ATTACKER_FROM_FOE:  (lambda a, d: a, lambda a, d: d),
+    TARGET_DEFENDER_SELF:      (lambda a, d: d, lambda a, d: None),
+}
+
+
+def deploy_reaction_field(state, request, setter, prefix=""):
+    """
+    Lay the weather or terrain a Block 14 reaction asked for.
+
+    `request` is 'weather:sand' or 'terrain:grassy'. Routed through the same two
+    writers a MOVE uses, so a Sand Spit sandstorm lasts as long as one a move laid and
+    a Smooth Rock stretches it the same way.
+    """
+    if not state or ':' not in str(request):
+        return ""
+
+    kind, _, value = str(request).partition(':')
+    magic_room = state.get('field', {}).get('magic_room', 0) > 0
+
+    if kind == 'terrain':
+        laid = lay_terrain(state, value, setter, magic_room)
+        return (prefix + laid.lstrip()) if laid else ""
+
+    if kind == 'weather':
+        if state.get('weather', {}).get('primordial'):
+            return ""
+        if state.get('weather', {}).get('type') == value:
+            return ""
+        rock = WEATHER_ROCKS.get(value)
+        duration = 8 if rock and get_active_item(setter, magic_room) == rock else 5
+        state['weather'] = {'type': value, 'duration': duration, 'primordial': False}
+        return (f"{prefix}\U0001f30a **{setter['name'].capitalize()}** kicked up "
+                f"a {value}storm!\n")
+
+    return ""
+
+
+def apply_stat_changes(attacker, defender, stat_chgs, prefix="", state=None):
     """
     Move every stage the physics engine asked for, and log each one.
 
@@ -717,7 +760,14 @@ def apply_stat_changes(attacker, defender, stat_chgs, prefix=""):
     pending = []
 
     for tgt, s_name, chg in (stat_chgs or []):
-        target_specimen = attacker if tgt == 'attacker' else defender
+        # A field change smuggled through this channel by Block 14's Sand Spit and
+        # Seed Sower. calculate_damage is handed the weather as a string and cannot
+        # lay a new one; this function has the state and can.
+        if tgt == TARGET_FIELD:
+            log += deploy_reaction_field(state, s_name, defender, prefix)
+            continue
+
+        target_specimen = TARGET_ROUTING[tgt][0](attacker, defender)
         volatiles = target_specimen.setdefault('volatile_statuses', {})
 
         if s_name == 'flinch':
@@ -735,10 +785,11 @@ def apply_stat_changes(attacker, defender, stat_chgs, prefix=""):
         if s_name not in STAT_STAGE_KEYS:
             continue
 
-        # Who is responsible. 'attacker' is the specimen that used the move, so a drop
-        # aimed at it is self-inflicted - Close Combat's Defense, Overheat's Sp. Atk -
-        # and nothing refuses those. Only what the other side inflicts is screened.
-        source = None if tgt == 'attacker' else attacker
+        # Who is responsible, read off the routing table. The distinction matters
+        # because Block 8 screens on it: Close Combat's own Defense drop is nobody's
+        # doing but its user's, while Gooey's Speed drop lands on the attacker and IS
+        # somebody else's - so Clear Body refuses one and not the other.
+        source = TARGET_ROUTING[tgt][1](attacker, defender)
         pending.append((target_specimen, s_name, chg, source))
 
     return log + resolve_stat_stages(pending, prefix=prefix)
@@ -2917,7 +2968,7 @@ class SwapMenu(discord.ui.View):
                                 # This swing at the incoming specimen used to resolve damage
                                 # and discard everything else, so a rival Rain Dance, Toxic or
                                 # Swords Dance thrown here did nothing whatsoever.
-                                combat_log += apply_stat_changes(n_active, new_active, stat_chgs)
+                                combat_log += apply_stat_changes(n_active, new_active, stat_chgs, state=state)
                                 combat_log += apply_status_outcome(new_active, inf_status, n_move_stats)
 
                                 magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
@@ -4775,7 +4826,7 @@ class BattleDashboard(discord.ui.View):
                                 stat_chgs = [] 
 
                         # Execute the Stat Changes
-                        combat_log += apply_stat_changes(attacker, defender, stat_chgs)
+                        combat_log += apply_stat_changes(attacker, defender, stat_chgs, state=state)
 
                         # ==========================================
                         # 💃 DANCER
@@ -4813,7 +4864,7 @@ class BattleDashboard(discord.ui.View):
                                 if d_heal > 0:
                                     defender['current_hp'] = min(defender.get('max_hp', 100),
                                                                  defender['current_hp'] + d_heal)
-                                combat_log += apply_stat_changes(defender, attacker, d_stats)
+                                combat_log += apply_stat_changes(defender, attacker, d_stats, state=state)
                                 combat_log += apply_status_outcome(attacker, d_status, echo)
 
                         # Only apply the exhaustion tag if the attack actually dealt damage,
@@ -5252,7 +5303,7 @@ class BattleDashboard(discord.ui.View):
                         # shifts stat stages and inflicts status exactly as it would on the
                         # NPC's ordinary turn. Without this the rival's Rain Dance announced
                         # itself here and changed nothing at all.
-                        combat_log += apply_stat_changes(n_active, p_active, stat_chgs)
+                        combat_log += apply_stat_changes(n_active, p_active, stat_chgs, state=state)
                         combat_log += apply_status_outcome(p_active, inf_status, n_move_stats)
 
                         magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
@@ -7756,7 +7807,7 @@ class Combat(commands.Cog):
                     # the floor here. The shared helper handles both, and brings Block 8's
                     # stage protection with it.
                     combat_log += apply_stat_changes(attacker, defender, stat_changes,
-                                                     prefix="↳ ")
+                                                     prefix="↳ ", state=state)
 
                     if status and  status != 'none':
                         defender['status_condition'] = {'name': status, 'duration': -1}

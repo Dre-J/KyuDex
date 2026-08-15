@@ -1018,6 +1018,95 @@ BAIL_OUT_MARKER = '_bailed_out'
 # make more certain. Recorded as decided rather than faked, like Telepathy in Block 7.
 NO_FLEE_MECHANIC_ABILITIES = {'run-away'}
 
+# ==========================================
+# 💥 BLOCK 14: REACTIONS TO THE HIT ITSELF
+# ==========================================
+# Seventeen abilities that answer the move that just landed, all from the one retaliation
+# hook Static and Rough Skin already use.
+#
+#   trigger  - what has to have happened:
+#              'contact'  the move touched (Long Reach and a special move both deny it)
+#              'damaged'  any move that dealt damage
+#              'physical' a damaging physical move
+#              'crit'     the hit was a critical one
+#   types    - restricts the trigger to these elements
+#   wind     - restricts the trigger to wind moves
+#   self     - stage changes on the specimen that was hit: [(stat, stages)]
+#   foe      - stage changes on whoever threw the move
+#   weather / terrain - laid on the field
+#   hazard   - dropped on the ATTACKER's side of the field
+#   volatile - a flag set on the specimen that was hit
+#
+# Everything under `self` and `foe` goes through Block 8's resolver, so a Gooey Speed drop
+# meets Clear Body and rouses Defiant exactly as any other drop does.
+ON_HIT_REACTIONS = {
+    # --- lower the attacker's Speed
+    'gooey':            {'trigger': 'contact',  'foe': [('speed', -1)]},
+    'tangling-hair':    {'trigger': 'contact',  'foe': [('speed', -1)]},
+    # Cotton Down lowers EVERY other specimen's Speed. With one opponent that is the
+    # attacker, and it answers any damaging move rather than only a touch.
+    'cotton-down':      {'trigger': 'damaged',  'foe': [('speed', -1)]},
+
+    # --- move the specimen's own stages
+    'stamina':          {'trigger': 'damaged',  'self': [('defense', 1)]},
+    'weak-armor':       {'trigger': 'physical', 'self': [('defense', -1), ('speed', 2)]},
+    'justified':        {'trigger': 'damaged',  'types': ['dark'], 'self': [('attack', 1)]},
+    'water-compaction': {'trigger': 'damaged',  'types': ['water'], 'self': [('defense', 2)]},
+    'steam-engine':     {'trigger': 'damaged',  'types': ['fire', 'water'],
+                         'self': [('speed', 6)]},
+    'thermal-exchange': {'trigger': 'damaged',  'types': ['fire'], 'self': [('attack', 1)]},
+    'rattled':          {'trigger': 'damaged',  'types': ['dark', 'ghost', 'bug'],
+                         'self': [('speed', 1)]},
+    # Anger Point goes straight to the ceiling; the resolver clamps it, so twelve is a
+    # deliberate "as far as it will go" rather than a figure anybody has to keep in step.
+    'anger-point':      {'trigger': 'crit',     'self': [('attack', 12)]},
+    # --- change the field
+    'sand-spit':        {'trigger': 'damaged',  'weather': 'sand'},
+    'seed-sower':       {'trigger': 'damaged',  'terrain': 'grassy'},
+    'toxic-debris':     {'trigger': 'physical', 'hazard': 'toxic-spikes'},
+
+    # --- charge the next Electric move
+    'wind-power':       {'trigger': 'damaged',  'wind': True, 'volatile': 'charged'},
+    'electromorphosis': {'trigger': 'damaged',  'volatile': 'charged'},
+}
+
+# The charge Wind Power and Electromorphosis bank, and what it is worth. Spent by the next
+# Electric move its owner throws.
+CHARGE_VOLATILE = 'charged'
+CHARGE_MULTIPLIER = 2.0
+
+# Wind moves, for Wind Rider and Wind Power. Listed rather than guessed: Blizzard and Heat
+# Wave are wind moves and do not say so, while Air Cutter and Aeroblast are not.
+WIND_MOVES = {
+    'bleakwind-storm', 'blizzard', 'fairy-wind', 'gust', 'heat-wave', 'hurricane',
+    'icy-wind', 'petal-blizzard', 'sandsear-storm', 'sandstorm', 'springtide-storm',
+    'tailwind', 'twister', 'whirlwind', 'wildbolt-storm',
+}
+
+# Wind Rider does not merely answer a wind move, it refuses one outright - and is
+# rewarded for doing so. That is an immunity rather than a reaction to damage,
+# which is why it is not a row in the table above: the trigger there is being HURT.
+WIND_IMMUNE_ABILITIES = {'wind-rider'}
+WIND_RIDER_BOOST = ('attack', 1)
+
+# The payload target marker for "the attacker, but the DEFENDER did this to it". The
+# existing 'attacker' means self-inflicted - Close Combat's own Defense drop - and Block 8
+# screens on exactly that distinction, so Gooey needs to say something different or its
+# drop would slip past Clear Body.
+# Four combinations of (who moves) x (whose doing it was), because Block 8 screens on
+# exactly that distinction. The first two are the engine's originals; the second two
+# are what this block needed - Gooey drops the ATTACKER's Speed but the DEFENDER did
+# it, and Stamina raises the DEFENDER's Defense by its own doing.
+TARGET_ATTACKER = 'attacker'                       # attacker, self-inflicted
+TARGET_DEFENDER = 'defender'                       # defender, by the attacker
+TARGET_ATTACKER_FROM_FOE = 'attacker_from_foe'     # attacker, by the defender
+TARGET_DEFENDER_SELF = 'defender_self'             # defender, its own doing
+
+# A field change smuggled through the stat-change channel, the way Leech Seed and
+# Perish Song already are - calculate_damage has the weather as a STRING and cannot
+# lay a new one, but the engines that call it can.
+TARGET_FIELD = 'field'
+
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
 WEIGHT_MULTIPLIER_ABILITIES = {
