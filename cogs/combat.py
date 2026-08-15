@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -838,6 +838,54 @@ def apply_faint_recoil(fainted, killer):
     return (f"\U0001f4a5 **{fainted['name'].capitalize()}**'s "
             f"{pretty_ability(ability)} took **{toll}** HP from "
             f"**{killer['name'].capitalize()}** on the way down!\n")
+
+
+async def resolve_form_flips(*combatants):
+    """
+    Cash in every form change the predicates have banked.
+
+    One database connection for all of them, and one call site per moment that could
+    have caused one. The predicates are synchronous and the species tables are not,
+    which is the whole reason a request exists rather than the flip happening where it
+    was decided.
+    """
+    owed = [c for c in combatants if c and c.get(FORM_FLIP_REQUEST)]
+    if not owed:
+        return ""
+
+    log = ""
+    try:
+        async with aiosqlite.connect(DB_FILE) as db:
+            for combatant in owed:
+                form, flavour = combatant.pop(FORM_FLIP_REQUEST)
+                was = combatant['name'].replace('-', ' ').title()
+                if await assume_species_form(db, combatant, form):
+                    log += (f"\U0001f504 **{was}** "
+                            f"{flavour or 'changed form'} and became "
+                            f"**{combatant['name'].replace('-', ' ').title()}**!\n")
+    except Exception as e:
+        print(f"DEBUG: Form flip failed: {e}")
+        for combatant in owed:
+            combatant.pop(FORM_FLIP_REQUEST, None)
+    return log
+
+
+def request_hp_form_flips(*combatants):
+    """
+    Ask the HP-watchers whether they should be wearing something else.
+
+    Raised at the end of the turn, beside Block 13's bail-out and Block 15's Berserk,
+    because that is where both engines already look at what the turn did to a
+    specimen's HP. Nothing changes here - it only banks the request.
+    """
+    for combatant in combatants:
+        if not combatant or combatant.get('current_hp', 0) <= 0:
+            continue
+        wanted = hp_form_for(combatant)
+        if wanted:
+            request_form_flip(combatant, wanted, 'shifted')
+        elif hunger_form_for(combatant):
+            request_form_flip(combatant, hunger_form_for(combatant), 'changed its mood')
 
 
 async def pick_npc_move(db, available_moves, npc, foe, state, context='ATTACK'):
@@ -4890,6 +4938,8 @@ class BattleDashboard(discord.ui.View):
 
                         # Execute the Stat Changes
                         combat_log += apply_stat_changes(attacker, defender, stat_chgs, state=state)
+                        # ...and cash in any form change the move provoked.
+                        combat_log += await resolve_form_flips(attacker, defender)
 
                         # ==========================================
                         # 💃 DANCER
@@ -5947,6 +5997,10 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
 
             # --- PHASE 4: SURVIVAL & SWAP CHECK ---
+            # Block 16's form-watchers get the same moment, for the same reason.
+            request_hp_form_flips(p_active, n_active)
+            combat_log += await resolve_form_flips(p_active, n_active)
+
             # Berserk and Anger Shell answer HP having CROSSED below half. Raised in
             # the same place as Block 13's bail-out, and for the same reason: this is
             # the one point both engines already look at what the turn did to a
@@ -7905,6 +7959,7 @@ class Combat(commands.Cog):
                     # stage protection with it.
                     combat_log += apply_stat_changes(attacker, defender, stat_changes,
                                                      prefix="↳ ", state=state)
+                    combat_log += await resolve_form_flips(attacker, defender)
 
                     if status and  status != 'none':
                         defender['status_condition'] = {'name': status, 'duration': -1}
