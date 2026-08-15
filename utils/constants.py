@@ -1107,6 +1107,11 @@ TARGET_DEFENDER_SELF = 'defender_self'             # defender, its own doing
 # lay a new one, but the engines that call it can.
 TARGET_FIELD = 'field'
 
+# How often a generated specimen comes up with its hidden ability rather than a
+# standard one. The same figure the capture path in cogs/ecology.py uses - a rival
+# should be built from the rules something you could have caught was built from.
+HIDDEN_ABILITY_CHANCE = 0.20
+
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.
 WEIGHT_MULTIPLIER_ABILITIES = {
