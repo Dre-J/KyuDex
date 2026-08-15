@@ -520,6 +520,9 @@ BIOLOGICAL_TRAITS = {
         'tinted-lens':   {'condition': 'not_very_effective', 'multiplier': 2.0},
         'analytic':      {'condition': 'moving_last', 'multiplier': 1.3},
         'stakeout':      {'condition': 'target_just_arrived', 'multiplier': 2.0},
+
+        # --- Block 12
+        'sharpness':     {'condition': 'slicing', 'multiplier': 1.5},
     },
 
     # The defensive half of the same idea: a multiplier on damage COMING IN, keyed on the
@@ -663,6 +666,13 @@ STATUS_IMMUNE_ABILITIES = {
     'leaf-guard':     {'statuses': ALL_STATUSES,
                        'weather': ['sun', 'extremely-harsh-sunlight']},
     'flower-veil':    {'statuses': ALL_STATUSES, 'self_type': 'grass'},
+
+    # --- Block 12. These two should have arrived with Block 7 - the comment above this
+    # table has named them since it was written - and did not. They were counted as
+    # implemented because gym leaders carry them, which is the whole reason the phantom
+    # scan exists.
+    'immunity':       {'statuses': {'poison'}},
+    'limber':         {'statuses': {'paralysis'}},
 }
 
 # Volatiles an ability simply refuses. Flinch is the only one this block needs, and it is
@@ -930,6 +940,39 @@ PARADOX_STAT_ORDER = ('attack', 'defense', 'sp_atk', 'sp_def', 'speed')
 # abilities in Block 10.
 BOOSTER_ENERGY = 'booster-energy'
 BOOSTER_SPENT_MARKER = '_booster_energy_spent'
+
+# ==========================================
+# 👻 BLOCK 12: THE CHEAP PHANTOMS
+# ==========================================
+# Five abilities that a scan reported as implemented and were not. Each is one row in a
+# table that already existed, which is what makes them worth doing together and first:
+# every one of them is on a gym leader's team right now, doing nothing.
+#
+# Immunity and Limber go into STATUS_IMMUNE_ABILITIES above, beside the Block 7 rows they
+# should have arrived with. The three below need a home of their own.
+
+# What a critical hit multiplies by. 1.5x for everybody except Sniper, which is the whole
+# of that ability - it does not crit more often, it crits harder.
+CRIT_DAMAGE_MULTIPLIER = 1.5
+CRIT_MULTIPLIER_ABILITIES = {'sniper': 2.25}
+
+# Prankster lifts a STATUS move by one bracket. The rider is as old as the ability is in
+# its current form: since Gen 6 a move that took the boost simply fails against a Dark
+# type, which is why the boost cannot be a silent +1 and nothing else.
+PRANKSTER_ABILITIES = {'prankster'}
+PRANKSTER_PRIORITY = 1
+PRANKSTER_BLOCKED_BY = 'dark'
+
+# Sharpness rides the existing damage_multipliers table on a new `slicing` condition.
+# Listed rather than pattern-matched on the name: 'cut' and 'slash' would catch Rock
+# Slide and Sacred Sword would be missed, so a guess in either direction is wrong.
+SLICING_MOVES = {
+    'aerial-ace', 'air-cutter', 'air-slash', 'aqua-cutter', 'behemoth-blade',
+    'bitter-blade', 'ceaseless-edge', 'cross-poison', 'cut', 'fury-cutter',
+    'kowtow-cleave', 'leaf-blade', 'mighty-cleave', 'night-slash', 'psyblade',
+    'psycho-cut', 'razor-leaf', 'razor-shell', 'sacred-sword', 'secret-sword',
+    'slash', 'solar-blade', 'stone-axe', 'tachyon-cutter', 'x-scissor',
+}
 
 # Abilities that rewrite how heavy their owner is, for Grass Knot, Low Kick, Heat Crash
 # and the rest of the weight-scaled family.

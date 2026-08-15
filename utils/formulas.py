@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2069,6 +2069,11 @@ def is_sound_move(move_name):
     return normalise_move_name(move_name) in SOUND_MOVES
 
 
+def is_slicing_move(move_name):
+    """Blade-shaped, for Sharpness. Listed rather than guessed from the name."""
+    return normalise_move_name(move_name) in SLICING_MOVES
+
+
 def is_recoil_move(move_name, move=None):
     """
     True for moves that hurt their own user when they land.
@@ -2874,7 +2879,29 @@ def get_effective_priority(move_name, base_priority, attacker, terrain='none', m
                                 or (payload.get('drain') or 0) > 0):
         priority += TRIAGE_PRIORITY
 
+    # Prankster lifts a status move by one. Whether the boost then costs it the move
+    # against a Dark type is a separate question, asked at the target - see
+    # prankster_is_snubbed, which has the defender that this function does not.
+    if ability in PRANKSTER_ABILITIES and payload.get('class') == 'status':
+        priority += PRANKSTER_PRIORITY
+
     return priority
+
+
+def prankster_is_snubbed(attacker, defender, move):
+    """
+    Whether a Prankster-boosted status move simply fails, which it does against Dark.
+
+    Only moves that actually TOOK the boost are refused, so a Prankster's damaging moves
+    and its self-aimed status moves both land as normal.
+    """
+    if get_active_ability(attacker) not in PRANKSTER_ABILITIES:
+        return False
+    if (move or {}).get('class') != 'status':
+        return False
+    if 'user' in str((move or {}).get('target') or ''):
+        return False
+    return PRANKSTER_BLOCKED_BY in ((defender or {}).get('types') or [])
 
 
 def priority_tier(attacker, move=None):
@@ -3864,6 +3891,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         return 0, (f"🥇 {defender['name'].capitalize()}'s "
                    f"{pretty_ability(get_active_ability(defender))} left it "
                    f"completely unbothered!"), 'none', [], 0
+
+    # A Prankster-boosted status move simply fails against a Dark type. Checked beside
+    # Good as Gold because it is the same shape of refusal - a status move that never
+    # happens - and it has to land before anything the move would have done.
+    if prankster_is_snubbed(attacker, defender, dict(move, target=move_target)):
+        return 0, (f"🌑 {defender['name'].capitalize()} is Dark - it paid no attention "
+                   f"to the sneaky move!"), 'none', [], 0
 
     # ==========================================
     # 2. CONTAINMENT FIELD COLLISION
@@ -5378,6 +5412,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             elif cond == 'move_type' and move_type in amplifier['types']: ability_mod *= mult
             elif cond == 'sound' and is_sound_move(move_name): ability_mod *= mult
             elif cond == 'recoil' and is_recoil_move(move_name, move): ability_mod *= mult
+            elif cond == 'slicing' and is_slicing_move(move_name): ability_mod *= mult
             elif cond == 'super_effective' and type_multiplier > 1.0: ability_mod *= mult
             elif (cond == 'weather_type' and weather in amplifier['weather']
                   and move_type in amplifier['types']): ability_mod *= mult
@@ -5612,8 +5647,12 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             
             hit_damage = math.floor(base_damage_unmodified * hit_modifier)
             if is_crit:
-                # 1.5x, plus the stat ratio recomputed with unfavourable stages ignored
-                hit_damage = math.floor(hit_damage * 1.5 * crit_stat_ratio)
+                # 1.5x, plus the stat ratio recomputed with unfavourable stages ignored.
+                # Sniper is the only thing that changes the figure: it does not crit more
+                # often, it crits harder.
+                crit_power = CRIT_MULTIPLIER_ABILITIES.get(atk_ability,
+                                                           CRIT_DAMAGE_MULTIPLIER)
+                hit_damage = math.floor(hit_damage * crit_power * crit_stat_ratio)
             
             # --- D. DEFENSIVE RESIST BERRIES (Only triggers on the VERY FIRST strike) ---
             if strike == 0 and defender_item in berry_resist_map:
