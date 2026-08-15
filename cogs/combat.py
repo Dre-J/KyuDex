@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -1129,6 +1129,81 @@ async def reshape_move_slot(combatant, old_name, new_name):
     return reshaped
 
 
+# ==========================================
+# 🚪 BLOCK 10: WHAT THE ARRIVAL READS OFF THE FIELD
+# ==========================================
+# Three small readers, kept out of the switch-in hook so they can be tested without
+# standing a whole battle up around them.
+
+def download_arms(opponent):
+    """
+    Which attacking stat Download picks, having looked at both of the target's walls.
+
+    Stages are included, because Download reads the wall as it stands rather than as the
+    species table describes it. A tie goes to Sp. Atk, which is the rule in the games -
+    Attack only wins when Defense is strictly the softer of the two.
+    """
+    stats = opponent.get('stats') or {}
+    stages = opponent.get('stat_stages') or {}
+    wall_phys = apply_stat_stage(stats.get('defense', 50), stages.get('defense', 0))
+    wall_spec = apply_stat_stage(stats.get('sp_def', 50), stages.get('sp_def', 0))
+    return 'attack' if wall_phys < wall_spec else 'special-attack'
+
+
+def forewarn_pick(opponent):
+    """
+    The move Forewarn calls out: the heaviest thing on the other side's list.
+
+    A one-hit KO move outranks everything, however little power its row records - which
+    is the whole reason it is worth being warned about.
+    """
+    best, best_score = None, 0
+    for m in (opponent.get('moves') or []):
+        name = (m.get('name') or '').lower()
+        score = 150 if name in OHKO_MOVES else (m.get('power') or 0)
+        if score > best_score:
+            best, best_score = m, score
+    return best
+
+
+def anticipation_shudders(entering_combatant, opponent):
+    """
+    Whether Anticipation feels anything: a super-effective move, an OHKO, or an explosion.
+
+    Reads the move's element against the arrival's own types. A status move cannot be
+    super effective, so it is skipped rather than run through the chart.
+    """
+    for m in (opponent.get('moves') or []):
+        name = (m.get('name') or '').lower()
+        if name in OHKO_MOVES or name in EXPLOSIVE_MOVES:
+            return True
+
+        move_type = m.get('type')
+        if not move_type or m.get('class') == 'status':
+            continue
+
+        multiplier = 1.0
+        for own_type in (entering_combatant.get('types') or []):
+            multiplier *= TYPE_CHART.get(move_type, {}).get(own_type, 1.0)
+        if multiplier > 1.0:
+            return True
+    return False
+
+
+def entry_ability_is_spent(combatant, ability):
+    """
+    Whether a once-per-battle entry ability has already fired for this specimen.
+
+    Recorded on the specimen itself rather than in volatile_statuses, because volatiles
+    are wiped on the way out and "once per battle" has to outlive a switch.
+    """
+    return ability in (combatant.get(ONCE_PER_BATTLE_MARKER) or set())
+
+
+def spend_entry_ability(combatant, ability):
+    combatant.setdefault(ONCE_PER_BATTLE_MARKER, set()).add(ability)
+
+
 async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, state, combat_log):
     """Executes passive biological traits for a SINGLE specimen entering the biome."""
 
@@ -1266,6 +1341,29 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             if note:
                 combat_log += note + chr(10)
 
+    # ==========================================
+    # 0c. TERA SHIFT (Terapagos)
+    # ==========================================
+    # Same shape as the Rusted Relics above, minus the item: Terapagos rearranges itself
+    # on arrival whatever it is holding. Resolved BEFORE the ability is read, because the
+    # form it becomes carries a different one - Tera Shell, from Block 9.
+    shift = ENTRY_FORM_SHIFTS.get(get_active_ability(entering_combatant))
+    if shift and shift['form'] not in entering_combatant['name'].lower():
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                if await assume_species_form(db, entering_combatant, shift['form']):
+                    # The new body carries a different trait. Written here rather than
+                    # inside assume_species_form so the Crowned forms, which keep theirs,
+                    # are not disturbed.
+                    if shift.get('becomes_ability'):
+                        entering_combatant['ability'] = shift['becomes_ability']
+                    combat_log += (
+                        f"🔷 **{owner_str.strip()} {shift['species'].capitalize()}** "
+                        f"{shift['flavour']} and became "
+                        f"**{entering_combatant['name'].replace('-', ' ').title()}**!\n")
+        except Exception as e:
+            print(f"DEBUG: Failed Tera Shift: {e}")
+
     ability = get_active_ability(entering_combatant)
     name = entering_combatant['name'].capitalize()
     opp_name = opponent['name'].capitalize()
@@ -1283,6 +1381,135 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             combat_log += f"💢 **{owner_str.strip()} {name}**'s Intimidate glares at {opp_name}!\n"
             combat_log += resolve_stat_stages(
                 [(opponent, 'attack', -1, entering_combatant)])
+
+    # ==========================================
+    # 1b. THE ARRIVAL'S OWN BOOST (Intrepid Sword, Dauntless Shield)
+    # ==========================================
+    # Self-inflicted, so it is enqueued with no source and nothing screens it. Once per
+    # battle since Gen 9 - switching out and back in does not earn a second one.
+    elif ability in ENTRY_STAT_BOOST_ABILITIES:
+        if entry_ability_is_spent(entering_combatant, ability):
+            print(f"DEBUG ENTRY: {ability} already spent for {name}")
+        else:
+            spend_entry_ability(entering_combatant, ability)
+            stat, amount = ENTRY_STAT_BOOST_ABILITIES[ability]
+            combat_log += (f"⚔️ **{owner_str.strip()} {name}**'s "
+                           f"{ability.replace('-', ' ').title()} steeled it!\n")
+            combat_log += resolve_stat_stages([(entering_combatant, stat, amount, None)])
+
+    # ==========================================
+    # 1c. THE ARRIVAL'S OWN DROP AT THE OPPONENT (Supersweet Syrup)
+    # ==========================================
+    # Inflicted from the other side, so unlike the boost above this one meets Clear Body
+    # and Mirror Armor. Also once per battle.
+    elif ability in ENTRY_STAT_DROP_ABILITIES:
+        if not entry_ability_is_spent(entering_combatant, ability):
+            spend_entry_ability(entering_combatant, ability)
+            stat, amount = ENTRY_STAT_DROP_ABILITIES[ability]
+            combat_log += (f"🍯 **{owner_str.strip()} {name}** spread a sweet syrupy "
+                           f"scent over {opp_name}!\n")
+            combat_log += resolve_stat_stages(
+                [(opponent, stat, amount, entering_combatant)])
+
+    # ==========================================
+    # 1d. DOWNLOAD
+    # ==========================================
+    # Reads both of the target's walls and arms itself against the softer one.
+    elif ability in DOWNLOAD_ABILITIES:
+        armed = download_arms(opponent)
+        combat_log += (f"📡 **{owner_str.strip()} {name}** downloaded "
+                       f"{opp_name}'s data!\n")
+        combat_log += resolve_stat_stages([(entering_combatant, armed, 1, None)])
+
+    # ==========================================
+    # 1e. THE INFORMANTS (Frisk, Forewarn, Anticipation)
+    # ==========================================
+    # These change what the trainer knows rather than what the battle does. Frisk and
+    # Forewarn report; Anticipation only ever says whether it felt something, which is
+    # the whole point of it - it names no move.
+    elif ability in FRISK_ABILITIES:
+        carried = get_stored_item(opponent)
+        if carried and carried != 'none':
+            combat_log += (f"🔎 **{owner_str.strip()} {name}** frisked {opp_name} "
+                           f"and found a **{carried.replace('-', ' ').title()}**!\n")
+        else:
+            combat_log += (f"🔎 **{owner_str.strip()} {name}** frisked {opp_name}, "
+                           f"which is carrying nothing.\n")
+
+    elif ability in FOREWARN_ABILITIES:
+        warned = forewarn_pick(opponent)
+        if warned:
+            combat_log += (f"🔮 **{owner_str.strip()} {name}**'s Forewarn sensed "
+                           f"{opp_name}'s **"
+                           f"{warned['name'].replace('-', ' ').title()}**!\n")
+
+    elif ability in ANTICIPATION_ABILITIES:
+        if anticipation_shudders(entering_combatant, opponent):
+            combat_log += f"😨 **{owner_str.strip()} {name}** shuddered with anticipation!\n"
+
+    # ==========================================
+    # 1f. UNNERVE
+    # ==========================================
+    # Announced here, but enforced in check_consumables - asked at the moment a berry
+    # would be eaten rather than remembered from now, so it lapses the instant its owner
+    # leaves the field.
+    elif ability in BERRY_BLOCKING_ABILITIES:
+        combat_log += (f"😰 **{owner_str.strip()} {name}** is too intimidating for "
+                       f"{opp_name} to eat any Berries!\n")
+
+    # ==========================================
+    # 1g. SCREEN CLEANER
+    # ==========================================
+    # Sweeps BOTH sides. Its owner gives up its own walls to take the opponent's, which
+    # is the trade the ability is - so this deliberately does not spare the arrival's.
+    elif ability in SCREEN_CLEANING_ABILITIES:
+        swept = False
+        for hazard_key in ('player_hazards', 'npc_hazards', 'p1_hazards', 'p2_hazards'):
+            habitat = state.get(hazard_key)
+            if not isinstance(habitat, dict):
+                continue
+            for screen in SIDE_SCREEN_KEYS:
+                if habitat.get(screen):
+                    habitat[screen] = 0
+                    swept = True
+        if swept:
+            combat_log += (f"🧹 **{owner_str.strip()} {name}** swept away every "
+                           f"screen on the field!\n")
+
+    # ==========================================
+    # 1h. TERAFORM ZERO
+    # ==========================================
+    elif ability in FIELD_NEUTRALISING_ABILITIES:
+        flattened = False
+        if state.get('weather', {}).get('type', 'none') != 'none':
+            state['weather'] = {'type': 'none', 'duration': 0, 'primordial': False}
+            flattened = True
+        if state.get('terrain', {}).get('type', 'none') != 'none':
+            state['terrain'] = {'type': 'none', 'duration': 0}
+            flattened = True
+        if flattened:
+            combat_log += (f"🌀 **{owner_str.strip()} {name}** flattened the weather "
+                           f"and the terrain to nothing!\n")
+
+    # ==========================================
+    # 1i. THE RUIN QUARTET
+    # ==========================================
+    # Announcement only. The arithmetic is a standing 0.75x in stat_multiplier_for, not a
+    # stage change - which is why Clear Body cannot refuse it and Haze cannot clear it.
+    elif ability in RUIN_ABILITIES:
+        combat_log += (f"🏺 **{owner_str.strip()} {name}**'s "
+                       f"{ability.replace('-', ' ').title()} weakened "
+                       f"{opp_name}'s {RUIN_ABILITIES[ability].replace('_', '. ').title()}!\n")
+
+    # ==========================================
+    # 1j. THE ALLY-ONLY THREE
+    # ==========================================
+    # Curious Medicine resets an ALLY's stages, Costar copies an ally's, Hospitality heals
+    # one. KyuDex is singles, so there is never an ally for any of them to reach. Written
+    # as a branch that deliberately does nothing rather than left out, so the next reader
+    # finds the decision here instead of wondering whether it was forgotten.
+    elif ability in ALLY_ONLY_ENTRY_ABILITIES:
+        print(f"DEBUG ENTRY: {ability} needs an ally; singles has none")
 
     # ==========================================
     # 2. ATMOSPHERIC SUPPRESSION
@@ -2487,7 +2714,7 @@ class SwapMenu(discord.ui.View):
                     if hazard_log: combat_log += hazard_log
 
                     #Did the hazards trigger a berry?
-                    berry_log = check_consumables(new_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
+                    berry_log = check_consumables(new_active, "Your", state.get('field', {}).get('magic_room', 0) > 0, n_active)
                     if berry_log: combat_log += berry_log
                 except Exception as e:
                     print(f"DEBUG: Error applying forced swap hazards/abilities: {e}")
@@ -2555,7 +2782,7 @@ class SwapMenu(discord.ui.View):
                     hazard_log = apply_entry_hazards(new_active, state['player_hazards'], TYPE_CHART, "Your")
                     if hazard_log: combat_log += hazard_log
                     # Did the hazards trigger a berry?
-                    berry_log = check_consumables(new_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
+                    berry_log = check_consumables(new_active, "Your", state.get('field', {}).get('magic_room', 0) > 0, n_active)
                     if berry_log: combat_log += berry_log
                 except Exception as e:
                     print(f"DEBUG: Error applying voluntary swap hazards/abilities: {e}")
@@ -4448,7 +4675,7 @@ class BattleDashboard(discord.ui.View):
                         if dmg > 0: combat_log += f"Dealt **{dmg}** damage.\n"
                         
                         #Check if the damage pushed them below the berry threshold!
-                        berry_log = check_consumables(defender, owner_prefix, state.get('field', {}).get('magic_room', 0) > 0)
+                        berry_log = check_consumables(defender, owner_prefix, state.get('field', {}).get('magic_room', 0) > 0, attacker)
                         if berry_log: combat_log += berry_log
 
                         if heal_amt > 0:
@@ -4939,7 +5166,7 @@ class BattleDashboard(discord.ui.View):
                         if dmg > 0: combat_log += f"You took **{dmg}** damage.\n"
 
                         # Did the attack trigger the player's Sitrus Berry?
-                        berry_log = check_consumables(p_active, "Your", state.get('field', {}).get('magic_room', 0) > 0)
+                        berry_log = check_consumables(p_active, "Your", state.get('field', {}).get('magic_room', 0) > 0, n_active)
                         if berry_log: combat_log += berry_log
 
 
@@ -5498,9 +5725,11 @@ class BattleDashboard(discord.ui.View):
             print("DEBUG 8: Entering Phase 4 (Survival & Swap Checks)")
 
             # Final End-of-Turn Berry Sweep
-            for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
+            for combatant, owner_str, across in [(p_active, "Your", n_active),
+                                                 (n_active, "The rival's", p_active)]:
                 berry_log = check_consumables(combatant, owner_str,
-                                              state.get('field', {}).get('magic_room', 0) > 0)
+                                              state.get('field', {}).get('magic_room', 0) > 0,
+                                              across)
                 if berry_log: combat_log += berry_log
 
             # 🚨 FIELD STATE DECAY
@@ -7428,7 +7657,7 @@ class Combat(commands.Cog):
                     if dmg > 0: combat_log += f"↳ Dealt **{dmg}** damage.\n"
                     
                     # Check if the damage pushed them below the berry threshold!
-                    berry_log = check_consumables(defender, f"{opp_name}'s", state.get('field', {}).get('magic_room', 0) > 0)
+                    berry_log = check_consumables(defender, f"{opp_name}'s", state.get('field', {}).get('magic_room', 0) > 0, attacker)
                     if berry_log: combat_log += berry_log
 
                     # Apply Stat Changes (Swords Dance, Max Strike speed drop, etc.)

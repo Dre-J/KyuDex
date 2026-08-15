@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -154,13 +154,17 @@ def calculate_stats(base_stats, ivs, evs, level, nature):
         
     return final_stats
 
-def check_consumables(pokemon, owner_str, magic_room=False):
+def check_consumables(pokemon, owner_str, magic_room=False, opponent=None):
     """
     Monitors biological thresholds and consumes berries that have hit their trigger.
 
     The actual resolution lives in apply_berry_effect, which Teatime, Bug Bite, Pluck and
     a flung berry also drive - keeping one implementation is what guarantees every route
     to eating a berry records it for Belch.
+
+    `opponent` is read only for Unnerve. Asked here rather than remembered from the
+    switch-in, so the moment its owner withdraws the berries become edible again - which
+    is what "while the Pokemon is in battle" means.
     """
     if pokemon is None or pokemon['current_hp'] <= 0:
         return ""
@@ -170,7 +174,16 @@ def check_consumables(pokemon, owner_str, magic_room=False):
     if held_item not in CONSUMABLE_DATABASE:
         return ""
 
+    if berries_are_blocked(opponent):
+        return (f"😰 {owner_str} **{pokemon['name'].capitalize()}** is too unnerved "
+                f"to eat its {held_item.replace('-', ' ').title()}!\n")
+
     return apply_berry_effect(pokemon, held_item, ignore_threshold=False, owner_str=owner_str)
+
+
+def berries_are_blocked(opponent):
+    """Unnerve, read off the specimen standing opposite."""
+    return bool(opponent) and get_active_ability(opponent) in BERRY_BLOCKING_ABILITIES
 
 def is_grounded(pokemon, gravity_active=False):
     """Evaluates if a specimen is physically touching the battlefield."""
@@ -3181,47 +3194,71 @@ def apply_stat_stage(raw_stat, stage):
         return int(raw_stat * (2.0 / (2.0 + abs(stage))))
     return raw_stat
 
-def stat_multiplier_for(pokemon, stat, weather='none', terrain='none'):
+def ruin_multiplier(stat, opponent):
+    """
+    What the specimen OPPOSITE is doing to this stat, for the Ruin quartet.
+
+    The only ability family in the game that reaches across the field and holds a stat
+    down for as long as it is standing there. Deliberately not a stage change: Clear Body
+    cannot refuse it, Haze cannot clear it, and it lifts of its own accord the moment its
+    owner withdraws.
+    """
+    if not opponent:
+        return 1.0
+    return (RUIN_MULTIPLIER
+            if RUIN_ABILITIES.get(get_active_ability(opponent)) == stat else 1.0)
+
+
+def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=None):
     """
     The flat multiplier an ability puts on one of its owner's own stats.
 
     Huge Power, Marvel Scale, Defeatist and the rest. Every condition on the row is
     optional and they AND together, so a bare row is unconditional. Returns 1.0 when
     nothing applies.
+
+    `opponent` is only read by the Ruin quartet, which is the one family that presses on
+    somebody else's stats rather than its own. Callers that have both sides to hand pass
+    it; the ones that do not simply get no Ruin, which is correct for them.
     """
     if not pokemon:
         return 1.0
 
+    against = ruin_multiplier(stat, opponent)
+
     trait = BIOLOGICAL_TRAITS.get('stat_multipliers', {}).get(get_active_ability(pokemon))
     if not trait or stat not in trait['stats']:
-        return 1.0
+        return against
 
+    # Every early return below is "this specimen's own ability does not apply" - which
+    # says nothing about what the specimen opposite is doing, so they all hand back the
+    # Ruin figure rather than a bare 1.0.
     wanted = trait.get('status')
     if wanted is not None:
         current = (pokemon.get('status_condition') or {}).get('name')
         if not current:
-            return 1.0
+            return against
         if wanted != '*' and current not in wanted:
-            return 1.0
+            return against
 
     if 'weather' in trait and weather not in trait['weather']:
-        return 1.0
+        return against
     if 'terrain' in trait and terrain not in trait['terrain']:
-        return 1.0
+        return against
 
     if 'hp_at_or_below' in trait:
         share = pokemon.get('current_hp', 0) / max(1, pokemon.get('max_hp', 1))
         if share > trait['hp_at_or_below']:
-            return 1.0
+            return against
 
     if trait.get('unburdened') and not is_unburdened(pokemon):
-        return 1.0
+        return against
 
     if 'turns_on_field_below' in trait:
         if (pokemon.get('turns_on_field') or 0) >= trait['turns_on_field_below']:
-            return 1.0
+            return against
 
-    return trait['multiplier']
+    return trait['multiplier'] * against
 
 
 def is_unburdened(pokemon):
@@ -3437,10 +3474,12 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     # stages, which is where the real formula puts them, and to the stat itself rather
     # than the damage - so Body Press swinging with Defense picks up Marvel Scale, and a
     # Psyshock aimed at physical Defense picks up Fur Coat's owner's Defense boost.
-    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain))
-    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain))
-    phys_def = math.floor(phys_def * stat_multiplier_for(defender, 'defense', weather, terrain))
-    spec_def = math.floor(spec_def * stat_multiplier_for(defender, 'sp_def', weather, terrain))
+    # Each side is handed the OTHER as `opponent`, which is what lets the Ruin quartet
+    # press on stats that are not its owner's.
+    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain, defender))
+    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain, defender))
+    phys_def = math.floor(phys_def * stat_multiplier_for(defender, 'defense', weather, terrain, attacker))
+    spec_def = math.floor(spec_def * stat_multiplier_for(defender, 'sp_def', weather, terrain, attacker))
 
     # Assault Vest reinforces the Sp. Def stat itself, so it follows that stat rather than
     # the move - a Psyshock aimed at physical Defense correctly ignores the vest.
@@ -3460,7 +3499,7 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
                                     d_stages_raw.get('attack', 0))
         # The target's Huge Power comes along with its Attack, because it IS the target's
         # Attack that is being swung
-        borrowed = math.floor(borrowed * stat_multiplier_for(defender, 'attack', weather, terrain))
+        borrowed = math.floor(borrowed * stat_multiplier_for(defender, 'attack', weather, terrain, attacker))
         return borrowed, phys_def, 'physical'
 
     # --- BODY PRESS: swings with the user's own Defense ---
@@ -3468,7 +3507,7 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
         body_press_atk = apply_stat_stage(attacker.get('stats', {}).get('defense', 50), a_stages.get('defense', 0))
         # Likewise Marvel Scale, which is a Defense boost the move is now attacking with
         body_press_atk = math.floor(
-            body_press_atk * stat_multiplier_for(attacker, 'defense', weather, terrain))
+            body_press_atk * stat_multiplier_for(attacker, 'defense', weather, terrain, defender))
         return body_press_atk, phys_def, 'physical'
 
     # --- PSYSHOCK FAMILY: special attack aimed at the physical wall ---
