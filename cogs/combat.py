@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -956,6 +956,10 @@ async def end_of_turn_survival(state, *sides):
     combatants = [specimen for specimen, _flag, _owner in sides]
     log = mourn_the_fallen(*combatants)
 
+    # Block 18's Forecast reads the sky rather than the specimen, but it banks the same
+    # request and is cashed in by the same resolver, so it is asked here beside the rest.
+    request_field_form_flips(
+        (state.get('weather') or {}).get('type', 'none'), *combatants)
     request_hp_form_flips(*combatants)
     log += await resolve_form_flips(*combatants)
 
@@ -1019,6 +1023,23 @@ async def resolve_form_flips(*combatants):
         for combatant in owed:
             combatant.pop(FORM_FLIP_REQUEST, None)
     return log
+
+
+def request_field_form_flips(weather, *combatants):
+    """
+    Ask Castform whether the sky has changed under it.
+
+    Block 16's watchers read the specimen; this one reads the field, so it needs telling
+    what the weather is rather than being able to work it out. Banks a request in the
+    same place and shape, and the same resolver cashes it in - which is what makes the
+    type change free, since the resolver rebuilds the species half from the tables.
+    """
+    for combatant in combatants:
+        if not combatant or combatant.get('current_hp', 0) <= 0:
+            continue
+        wanted = weather_form_for(combatant, weather)
+        if wanted:
+            request_form_flip(combatant, wanted, 'transformed with the weather')
 
 
 def request_hp_form_flips(*combatants):
@@ -1686,6 +1707,13 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
                         f"**{entering_combatant['name'].replace('-', ' ').title()}**!\n")
         except Exception as e:
             print(f"DEBUG: Failed Tera Shift: {e}")
+
+    # Block 18: Castform arrives wearing whatever the sky is already doing. Asked here as
+    # well as at the end of the turn, so it does not spend its first turn being the wrong
+    # element while the rain it walked into goes unnoticed.
+    request_field_form_flips((state.get('weather') or {}).get('type', 'none'),
+                             entering_combatant)
+    combat_log += await resolve_form_flips(entering_combatant)
 
     ability = get_active_ability(entering_combatant)
     name = entering_combatant['name'].capitalize()
@@ -4700,6 +4728,15 @@ class BattleDashboard(discord.ui.View):
                         volatiles.pop('flinch', None)
                         can_attack = False
 
+                    # Block 18: Truant loafs on alternate turns. Asked LAST of the
+                    # incapacity checks, and only if nothing else has already stopped the
+                    # specimen - asking ADVANCES the rhythm, so a Slaking that spent this
+                    # turn asleep must not also spend its loaf on it.
+                    if can_attack and truancy_holds_it_back(attacker):
+                        combat_log += (f"😴 **{attacker['name'].capitalize()}** "
+                                       f"is loafing about!\n")
+                        can_attack = False
+
                     # 🚨 STOMPING TANTRUM MEMORY
                     # Being unable to act at all - paralysis, sleep, freeze, flinch, or a
                     # confusion self-hit - counts as the move having failed.
@@ -5515,6 +5552,15 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"🧊 The rival's **{n_active['name'].capitalize()}** is frozen solid!\n"
                         can_attack = False
 
+            # Block 18: Truant, on the third of the three paths a specimen can try to move
+            # down. Left off here and a Slaking would never loaf on the turn it swings at a
+            # replacement - which is exactly the shape of gap this project keeps finding, so
+            # all three are filled at once.
+            if can_attack and truancy_holds_it_back(n_active):
+                combat_log += (f"😴 The rival's "
+                               f"**{n_active['name'].capitalize()}** is loafing about!\n")
+                can_attack = False
+
             if can_attack:
                 combat_log += f"🔴 The rival's **{n_active['name'].capitalize()}** used `{npc_move_name.replace('-', ' ').title()}`!\n"
                 
@@ -5917,8 +5963,10 @@ class BattleDashboard(discord.ui.View):
 
                         # Bad Dreams - aimed at the OPPONENT, and only while it sleeps
                         elif eot_trait['type'] == 'sleep_drain':
-                            foe_status = (foe.get('status_condition') or {}) if foe else {}
-                            if foe and foe['current_hp'] > 0 and foe_status.get('name') == 'sleep':
+                            # Comatose counts as asleep here - it is a sleep its owner
+                            # walks around in, and Bad Dreams asks about the sleeping
+                            # rather than about the motionless.
+                            if foe and foe['current_hp'] > 0 and is_effectively_asleep(foe):
                                 bite = max(1, math.floor(foe.get('max_hp', 100) / eot_trait['denominator']))
                                 foe['current_hp'] = max(0, foe['current_hp'] - bite)
                                 combat_log += f"😈 **{foe['name'].capitalize()}** is tormented by {combatant['name'].capitalize()}'s {ability_name}! (-{bite} HP)\n"
@@ -7656,7 +7704,7 @@ class Combat(commands.Cog):
                         combat_log += f"🚫 **{owner_name}'s** {attacker['name'].capitalize()} flinched and couldn't move!\n"
                         volatiles['flinch'] = False
                         can_attack = False
-                    
+
                     # 3. BIOLOGICAL STATUS CHECK (Paralysis, Sleep, Freeze)
                     status = attacker.get('status_condition', {})
                     if status and can_attack:
@@ -7682,6 +7730,17 @@ class Combat(commands.Cog):
                             else:
                                 combat_log += f"🧊 **{owner_name}'s** {attacker['name'].capitalize()} is frozen solid!\n"
                                 can_attack = False
+
+                    # Block 18: Truant loafs on alternate turns. Asked LAST of the
+                    # incapacity checks, and only if nothing else has already stopped the
+                    # specimen - asking ADVANCES the rhythm, so a Slaking that spent this
+                    # turn asleep must not also spend its loaf on it. PvP checks flinch
+                    # BEFORE status and PvE checks it after, so "last" is a different line
+                    # in each; it is the position that matters, not the line number.
+                    if can_attack and truancy_holds_it_back(attacker):
+                        combat_log += (f"😴 **{owner_name}'s** "
+                                       f"{attacker['name'].capitalize()} is loafing about!\n")
+                        can_attack = False
 
                     # If the attacker is stunned by ANY of the above, skip the attack phase!
                     if not can_attack:
@@ -8590,8 +8649,10 @@ class Combat(commands.Cog):
 
                         # Bad Dreams - aimed at the OPPONENT, and only while it sleeps
                         elif eot_trait['type'] == 'sleep_drain':
-                            foe_status = (foe.get('status_condition') or {}) if foe else {}
-                            if foe and foe['current_hp'] > 0 and foe_status.get('name') == 'sleep':
+                            # Comatose counts as asleep here - it is a sleep its owner
+                            # walks around in, and Bad Dreams asks about the sleeping
+                            # rather than about the motionless.
+                            if foe and foe['current_hp'] > 0 and is_effectively_asleep(foe):
                                 bite = max(1, math.floor(foe.get('max_hp', 100) / eot_trait['denominator']))
                                 foe['current_hp'] = max(0, foe['current_hp'] - bite)
                                 combat_log += f"😈 **{foe['name'].capitalize()}** is tormented by {combatant['name'].capitalize()}'s {ability_name}! (-{bite} HP)\n"

@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -383,8 +383,10 @@ def get_stat_scaled_power(move_name, attacker, defender):
 
     # --- CONDITIONAL DOUBLERS ---
     if move_name == 'hex':
+        # Comatose counts. It is a status the specimen wears permanently, and Hex
+        # asks whether the target is afflicted rather than which affliction it is.
         status = defender.get('status_condition') or {}
-        return 130 if status.get('name') else 65
+        return 130 if (status.get('name') or is_effectively_asleep(defender)) else 65
 
     if move_name == 'revenge':
         # Doubles if the target already struck the user earlier in this same turn.
@@ -2670,6 +2672,9 @@ def leave_field(pokemon):
         # line rather than sitting under it.
         pokemon.pop(BAIL_OUT_MARKER, None)
         pokemon.pop(HP_THRESHOLD_MARKER, None)
+        # Truant starts afresh: whatever it was owed, it acts on the turn it
+        # arrives back. Left set, a Slaking could bank its loafing on the bench.
+        pokemon.pop(TRUANT_MARKER, None)
         # Palafin transforms on the way OUT, and comes back a hero. Requested here
         # rather than done here for the usual reason: this function is synchronous
         # and the species tables are not.
@@ -3706,6 +3711,68 @@ def mark_mourned(fallen):
         return False
     fallen[MOURNED_MARKER] = True
     return True
+
+
+# ==========================================
+# 🌦️ BLOCK 18: ABILITIES THAT READ THE FIELD
+# ==========================================
+
+
+def weather_form_for(pokemon, weather='none'):
+    """
+    Which body Castform should be wearing for this sky, or None if it already is.
+
+    Block 16's form flips all answer something that happened TO the specimen; this one
+    answers something about the field, so it is asked wherever the weather is known
+    rather than wherever damage was applied. The request it banks is the same one, and
+    the same resolver cashes it in - the type change comes along with the species half.
+    """
+    rule = WEATHER_FORMS.get(get_active_ability(pokemon))
+    if not rule:
+        return None
+
+    wearing = (pokemon or {}).get('name')
+    if wearing not in rule['by_weather'].values() and wearing != rule['base']:
+        return None
+
+    wanted = rule['by_weather'].get(weather, rule['base'])
+    return None if wanted == wearing else wanted
+
+
+def truancy_holds_it_back(pokemon):
+    """
+    Whether Truant makes this specimen loaf about instead of moving.
+
+    Asking ADVANCES the rhythm, which is deliberate and is why this is one function
+    rather than a predicate plus a toggle: it is asked once per attempt to move, from
+    three separate places, and a caller that forgot to advance it would leave a Slaking
+    either loafing for ever or never. The first ask after arriving always lets it move.
+
+    The marker is cleared in leave_field, so switching out and back in re-arms it.
+    """
+    if get_active_ability(pokemon) not in TRUANT_ABILITIES:
+        return False
+
+    loafing = bool(pokemon.get(TRUANT_MARKER))
+    pokemon[TRUANT_MARKER] = not loafing
+    return loafing
+
+
+def is_effectively_asleep(pokemon):
+    """
+    Whether this specimen counts as asleep to everything EXCEPT the question of whether
+    it can act.
+
+    Comatose is a permanent sleep its owner walks around in, so Bad Dreams torments it,
+    Wake-Up Slap hits it twice as hard and Hex reads it as statused - but nothing here
+    stops it moving, which is why the incapacity checks go on reading the status slot
+    directly rather than calling this.
+    """
+    if not pokemon:
+        return False
+    if get_active_ability(pokemon) in COMATOSE_ABILITIES:
+        return True
+    return (pokemon.get('status_condition') or {}).get('name') == 'sleep'
 
 
 def copies_stat_boosts(pokemon):
@@ -5796,7 +5863,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # 1. Pathogen Synergies
         if move_name == 'facade' and atk_status in ['burn', 'poison', 'paralysis']:
             move_power *= 2
-        elif move_name == 'wake-up-slap' and def_status == 'sleep':
+        elif move_name == 'wake-up-slap' and is_effectively_asleep(defender):
             move_power *= 2
         elif move_name == 'smelling-salts' and def_status == 'paralysis':
             move_power *= 2
@@ -6948,11 +7015,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     # 🚨 BIOLOGICAL CLEANSERS (Wake-Up Slap & Smelling Salts)
     # ==========================================
     if damage > 0:
-        if move_name == 'wake-up-slap' and defender.get('status_condition', {}).get('name') == 'sleep':
+        # `.get('status_condition', {})` hands back None rather than the default whenever
+        # the key is PRESENT and None - which is what an unstatused combatant carries - so
+        # both of these raised AttributeError on every healthy target. Read with `or {}`,
+        # the way the rest of the file does.
+        if move_name == 'wake-up-slap' and (defender.get('status_condition') or {}).get('name') == 'sleep':
             defender['status_condition'] = None
             msg += f" The sheer force of the slap jolted {defender['name'].capitalize()} awake!"
-            
-        elif move_name == 'smelling-salts' and defender.get('status_condition', {}).get('name') == 'paralysis':
+
+        elif move_name == 'smelling-salts' and (defender.get('status_condition') or {}).get('name') == 'paralysis':
             defender['status_condition'] = None
             msg += f" {defender['name'].capitalize()}'s paralysis was completely cured by the shock!"
 

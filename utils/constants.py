@@ -590,6 +590,14 @@ BIOLOGICAL_TRAITS = {
         'defeatist':       {'stats': ['attack', 'sp_atk'], 'multiplier': 0.5,
                             'hp_at_or_below': 0.5},
 
+        # --- Block 18. Cherrim's sunshine. The games also give it a second FORM in the
+        # sun, and the species table this project reads has no cherrim-sunshine row, so
+        # only the stats are here. Recorded rather than faked: adding a species would
+        # mean editing the database, and the stat half is the whole of what the ability
+        # text says the ability does.
+        'flower-gift':     {'stats': ['attack', 'sp_def'], 'multiplier': 1.5,
+                            'weather': ['sun', 'extremely-harsh-sunlight']},
+
         # --- Block 3: conditional speed. Same table, same conditions - the only new ones
         # are `unburdened` and `turns_on_field_below`. Slow Start halves Attack as well as
         # Speed, and gets both from the one row.
@@ -679,6 +687,9 @@ STATUS_IMMUNE_ABILITIES = {
     # scan exists.
     'immunity':       {'statuses': {'poison'}},
     'limber':         {'statuses': {'paralysis'}},
+
+    # --- Block 18. Komala is already asleep, so there is no room for anything else.
+    'comatose':       {'statuses': ALL_STATUSES},
 }
 
 # Volatiles an ability simply refuses. Flinch is the only one this block needs, and it is
@@ -862,7 +873,10 @@ ANTICIPATION_ABILITIES = {'anticipation'}
 # Unnerve reaches across the field and stops the OTHER side eating its berries. Read at
 # the moment a berry would be consumed rather than at entry, so it lapses the instant its
 # owner leaves - which is what "while the Pokemon is in battle" means.
-BERRY_BLOCKING_ABILITIES = {'unnerve'}
+# The Calyrex pair are Unnerve welded to a Neigh, so each is two rows rather than a new
+# mechanic - one here and one in KNOCKOUT_BOOST_ABILITIES. That is the whole of them,
+# which is why they waited for Block 17 rather than arriving with Unnerve in Block 10.
+BERRY_BLOCKING_ABILITIES = {'unnerve', 'as-one-glastrier', 'as-one-spectrier'}
 
 # Screen Cleaner sweeps both sides, not just the opponent's.
 SCREEN_CLEANING_ABILITIES = {'screen-cleaner'}
@@ -1303,6 +1317,12 @@ KNOCKOUT_BOOST_ABILITIES = {
     'grim-neigh':     'special-attack',
     'beast-boost':    KNOCKOUT_BEST_STAT,
     'eelevate':       KNOCKOUT_BEST_STAT,
+
+    # --- Block 18. The other half of each is a row in BERRY_BLOCKING_ABILITIES: an
+    # As One IS Unnerve and a Neigh, and pointing both rows at the same names is a
+    # truer statement of that than a branch reading "or as-one" in two places.
+    'as-one-glastrier': 'attack',
+    'as-one-spectrier': 'special-attack',
 }
 KNOCKOUT_BOOST_STAGES = 1
 
@@ -1341,6 +1361,39 @@ SUPREME_OVERLORD_STATS = ('attack', 'sp_atk')
 # ability to float. One set, so the next one is a single row rather than another hunt -
 # and so the hazard check and the Ground immunity cannot disagree about who is airborne.
 LEVITATION_ABILITIES = {'levitate', 'eelevate'}
+
+# ==========================================
+# 🌦️ BLOCK 18: ABILITIES THAT READ THE FIELD
+# ==========================================
+# Forecast is a form flip like Block 16's, but keyed on the WEATHER rather than on
+# anything that happened to the specimen - so it reuses that block's request/resolve
+# machinery and only the question is new. The type comes along for free: the resolver
+# rebuilds the species half from the tables, and castform-sunny is Fire in them.
+WEATHER_FORM_ABILITIES = {'forecast'}
+WEATHER_FORMS = {
+    'forecast': {
+        'base': 'castform',
+        'by_weather': {
+            'sun': 'castform-sunny', 'extremely-harsh-sunlight': 'castform-sunny',
+            'rain': 'castform-rainy', 'heavy-rain': 'castform-rainy',
+            'hail': 'castform-snowy', 'snow': 'castform-snowy',
+        },
+    },
+}
+
+# Truant loafs on alternate turns. The marker rides on the specimen and is cleared on the
+# way out, so a Slaking switched out and back in acts on the turn it arrives rather than
+# resuming a rhythm it left behind - which is the rule in the games, and is also the only
+# reading that does not quietly reward switching.
+TRUANT_ABILITIES = {'truant'}
+TRUANT_MARKER = '_loafing'
+
+# Comatose is a permanent sleep that does not stop its owner moving. Everything that asks
+# "is this thing asleep" for a REASON OTHER than whether it can act has to read the
+# ability as well as the status slot, which is what is_effectively_asleep is for. The
+# defensive half is an ordinary row in STATUS_IMMUNE_ABILITIES: something already asleep
+# cannot be given anything else.
+COMATOSE_ABILITIES = {'comatose'}
 
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
