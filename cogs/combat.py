@@ -932,6 +932,65 @@ def mourn_the_fallen(*combatants):
     return log
 
 
+async def end_of_turn_survival(state, *sides):
+    """
+    Everything that answers what the TURN did to a specimen, rather than what a move did.
+
+    Four blocks' worth of abilities arrive at this one moment, and they arrive here
+    rather than at the dozen places damage is applied because this is the single point
+    both engines already look at what the turn cost each side:
+
+      Block 17  Soul-Heart, for a specimen the residual damage has just killed. First,
+                because nothing after it would ever see that faint - the blow-by-blow
+                check only runs after an attack.
+      Block 16  the HP-watching form flips, and Morpeko's mood.
+      Block 15  Berserk and Anger Shell, which answer HP having CROSSED below half.
+      Block 13  Wimp Out and Emergency Exit, which set the pivot flag the swap check
+                below already reads.
+
+    Each `side` is (specimen, must_pivot_flag, owner_label). It was PvE-only code until
+    this was pulled out: nine abilities across three blocks were inert in PvP, each one
+    written into the ordinary turn and never into the duel. Extracted rather than copied
+    for exactly that reason - a third copy would have been a third thing to keep in step.
+    """
+    combatants = [specimen for specimen, _flag, _owner in sides]
+    log = mourn_the_fallen(*combatants)
+
+    request_hp_form_flips(*combatants)
+    log += await resolve_form_flips(*combatants)
+
+    # Opportunist reads across the field, so the boosts below need to know who is facing
+    # whom. Singles only ever has two, which is what makes this answerable at all.
+    look = foe_finder(*combatants) if len(combatants) == 2 else None
+
+    for specimen, _flag, owner in sides:
+        if crossed_below_half(specimen):
+            specimen[HP_THRESHOLD_MARKER] = True
+            log += (f"\U0001f621 {owner} "
+                    f"**{specimen['name'].capitalize()}**'s "
+                    f"{pretty_ability(get_active_ability(specimen))} "
+                    f"flared up!\n")
+            log += resolve_stat_stages(
+                [(specimen, _stat, _stages, None)
+                 for _stat, _stages in hp_threshold_stages(specimen)],
+                foe_of=look)
+
+    # Divergence, stated rather than hidden: the games move the specimen the instant its
+    # HP crosses below half, mid-turn. Here it leaves at the END of the turn it was hurt
+    # in, so it takes the rest of that turn's chip damage first. That reuses the
+    # replacement path faint already drives instead of standing up a second, parallel
+    # mid-turn pause in each engine.
+    for specimen, flag, owner in sides:
+        if wants_to_bail_out(specimen):
+            specimen[BAIL_OUT_MARKER] = True
+            state[flag] = True
+            log += (f"🚪 {owner} **{specimen['name'].capitalize()}**'s "
+                    f"{pretty_ability(get_active_ability(specimen))} "
+                    f"sent it running for the bench!\n")
+
+    return log
+
+
 async def resolve_form_flips(*combatants):
     """
     Cash in every form change the predicates have banked.
@@ -6099,48 +6158,13 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
 
             # --- PHASE 4: SURVIVAL & SWAP CHECK ---
-            # Block 17's Soul-Heart goes first, because it answers a specimen that the
-            # residual damage above has just killed - and nothing that follows would ever
-            # look at that faint, since the blow-by-blow check only runs after an attack.
-            combat_log += mourn_the_fallen(p_active, n_active)
-
-            # Block 16's form-watchers get the same moment, for the same reason.
-            request_hp_form_flips(p_active, n_active)
-            combat_log += await resolve_form_flips(p_active, n_active)
-
-            # Berserk and Anger Shell answer HP having CROSSED below half. Raised in
-            # the same place as Block 13's bail-out, and for the same reason: this is
-            # the one point both engines already look at what the turn did to a
-            # specimen's HP, rather than the dozen places damage is applied.
-            for _hurt, _owner in [(p_active, 'Your'), (n_active, "The rival's")]:
-                if crossed_below_half(_hurt):
-                    _hurt[HP_THRESHOLD_MARKER] = True
-                    combat_log += (f"\U0001f621 {_owner} "
-                                   f"**{_hurt['name'].capitalize()}**'s "
-                                   f"{pretty_ability(get_active_ability(_hurt))} "
-                                   f"flared up!\n")
-                    combat_log += resolve_stat_stages(
-                        [(_hurt, _stat, _stages, None)
-                         for _stat, _stages in hp_threshold_stages(_hurt)],
-                        foe_of=foe_finder(p_active, n_active))
-
-            # Wimp Out and Emergency Exit bolt for the bench. Raised here rather than
-            # at each of the dozen places damage is applied, because this is where the
-            # must_pivot flags are already read - one hook instead of twelve.
-            #
-            # Divergence, stated rather than hidden: the games move the specimen the
-            # instant its HP crosses below half, mid-turn. Here it leaves at the end of
-            # the turn it was hurt in, so it takes the rest of that turn's chip damage
-            # first. That reuses the replacement path faint already drives instead of
-            # standing up a second, parallel mid-turn pause.
-            for _fleer, _flag, _owner in [(p_active, 'player_must_pivot', 'Your'),
-                                          (n_active, 'npc_must_pivot', "The rival's")]:
-                if wants_to_bail_out(_fleer):
-                    _fleer[BAIL_OUT_MARKER] = True
-                    state[_flag] = True
-                    combat_log += (f"🚪 {_owner} **{_fleer['name'].capitalize()}**'s "
-                                   f"{pretty_ability(get_active_ability(_fleer))} "
-                                   f"sent it running for the bench!\n")
+            # Four blocks' worth of end-of-turn reactions, in one shared call. This was
+            # written inline here and nowhere else, which is how nine abilities across
+            # Blocks 13, 15 and 16 came to be inert in PvP.
+            combat_log += await end_of_turn_survival(
+                state,
+                (p_active, 'player_must_pivot', 'Your'),
+                (n_active, 'npc_must_pivot', "The rival's"))
 
             n_needs_swap = n_active['current_hp'] <= 0 or state.get('npc_must_pivot')
             p_needs_swap = p_active['current_hp'] <= 0 or state.get('player_must_pivot')
@@ -8858,10 +8882,13 @@ class Combat(commands.Cog):
             new_p1_active = state['p1_team'][state['p1_active_index']]
             new_p2_active = state['p2_team'][state['p2_active_index']]
 
-            # Block 17: whoever the residual damage just killed, the survivor answers -
-            # the same moment PvE uses, so Soul-Heart cannot be an engine-specific
-            # ability. Anything already paid for by the faint check is skipped.
-            combat_log += mourn_the_fallen(new_p1_active, new_p2_active)
+            # The same four blocks of end-of-turn reactions PvE runs, from the same
+            # shared call - Soul-Heart, the HP-watching form flips, Berserk and Anger
+            # Shell, and the Wimp Out pivot the swap check just below already reads.
+            combat_log += await end_of_turn_survival(
+                state,
+                (new_p1_active, 'p1_must_pivot', f"{state['p1'].display_name}'s"),
+                (new_p2_active, 'p2_must_pivot', f"{state['p2'].display_name}'s"))
 
             p1_needs_swap = new_p1_active['current_hp'] <= 0 or state.get('p1_must_pivot')
             p2_needs_swap = new_p2_active['current_hp'] <= 0 or state.get('p2_must_pivot')
@@ -8881,6 +8908,12 @@ class Combat(commands.Cog):
 
             if p1_needs_swap or p2_needs_swap:
                 print("DEBUG: Tactical Swap Required. Entering Recovery Phase.")
+                # Flush the pivot flags. PvE does this as it announces the retreat;
+                # PvP had nowhere to do it because nothing had ever set them, so a
+                # Wimp Out here would have pivoted again every turn for the rest of
+                # the battle. A faint does not need flushing - the corpse is replaced.
+                state['p1_must_pivot'] = False
+                state['p2_must_pivot'] = False
                 state['phase'] = 'faint_swap' # Piggyback on your existing recovery engine!
                 state['commits'] = {p1_id: None, p2_id: None}
                 
