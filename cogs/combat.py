@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -929,6 +929,100 @@ def mourn_the_fallen(*combatants):
             continue
         log += apply_knockout_reactions(
             fallen, None, *[c for c in combatants if c is not fallen])
+    return log
+
+
+def end_of_turn_items(state, *sides):
+    """
+    Everything the ITEM layer owes at the end of a turn, for both sides, in one pass.
+
+    Each `side` is (specimen, foe, owner_label). The order below is the order the effects
+    have to happen in, and each step is here rather than inline for the reason the block
+    above spells out - written into one engine, it would be inert in the other:
+
+      the sweep   berries whose threshold this turn's residual damage has just crossed.
+                  PvE has run this for as long as berries have existed. PvP never had it
+                  at all, so in a duel a Sitrus Berry only ever answered a blow, never a
+                  burn - which is the same shape of hole the survival pass filled.
+      Cud Chew    the berry banked LAST turn comes back up. After the sweep, so a berry
+                  eaten during the sweep is banked with its full delay rather than being
+                  half spent by the same tick that created it.
+      Harvest     regrows the berry into empty hands. After Cud Chew, so a Harvest berry
+                  is never eaten on the turn it appears.
+      Pickup      takes whatever the specimen opposite SPENT this turn.
+
+    The spent markers are wiped at the end. Left set, one eaten berry would be picked up
+    again every turn for the rest of the battle.
+    """
+    magic_room = state.get('field', {}).get('magic_room', 0) > 0
+    weather = (state.get('weather') or {}).get('type', 'none')
+    log = ""
+
+    for specimen, foe, owner in sides:
+        log += check_consumables(specimen, owner, magic_room, foe)
+
+    for specimen, _foe, owner in sides:
+        chewed = cud_chew_due(specimen)
+        if chewed:
+            log += (f"🐮 {owner} **{specimen['name'].capitalize()}** coughed up its "
+                    f"{chewed.replace('-', ' ').title()} and ate it a second time!\n")
+            log += apply_berry_effect(specimen, chewed, ignore_threshold=True,
+                                      owner_str=owner)
+
+    for specimen, _foe, owner in sides:
+        regrown = harvest_regrows(specimen, weather)
+        if regrown:
+            specimen['held_item'] = regrown
+            log += (f"🌾 {owner} **{specimen['name'].capitalize()}**'s Harvest grew "
+                    f"back its {regrown.replace('-', ' ').title()}!\n")
+
+    for specimen, foe, owner in sides:
+        found = pickup_finds(specimen, foe)
+        if found:
+            specimen['held_item'] = found
+            log += (f"👜 {owner} **{specimen['name'].capitalize()}** picked up the "
+                    f"discarded {found.replace('-', ' ').title()}!\n")
+
+    clear_spent_item_markers(*[specimen for specimen, _foe, _owner in sides])
+    return log
+
+
+async def collect_field_spoils(executor, team, user_id):
+    """
+    Pickup and Honey Gather, paid once the battle is over.
+
+    The whole of Honey Gather and the second half of Pickup: neither has anything to do
+    during a turn, so both wait for the reward path rather than being faked into one.
+    Returns a log fragment; writes straight into the trainer's inventory, which is the
+    same upsert the encounter rewards use.
+
+    A fainted specimen finds nothing - it spent the end of the battle unconscious.
+    """
+    log = ""
+    for specimen in team or []:
+        if not specimen or specimen.get('current_hp', 0) <= 0:
+            continue
+
+        ability = get_active_ability(specimen)
+        if ability in HONEY_GATHER_ABILITIES:
+            found = HONEY_GATHER_ITEM
+        elif ability in PICKUP_ABILITIES:
+            found = random.choice(PICKUP_POOL)
+        else:
+            continue
+
+        if random.random() >= AFTER_BATTLE_FIND_CHANCE:
+            continue
+
+        await executor.execute("""
+            INSERT INTO user_inventory (user_id, item_name, quantity)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + 1
+        """, (user_id, found))
+        log += (f"\n🔎 **{specimen['name'].capitalize()}**'s "
+                f"{pretty_ability(ability)} turned up a "
+                f"**{found.replace('-', ' ').title()}** after the battle!")
+
     return log
 
 
@@ -6168,13 +6262,14 @@ class BattleDashboard(discord.ui.View):
                     
             print("DEBUG 8: Entering Phase 4 (Survival & Swap Checks)")
 
-            # Final End-of-Turn Berry Sweep
-            for combatant, owner_str, across in [(p_active, "Your", n_active),
-                                                 (n_active, "The rival's", p_active)]:
-                berry_log = check_consumables(combatant, owner_str,
-                                              state.get('field', {}).get('magic_room', 0) > 0,
-                                              across)
-                if berry_log: combat_log += berry_log
+            # --- END-OF-TURN ITEM PASS ---
+            # Was an inline berry sweep here and nowhere else, which is exactly how the
+            # survival pass below came to be PvE-only. Block 19 hangs four more things
+            # off the same moment, so it went shared before it grew rather than after.
+            combat_log += end_of_turn_items(
+                state,
+                (p_active, n_active, "Your"),
+                (n_active, p_active, "The rival's"))
 
             # 🚨 FIELD STATE DECAY
             if 'field' in state:
@@ -6455,6 +6550,11 @@ class BattleDashboard(discord.ui.View):
                                 sketched = await persist_sketch(db, p)
                                 if sketched:
                                     rewards_log += f"\n✏️ **{p['name'].capitalize()}** permanently learned {sketched.replace('-', ' ').title()}!"
+
+                        # Block 19: Pickup and Honey Gather, the two halves that have
+                        # nothing to do during a turn.
+                        rewards_log += await collect_field_spoils(
+                            db, state['player_team'], self.user_id)
 
                         # ==========================================
                         # DIRECTIVE TRACKER: INVASIVE CULLING
@@ -8921,6 +9021,11 @@ class Combat(commands.Cog):
                                     if sketched:
                                         rewards_log += f"\n✏️ **{p['name'].capitalize()}** permanently learned {sketched.replace('-', ' ').title()}!"
 
+                            # Block 19: the same after-battle find PvE pays, for each
+                            # duellist's own team.
+                            rewards_log += await collect_field_spoils(
+                                cursor, p_team, user_id)
+
                         await db.commit()
 
                 embed = discord.Embed(title="🏁 Ecological Duel Concluded!", description=f"{combat_log}\n{result_str}{rewards_log}", color=discord.Color.gold())
@@ -8942,6 +9047,15 @@ class Combat(commands.Cog):
             # Re-verify the active Pokémon after Phase 3 environmental damage!
             new_p1_active = state['p1_team'][state['p1_active_index']]
             new_p2_active = state['p2_team'][state['p2_active_index']]
+
+            # The end-of-turn item pass, from the same shared call PvE makes. The berry
+            # sweep inside it is new to PvP: until this existed a duel only ever ate a
+            # berry in answer to a BLOW, so a Sitrus Berry sat untouched while its
+            # holder burned to death.
+            combat_log += end_of_turn_items(
+                state,
+                (new_p1_active, new_p2_active, f"{state['p1'].display_name}'s"),
+                (new_p2_active, new_p1_active, f"{state['p2'].display_name}'s"))
 
             # The same four blocks of end-of-turn reactions PvE runs, from the same
             # shared call - Soul-Heart, the HP-watching form flips, Berserk and Anger

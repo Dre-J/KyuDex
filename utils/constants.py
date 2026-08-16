@@ -1395,6 +1395,91 @@ TRUANT_MARKER = '_loafing'
 # cannot be given anything else.
 COMATOSE_ABILITIES = {'comatose'}
 
+# ==========================================
+# 🎒 BLOCK 19: HELD-ITEM INTERACTION
+# ==========================================
+# Eleven abilities that bend the ITEM layer rather than the damage layer. Two of them
+# have nothing here to bend and are recorded as decided at the bottom of this section.
+
+# Klutz switches the held item OFF without taking it away - which is exactly what Embargo
+# and Magic Room already do, so it is a third clause in get_active_item rather than a new
+# check at each of the forty places an item is read. The STORED name survives, which is
+# what lets a Klutz specimen still be Tricked, still Fling, and still have the item wake
+# up the moment it changes hands.
+CLUMSY_ABILITIES = {'klutz'}
+
+# Sticky Hold refuses any attempt by ANOTHER specimen to move the item. Where the line
+# falls, stated rather than left for a reader to infer from the call sites:
+#
+#   refused - Thief, Covet, Knock Off, Trick, Switcheroo, Corrosive Gas, and the two
+#             ability-thieves Pickpocket and Magician. Every one of them takes or
+#             destroys the item on somebody else's initiative.
+#   allowed - Bug Bite, Pluck and Incinerate, which eat or burn a BERRY rather than
+#             taking an item; Bestow, which HANDS one over; and everything the holder
+#             does itself - it can still eat its own berry and still Fling.
+#
+# Knock Off keeps its damage bonus against a Sticky Hold holder. The bonus is paid for
+# having an item to knock off, and it still has one.
+STICKY_HOLD_ABILITIES = {'sticky-hold'}
+
+# Gluttony raises the floor under the HP-gated berries: a pinch berry that would wait for
+# a quarter goes off at a half instead. Written as a floor rather than a replacement so
+# the berries that ALREADY trigger at a half - Oran, Sitrus - are untouched by it.
+GLUTTONY_ABILITIES = {'gluttony'}
+GLUTTONY_THRESHOLD = 0.5
+
+# Ripen doubles what a berry does, whichever kind it is: twice the healing, twice the
+# stat stages, and twice the bite out of the damage a resist berry soaks.
+RIPEN_ABILITIES = {'ripen'}
+RIPEN_MULTIPLIER = 2
+
+# Cheek Pouch pays a third of max HP for eating ANY berry, on top of whatever the berry
+# itself did - including one force-fed by Teatime, a Fling or a Bug Bite, because the
+# ability answers the eating rather than the holding.
+CHEEK_POUCH_ABILITIES = {'cheek-pouch'}
+CHEEK_POUCH_FRACTION = 3
+
+# Harvest regrows the berry its owner ate, into hands that must be empty. Certain in the
+# sun, a coin flip otherwise.
+HARVEST_ABILITIES = {'harvest'}
+HARVEST_CHANCE = 0.5
+HARVEST_SUN_CHANCE = 1.0
+HARVEST_SUN = ('sun', 'extremely-harsh-sunlight')
+
+# Cud Chew brings the berry back UP rather than back into the hands: it is eaten a second
+# time at the end of the following turn, and never lands in the item slot at all. The
+# marker carries the berry and a countdown, and is armed only when the berry came off
+# this specimen's own slot - which is what stops the second helping arming a third.
+CUD_CHEW_ABILITIES = {'cud-chew'}
+CUD_CHEW_DELAY = 2
+
+# Pickup has two halves that share nothing but a name. In battle it lifts whatever the
+# specimen opposite used up this turn, into hands that must be empty. After the battle it
+# is a chance at something off the floor, which is where Honey Gather also lives - the
+# whole of that ability, which is why it could not be done before an after-battle hook.
+PICKUP_ABILITIES = {'pickup'}
+HONEY_GATHER_ABILITIES = {'honey-gather'}
+AFTER_BATTLE_FIND_CHANCE = 0.10
+HONEY_GATHER_ITEM = 'honey'
+# Kept deliberately dull. Pickup is a trickle, not a treasure chest, and everything here
+# is already obtainable by ordinary means.
+PICKUP_POOL = ('oran-berry', 'sitrus-berry', 'cheri-berry', 'pecha-berry',
+               'rawst-berry', 'chesto-berry', 'aspear-berry', 'leppa-berry',
+               'potion', 'super-potion', 'honey')
+
+# What a berry leaves behind on the specimen that ate it.
+LAST_BERRY_MARKER = '_last_berry'          # Harvest: which one to regrow
+CUD_CHEW_MARKER = '_cud_chew'              # [berry, turns until the second helping]
+ITEM_SPENT_MARKER = '_item_spent_this_turn'  # Pickup: what the foe used up
+
+# The two that have nothing to hook onto, recorded as decided rather than faked - exactly
+# like the ally-only entry abilities above, Telepathy in Block 7 and Run Away in Block 13.
+# Symbiosis hands its item to an ALLY, and KyuDex is singles. Ball Fetch answers a Poke
+# Ball thrown and missed IN battle, and KyuDex throws balls from the encounter command
+# instead - there is no failed throw on a battlefield for it to retrieve.
+NO_ALLY_ITEM_ABILITIES = {'symbiosis'}
+NO_BALL_THROW_ABILITIES = {'ball-fetch'}
+
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
 # should be built from the rules something you could have caught was built from.
