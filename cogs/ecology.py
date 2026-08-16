@@ -1,7 +1,6 @@
 import discord
 import asyncio
 import time
-import os
 from discord.ext import commands, tasks
 import aiosqlite
 import datetime
@@ -13,6 +12,10 @@ from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_re
 import re
 from utils import checks
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
+# Every sprite path in this cog goes through utils.sprites now - the box browser, the
+# wild spawns, the expedition encounter, the admin spawn and the catch confirmation.
+# They were five hand-built copies of the same two lines, which is how none of them
+# had ever heard of a female sprite.
 
 # Memory dictionary to track what is currently spawned in each server
 # Format: { 'guild_id': {'pokedex_id': 1, 'name': 'bulbasaur', 'capture_rate': 45} }
@@ -865,21 +868,17 @@ class Ecology(commands.Cog):
         # 4. LOCAL ASSET LOADING
         # ==========================================
         # Construct the safe OS path to your sprites
-        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-        
-        if is_shiny:
-            file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
-            safe_filename = f"{poke_id}_shiny.png"
-            embed_color = discord.Color.gold()
-        else:
-            file_path = os.path.join(base_path, f"{poke_id}.png")
-            safe_filename = f"{poke_id}.png"
-            embed_color = discord.Color.green()
-            
+        # HOME art, falling through to the official artwork - the same chain the box
+        # browser and the battle scene use. A wild specimen has no gender yet; one is
+        # assigned when it is caught, so there is nothing to prefer here.
+        embed_color = discord.Color.gold() if is_shiny else discord.Color.green()
+        safe_filename = sprite_attachment_name(poke_id, is_shiny)
+        file_path = resolve_sprite(poke_id, shiny=is_shiny, style=HOME)
+
         # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
-        if not os.path.exists(file_path):
+        if not file_path:
             # You can point this to a default "missingno" or placeholder sprite if you have one
-            print(f"⚠️ WARNING: Missing sprite for ID {poke_id} at {file_path}")
+            print(f"⚠️ WARNING: no sprite anywhere for ID {poke_id}")
             sprite_file = None
         else:
             # Package the image as a discord File object
@@ -1139,19 +1138,14 @@ class Ecology(commands.Cog):
             # 4. LOCAL ASSET LOADING
             # ==========================================
             # Construct the safe OS path to your sprites
-            base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-            
-            if is_shiny:
-                file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
-                safe_filename = f"{poke_id}_shiny.png"
-            else:
-                file_path = os.path.join(base_path, f"{poke_id}.png")
-                safe_filename = f"{poke_id}.png"
-                
+            # HOME art, falling through to the official artwork.
+            safe_filename = sprite_attachment_name(poke_id, is_shiny)
+            file_path = resolve_sprite(poke_id, shiny=is_shiny, style=HOME)
+
             # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
-            if not os.path.exists(file_path):
+            if not file_path:
                 # You can point this to a default "missingno" or placeholder sprite if you have one
-                print(f"⚠️ WARNING: Missing sprite for ID {poke_id} at {file_path}")
+                print(f"⚠️ WARNING: no sprite anywhere for ID {poke_id}")
                 sprite_file = None
             else:
                 # Package the image as a discord File object
@@ -1355,20 +1349,14 @@ class Ecology(commands.Cog):
         # 4. LOCAL ASSET LOADING
         # ==========================================
         # Construct the safe OS path to your sprites
-        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-        
-        if is_shiny:
-            file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
-            safe_filename = f"{poke_id}_shiny.png"
-            embed_color = discord.Color.gold()
-        else:
-            file_path = os.path.join(base_path, f"{poke_id}.png")
-            safe_filename = f"{poke_id}.png"
-            embed_color = discord.Color.green()
-            
+        # HOME art, falling through to the official artwork.
+        embed_color = discord.Color.gold() if is_shiny else discord.Color.green()
+        safe_filename = sprite_attachment_name(poke_id, is_shiny)
+        file_path = resolve_sprite(poke_id, shiny=is_shiny, style=HOME)
+
         # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
-        if not os.path.exists(file_path):
-            print(f"⚠️ WARNING: Missing sprite for ID {poke_id} at {file_path}")
+        if not file_path:
+            print(f"⚠️ WARNING: no sprite anywhere for ID {poke_id}")
             sprite_file = None
         else:
             # Package the image as a discord File object
@@ -2468,19 +2456,17 @@ class Ecology(commands.Cog):
                 # ==========================================
                 poke_id = target['pokedex_id']
                 is_shiny = target['is_shiny']
-                base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-                
-                if is_shiny:
-                    file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
-                    safe_filename = f"{poke_id}_shiny.png"
-                else:
-                    file_path = os.path.join(base_path, f"{poke_id}.png")
-                    safe_filename = f"{poke_id}.png"
-                    
+                # The catch confirmation is the FIRST place a specimen has a sex, so it
+                # is the first place the female sprite can be shown - the wild spawn
+                # above had none to prefer.
+                safe_filename = sprite_attachment_name(poke_id, is_shiny, gender)
+                file_path = resolve_sprite(poke_id, shiny=is_shiny, gender=gender,
+                                           style=HOME)
+
                 sprite_file_local = None
                 sprite_file_global = None
-                
-                if os.path.exists(file_path):
+
+                if file_path:
                     # We create two File instances because Discord.py consumes them upon sending!
                     sprite_file_local = discord.File(file_path, filename=safe_filename)
                     sprite_file_global = discord.File(file_path, filename=safe_filename)
