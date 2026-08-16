@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -672,12 +672,16 @@ def deploy_field_toggle(state, move_name, attacker, defender, user_hazards, team
     return ""
 
 
-def apply_status_outcome(defender, inflicted, move_stats):
+def apply_status_outcome(defender, inflicted, move_stats, attacker=None):
     """
     Land whatever condition the move inflicted: flinch first, then the major statuses.
 
     Flinch is intercepted rather than written to the status slot - it is a volatile that
     lasts only until the target's next attempt to move.
+
+    `attacker` is optional and read by nothing here except Block 17's Opportunist, which
+    needs to know who is opposite before it can copy Steadfast's Speed boost. Callers
+    that do not pass it simply lose the copy, not the boost.
     """
     flinch_log = ""
     if inflicted == 'flinch':
@@ -700,7 +704,9 @@ def apply_status_outcome(defender, inflicted, move_stats):
         _startled = flinch_reaction(defender)
         if _startled:
             _stat, _stages = _startled
-            flinch_log = resolve_stat_stages([(defender, _stat, _stages, None)])
+            flinch_log = resolve_stat_stages(
+                [(defender, _stat, _stages, None)],
+                foe_of=foe_finder(defender, attacker) if attacker is not None else None)
 
     if not inflicted or inflicted == 'none':
         return flinch_log
@@ -801,7 +807,11 @@ def apply_stat_changes(attacker, defender, stat_chgs, prefix="", state=None):
         source = TARGET_ROUTING[tgt][1](attacker, defender)
         pending.append((target_specimen, s_name, chg, source))
 
-    return log + resolve_stat_stages(pending, prefix=prefix)
+    # foe_of is what lets Block 17's Opportunist see across the field. Passed from here
+    # because this is the channel every move-driven stage change in both engines flows
+    # through - one argument instead of a branch at each of them.
+    return log + resolve_stat_stages(pending, prefix=prefix,
+                                     foe_of=foe_finder(attacker, defender))
 
 
 # ==========================================
@@ -838,6 +848,88 @@ def apply_faint_recoil(fainted, killer):
     return (f"\U0001f4a5 **{fainted['name'].capitalize()}**'s "
             f"{pretty_ability(ability)} took **{toll}** HP from "
             f"**{killer['name'].capitalize()}** on the way down!\n")
+
+
+def foe_finder(one, other):
+    """
+    A lookup for "who is this specimen facing", for the handful of things that read
+    across the field.
+
+    Handed to resolve_stat_stages by every caller that has both sides to hand. Identity,
+    not name: two specimens of the same species are a perfectly ordinary matchup, and
+    comparing names would have one answering for the other.
+    """
+    def look(specimen):
+        if specimen is one:
+            return other
+        if specimen is other:
+            return one
+        return None
+    return look
+
+
+def apply_knockout_reactions(fainted, killer, *witnesses):
+    """
+    What a faint is worth to whoever is still standing.
+
+    Two different payouts from one moment, kept apart because they answer different
+    questions. Moxie and the rest pay the KILLER, and only for a kill it made; Soul-Heart
+    pays a WITNESS for the faint itself, whoever caused it - which is why it is also
+    asked at the end of the turn, where poison does its killing and there is no killer to
+    speak of. The corpse is marked once, so the two call sites cannot both pay for it.
+
+    Called from the same faint check as apply_grudge and apply_faint_recoil.
+    """
+    if not fainted or fainted.get('current_hp', 0) > 0:
+        return ""
+
+    log = ""
+    earned = knockout_boost(killer) if killer is not None and killer is not fainted else None
+    if earned:
+        stat, stages = earned
+        log += (f"\U0001f480 **{killer['name'].capitalize()}**'s "
+                f"{pretty_ability(get_active_ability(killer))} "
+                f"fed on the knockout!\n")
+        log += resolve_stat_stages([(killer, stat, stages, None)],
+                                   foe_of=foe_finder(killer, fainted))
+
+    # Only pay the mourners once, however many times this corpse is looked at.
+    if mark_mourned(fainted):
+        for witness in witnesses:
+            owed = mourning_boost(witness, fainted)
+            if not owed:
+                continue
+            stat, stages = owed
+            log += (f"\U0001f5a4 **{witness['name'].capitalize()}**'s "
+                    f"{pretty_ability(get_active_ability(witness))} "
+                    f"answered the fall of "
+                    f"**{fainted['name'].capitalize()}**!\n")
+            log += resolve_stat_stages([(witness, stat, stages, None)],
+                                       foe_of=foe_finder(witness, fainted))
+
+    return log
+
+
+def mourn_the_fallen(*combatants):
+    """
+    Ask the witnesses about any corpse on the field that has not been answered yet.
+
+    Raised at the end of the turn, where residual damage does its killing: a specimen
+    that succumbs to poison or a sandstorm never passes the faint check after a blow, so
+    without this Soul-Heart would only ever answer deaths by attack.
+
+    Calling this after a knockout is harmless, but the reason is mark_mourned rather
+    than anything here: a corpse already paid for hands back nothing. A skip-if-mourned
+    test was written into this loop first and taken out again - it changed no outcome,
+    which made it a second copy of a rule that only one place should own.
+    """
+    log = ""
+    for fallen in combatants:
+        if not fallen or fallen.get('current_hp', 0) > 0:
+            continue
+        log += apply_knockout_reactions(
+            fallen, None, *[c for c in combatants if c is not fallen])
+    return log
 
 
 async def resolve_form_flips(*combatants):
@@ -1554,7 +1646,9 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             combat_log += (f"🐺 **{opp_name}**'s "
                            f"{pretty_ability(get_active_ability(opponent))} "
                            f"answered the Intimidate!\n")
-            combat_log += resolve_stat_stages([(opponent, gained, stages, None)])
+            combat_log += resolve_stat_stages(
+                [(opponent, gained, stages, None)],
+                foe_of=foe_finder(entering_combatant, opponent))
         elif shrugs_off_intimidate(opponent):
             combat_log += (f"😐 **{opp_name}**'s "
                            f"{get_active_ability(opponent).replace('-', ' ').title()} "
@@ -1577,7 +1671,9 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             stat, amount = ENTRY_STAT_BOOST_ABILITIES[ability]
             combat_log += (f"⚔️ **{owner_str.strip()} {name}**'s "
                            f"{ability.replace('-', ' ').title()} steeled it!\n")
-            combat_log += resolve_stat_stages([(entering_combatant, stat, amount, None)])
+            combat_log += resolve_stat_stages(
+                [(entering_combatant, stat, amount, None)],
+                foe_of=foe_finder(entering_combatant, opponent))
 
     # ==========================================
     # 1c. THE ARRIVAL'S OWN DROP AT THE OPPONENT (Supersweet Syrup)
@@ -1601,7 +1697,9 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
         armed = download_arms(opponent)
         combat_log += (f"📡 **{owner_str.strip()} {name}** downloaded "
                        f"{opp_name}'s data!\n")
-        combat_log += resolve_stat_stages([(entering_combatant, armed, 1, None)])
+        combat_log += resolve_stat_stages(
+            [(entering_combatant, armed, 1, None)],
+            foe_of=foe_finder(entering_combatant, opponent))
 
     # ==========================================
     # 1e. THE INFORMANTS (Frisk, Forewarn, Anticipation)
@@ -3079,7 +3177,7 @@ class SwapMenu(discord.ui.View):
                                 # and discard everything else, so a rival Rain Dance, Toxic or
                                 # Swords Dance thrown here did nothing whatsoever.
                                 combat_log += apply_stat_changes(n_active, new_active, stat_chgs, state=state)
-                                combat_log += apply_status_outcome(new_active, inf_status, n_move_stats)
+                                combat_log += apply_status_outcome(new_active, inf_status, n_move_stats, n_active)
 
                                 magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
                                 move_name_used = chosen_move['name']
@@ -4891,6 +4989,10 @@ class BattleDashboard(discord.ui.View):
                         if defender['current_hp'] <= 0:
                             grudge_log = apply_grudge(defender, attacker)
                             combat_log += apply_faint_recoil(defender, attacker)
+                            # Block 17: the killer collects, and anything still standing
+                            # answers the fall.
+                            combat_log += apply_knockout_reactions(defender, attacker,
+                                                                  attacker)
                             if grudge_log:
                                 combat_log += grudge_log.strip() + "\n"
 
@@ -4914,7 +5016,7 @@ class BattleDashboard(discord.ui.View):
                         # PHASE 1 & 2: THE FLINCH INTERCEPTOR
                         # ==========================================
                         # Flinch interception + standard pathogens (Burn, Poison, etc.)
-                        combat_log += apply_status_outcome(defender, inf_status, move_stats)
+                        combat_log += apply_status_outcome(defender, inf_status, move_stats, attacker)
 
                         # ==========================================
                         # THE OMNIBOOST DICTIONARY (Complex Mutations)
@@ -4978,7 +5080,7 @@ class BattleDashboard(discord.ui.View):
                                     defender['current_hp'] = min(defender.get('max_hp', 100),
                                                                  defender['current_hp'] + d_heal)
                                 combat_log += apply_stat_changes(defender, attacker, d_stats, state=state)
-                                combat_log += apply_status_outcome(attacker, d_status, echo)
+                                combat_log += apply_status_outcome(attacker, d_status, echo, defender)
 
                         # Only apply the exhaustion tag if the attack actually dealt damage,
                         # and never while Dynamaxed - Max Moves leave no recharge window.
@@ -5417,7 +5519,7 @@ class BattleDashboard(discord.ui.View):
                         # NPC's ordinary turn. Without this the rival's Rain Dance announced
                         # itself here and changed nothing at all.
                         combat_log += apply_stat_changes(n_active, p_active, stat_chgs, state=state)
-                        combat_log += apply_status_outcome(p_active, inf_status, n_move_stats)
+                        combat_log += apply_status_outcome(p_active, inf_status, n_move_stats, n_active)
 
                         magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
                         combat_log += deploy_weather(state, npc_move_name, n_active, magic_room_on)
@@ -5997,6 +6099,11 @@ class BattleDashboard(discord.ui.View):
                         combat_log += f"✨ {owner_str} team's Tailwind petered out!\n"
 
             # --- PHASE 4: SURVIVAL & SWAP CHECK ---
+            # Block 17's Soul-Heart goes first, because it answers a specimen that the
+            # residual damage above has just killed - and nothing that follows would ever
+            # look at that faint, since the blow-by-blow check only runs after an attack.
+            combat_log += mourn_the_fallen(p_active, n_active)
+
             # Block 16's form-watchers get the same moment, for the same reason.
             request_hp_form_flips(p_active, n_active)
             combat_log += await resolve_form_flips(p_active, n_active)
@@ -6014,7 +6121,8 @@ class BattleDashboard(discord.ui.View):
                                    f"flared up!\n")
                     combat_log += resolve_stat_stages(
                         [(_hurt, _stat, _stages, None)
-                         for _stat, _stages in hp_threshold_stages(_hurt)])
+                         for _stat, _stages in hp_threshold_stages(_hurt)],
+                        foe_of=foe_finder(p_active, n_active))
 
             # Wimp Out and Emergency Exit bolt for the bench. Raised here rather than
             # at each of the dozen places damage is applied, because this is where the
@@ -7940,6 +8048,10 @@ class Combat(commands.Cog):
                     if defender['current_hp'] <= 0:
                         grudge_log = apply_grudge(defender, attacker)
                         combat_log += apply_faint_recoil(defender, attacker)
+                        # Block 17: the killer collects, and anything still standing
+                        # answers the fall.
+                        combat_log += apply_knockout_reactions(defender, attacker,
+                                                               attacker)
                         if grudge_log:
                             combat_log += grudge_log.strip() + "\n"
 
@@ -8745,7 +8857,12 @@ class Combat(commands.Cog):
             # Re-verify the active Pokémon after Phase 3 environmental damage!
             new_p1_active = state['p1_team'][state['p1_active_index']]
             new_p2_active = state['p2_team'][state['p2_active_index']]
-            
+
+            # Block 17: whoever the residual damage just killed, the survivor answers -
+            # the same moment PvE uses, so Soul-Heart cannot be an engine-specific
+            # ability. Anything already paid for by the faint check is skipped.
+            combat_log += mourn_the_fallen(new_p1_active, new_p2_active)
+
             p1_needs_swap = new_p1_active['current_hp'] <= 0 or state.get('p1_must_pivot')
             p2_needs_swap = new_p2_active['current_hp'] <= 0 or state.get('p2_must_pivot')
 

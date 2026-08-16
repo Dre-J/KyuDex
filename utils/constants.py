@@ -482,7 +482,13 @@ BIOLOGICAL_TRAITS = {
         'well-baked-body': {'type': 'fire', 'heal': 0.0, 'stat': 'defense', 'stage': 2},
         
         'flash-fire': {'type': 'fire', 'heal': 0.0}, # Handled via volatile status
-        'levitate': {'type': 'ground', 'heal': 0.0}  # Pure immunity
+        'levitate': {'type': 'ground', 'heal': 0.0},  # Pure immunity
+        # Block 17. Eelevate is Levitate with a knockout boost welded on; the floating
+        # half is this row plus membership of LEVITATION_ABILITIES, which is what the
+        # hazard check and is_grounded read. Both are needed - this table answers "does
+        # the move land", that set answers "are its feet on the ground" - so the suite
+        # asserts every member of the set has a row here.
+        'eelevate': {'type': 'ground', 'heal': 0.0}
     },
     'pinch_boosters': {
         'overgrow': 'grass', 
@@ -1276,6 +1282,65 @@ GULP_PAYLOADS = {
     'cramorant-gulping': {'stat': ('defense', -1)},
     'cramorant-gorging': {'status': 'paralysis'},
 }
+
+# ==========================================
+# 💀 BLOCK 17: WHAT A KNOCKOUT IS WORTH
+# ==========================================
+# Five abilities pay their owner for finishing something off and differ only in the
+# currency. Named in the payload vocabulary - 'special-attack', not 'sp_atk' - because
+# these go through resolve_stat_stages like every other stage change, which means a
+# Moxie boost is a real boost: Haze clears it and the cap at +6 pins it.
+#
+# The sentinel says "whichever stat is already highest" rather than naming one. Beast
+# Boost and Eelevate choose at runtime, which is the same choice Protosynthesis makes,
+# so the picker is shared rather than copied - one tie-break order (Atk > Def > SpA >
+# SpD > Spe), one place to be wrong.
+KNOCKOUT_BEST_STAT = '_best'
+
+KNOCKOUT_BOOST_ABILITIES = {
+    'moxie':          'attack',
+    'chilling-neigh': 'attack',
+    'grim-neigh':     'special-attack',
+    'beast-boost':    KNOCKOUT_BEST_STAT,
+    'eelevate':       KNOCKOUT_BEST_STAT,
+}
+KNOCKOUT_BOOST_STAGES = 1
+
+# paradox_best_stat answers in DATABASE keys, because that is what it reads; the stage
+# resolver speaks the payload vocabulary. One inverse table rather than a second literal
+# spelling of the same five stats - the sp_atk/special-attack confusion has already cost
+# one silently-vacuous test.
+STAGE_NAME_FOR_STAT = {'attack': 'attack', 'defense': 'defense',
+                       'sp_atk': 'special-attack', 'sp_def': 'special-defense',
+                       'speed': 'speed'}
+
+# Soul-Heart is not a reward for the kill. It answers ANY specimen falling, whoever
+# felled it - so it is asked at the blow that lands AND at the end-of-turn residual
+# check, where poison and a sandstorm do their killing. The corpse is marked once
+# mourned, which is what stops those two call sites paying twice for one faint.
+MOURNING_ABILITIES = {'soul-heart': 'special-attack'}
+MOURNING_STAGES = 1
+MOURNED_MARKER = '_mourned'
+
+# Opportunist takes a copy of every stage its opponent GAINS - not of the ones it loses,
+# and never of a copy, which is the single thing that stops two of them trading one
+# Swords Dance back and forth for ever.
+OPPORTUNIST_ABILITIES = {'opportunist'}
+
+# Supreme Overlord grows with the graveyard: a tenth per fallen party member, capped at
+# five of them. Coded as a stat multiplier on Attack and Sp. Atk, which is what the
+# ability text this project works from says; the games phrase it as a power boost on the
+# move instead. The two differ only where something else reads the stat - Foul Play
+# borrows the figure here, and would not there.
+SUPREME_OVERLORD_ABILITIES = {'supreme-overlord'}
+SUPREME_OVERLORD_PER_FALLEN = 0.1
+SUPREME_OVERLORD_MAX_FALLEN = 5
+SUPREME_OVERLORD_STATS = ('attack', 'sp_atk')
+
+# Levitate had its name written into three separate places, and Eelevate is the second
+# ability to float. One set, so the next one is a single row rather than another hunt -
+# and so the hazard check and the Ground immunity cannot disagree about who is airborne.
+LEVITATION_ABILITIES = {'levitate', 'eelevate'}
 
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival

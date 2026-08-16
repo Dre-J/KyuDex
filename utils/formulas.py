@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -13,11 +13,12 @@ def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
     types = specimen.get('types', [])
     
     # Is the specimen touching the ground? (We check for Flying type!)
-    # Note: If you add the 'Levitate' ability later, you will add `and specimen.get('ability') != 'levitate'` here!
     ability = get_active_ability(specimen)
-    
-    # Is the specimen touching the ground?
-    is_grounded = 'flying' not in types and ability != 'levitate'
+
+    # Is the specimen touching the ground? Read off the set rather than compared to one
+    # name, so Eelevate dodges Spikes exactly as Levitate does - this line and
+    # is_grounded had to be changed together, which is why they now read the same set.
+    is_grounded = 'flying' not in types and ability not in LEVITATION_ABILITIES
     
     # ==========================================
     # 1. STEALTH ROCK (Affects all specimens)
@@ -193,7 +194,7 @@ def is_grounded(pokemon, gravity_active=False):
     item = get_active_item(pokemon)
     
     if 'flying' in types: return False
-    if ability == 'levitate': return False
+    if ability in LEVITATION_ABILITIES: return False
     if item == 'air-balloon': return False
 
     # Magnet Rise lifts itself; Telekinesis lifts somebody else. Either way the specimen
@@ -1709,6 +1710,9 @@ def revive_fallen(party, exclude=None):
         max_hp = member.get('max_hp', 100)
         member['current_hp'] = max(1, math.floor(max_hp * REVIVAL_BLESSING_FRACTION))
         member['status_condition'] = None
+        # It is no longer dead, so it is no longer mourned. Without this a specimen
+        # brought back and knocked out again would be worth nothing to a Soul-Heart.
+        member.pop(MOURNED_MARKER, None)
         return member.get('name', 'a specimen').capitalize(), member['current_hp']
 
     return None, 0
@@ -3209,11 +3213,11 @@ def tera_shell_multiplier(defender, move_class, type_multiplier, ability=None):
     return TERA_SHELL_MULTIPLIER
 
 
-def resolve_stat_stages(pending, prefix=""):
+def resolve_stat_stages(pending, prefix="", foe_of=None):
     """
     Walk a queue of stage changes and move the ones that survive.
 
-    Each entry is (specimen, stat, change, source[, may_reflect]):
+    Each entry is (specimen, stat, change, source[, may_reflect[, may_copy]]):
 
       source      - the specimen responsible, or None when this one did it to itself.
                     Only another specimen's drops are screened at all.
@@ -3222,19 +3226,27 @@ def resolve_stat_stages(pending, prefix=""):
                     for ever. A returned drop is still REFUSABLE, so Mirror Armor into
                     Clear Body simply dies, and Mirror Armor into Mirror Armor dies at
                     the second one rather than bouncing again.
+      may_copy    - False once a boost has already been copied, for the same reason in
+                    the other direction: two Opportunists would otherwise trade one
+                    Swords Dance back and forth until the loop guard stopped them.
 
-    Refusals, Mirror Armor's return and the Defiant/Competitive answer all resolve here
-    so that every path through both engines gets them for free.
+    `foe_of` answers "who is this specimen facing", and is the only thing that lets a
+    change landing on one side be seen by the other. Block 17's Opportunist is its only
+    reader; callers that have just one side to hand pass nothing and get no copying,
+    which is correct for them.
+
+    Refusals, Mirror Armor's return, the Defiant/Competitive answer and Opportunist's
+    copy all resolve here so that every path through both engines gets them for free.
     """
     log = ""
-    queue = [(entry + (True,))[:5] for entry in pending]
+    queue = [(entry + (True, True))[:6] for entry in pending]
     # A hard stop on the queue. Nothing should be able to grow it without bound now that
     # reflections cannot bounce, but a runaway here would hang a battle rather than
     # merely misreport one.
     for _ in range(64):
         if not queue:
             break
-        specimen, s_name, chg, source, may_reflect = queue.pop(0)
+        specimen, s_name, chg, source, may_reflect, may_copy = queue.pop(0)
         db_stat = STAT_STAGE_KEYS.get(s_name)
         if not db_stat:
             continue
@@ -3247,7 +3259,7 @@ def resolve_stat_stages(pending, prefix=""):
             if may_reflect and reflects_stat_drop(specimen):
                 log += (f"{prefix}🪞 **{name}**'s Mirror Armor sent the "
                         f"{pretty_stat} drop straight back!\n")
-                queue.append((source, s_name, chg, specimen, False))
+                queue.append((source, s_name, chg, specimen, False, may_copy))
                 continue
 
             if refuses_stat_drop(specimen, s_name):
@@ -3292,7 +3304,21 @@ def resolve_stat_stages(pending, prefix=""):
                     log += (f"{prefix}😤 **{name}**'s "
                             f"{get_active_ability(specimen).replace('-', ' ').title()} "
                             f"flared up!\n")
-                    queue.append((specimen, a_stat, a_chg, None, False))
+                    queue.append((specimen, a_stat, a_chg, None, False, may_copy))
+
+        elif may_copy and foe_of is not None:
+            # Opportunist watches the other side get stronger and helps itself to the
+            # same. Asked AFTER the stage has actually moved, so a boost that was pinned
+            # at +6 and did nothing is not worth copying either - and asked here rather
+            # than at each of the places a boost is granted, because this is the one
+            # place they all arrive.
+            thief = foe_of(specimen)
+            if (thief is not None and thief is not specimen
+                    and thief.get('current_hp', 0) > 0
+                    and copies_stat_boosts(thief)):
+                log += (f"{prefix}👁️ **{thief['name'].capitalize()}**'s Opportunist "
+                        f"helped itself to the {pretty_stat} boost!\n")
+                queue.append((thief, s_name, chg, None, False, False))
 
     return log
 
@@ -3607,6 +3633,110 @@ def paradox_best_stat(pokemon):
     return best
 
 
+# ==========================================
+# 💀 BLOCK 17: KNOCKOUT REACTIONS
+# ==========================================
+# What a faint is worth, to whom, and on what evidence. Three separate questions, kept
+# apart because they fire at different moments and on different conditions:
+#
+#   knockout_boost   - paid to the KILLER, and only for a kill it made with an attack.
+#   mourning_boost   - paid to a WITNESS, for any faint at all, however it happened.
+#   copies_stat_boosts / supreme_overlord_multiplier - neither is about a faint landing;
+#                       one reads the opponent's boosts, the other reads the graveyard.
+
+
+def knockout_boost(killer):
+    """
+    (stat, stages) owed to whoever just finished something off, or None.
+
+    The stat is in the payload vocabulary, so the answer goes through the ordinary stage
+    resolver: a Moxie boost caps at +6 like anything else and Haze takes it away again.
+    Beast Boost and Eelevate name no stat at all - they take whichever is highest right
+    now, stages included, so a Beast Boost that has already fired twice can move on to a
+    different stat than the one it started with.
+    """
+    if not killer or killer.get('current_hp', 0) <= 0:
+        return None
+
+    stat = KNOCKOUT_BOOST_ABILITIES.get(get_active_ability(killer))
+    if not stat:
+        return None
+    if stat == KNOCKOUT_BEST_STAT:
+        stat = STAGE_NAME_FOR_STAT.get(paradox_best_stat(killer))
+        if not stat:
+            return None
+    return stat, KNOCKOUT_BOOST_STAGES
+
+
+def mourning_boost(witness, fallen):
+    """
+    (stat, stages) owed to a specimen for having WATCHED something faint, or None.
+
+    Deliberately indifferent to who did the killing - Soul-Heart answers a Pokemon
+    fainting, not an attack connecting, so a specimen that poisons itself to death pays
+    out just the same.
+
+    A corpse cannot mourn, which is also what stops anything mourning its own death:
+    the witness must be standing and the fallen must not be, and no specimen is both.
+    An explicit `witness is fallen` test was written here first and taken out again -
+    it could not be made to fail, because the two HP checks already cover every case
+    that could reach it.
+    """
+    if not witness or not fallen:
+        return None
+    if witness.get('current_hp', 0) <= 0:
+        return None
+    if fallen.get('current_hp', 0) > 0:
+        return None
+
+    stat = MOURNING_ABILITIES.get(get_active_ability(witness))
+    return (stat, MOURNING_STAGES) if stat else None
+
+
+def mark_mourned(fallen):
+    """
+    Record that this faint has been answered. Returns False if it already had been.
+
+    The blow that lands and the end-of-turn sweep both ask about the same corpse, and
+    within one turn both can see it. This is the ONLY thing standing between them and
+    paying twice - deliberately, because a second guard at the call site would be a
+    second place for the rule to live and could not be made to fail on its own.
+    """
+    if fallen is None or fallen.get(MOURNED_MARKER):
+        return False
+    fallen[MOURNED_MARKER] = True
+    return True
+
+
+def copies_stat_boosts(pokemon):
+    """Opportunist: takes a copy of whatever the specimen opposite gains."""
+    return get_active_ability(pokemon) in OPPORTUNIST_ABILITIES
+
+
+def fallen_allies(party, exclude=None):
+    """How many of a party have already been knocked out, capped where the ability caps."""
+    count = sum(1 for member in (party or [])
+                if member is not None and member is not exclude
+                and member.get('current_hp', 0) <= 0)
+    return min(count, SUPREME_OVERLORD_MAX_FALLEN)
+
+
+def supreme_overlord_multiplier(pokemon, stat, party):
+    """
+    The graveyard boost, on Attack and Sp. Atk only.
+
+    Read live off the party every time rather than banked when an ally falls, so it
+    cannot drift out of step with a Revival Blessing bringing one back.
+    """
+    if not pokemon or not party:
+        return 1.0
+    if get_active_ability(pokemon) not in SUPREME_OVERLORD_ABILITIES:
+        return 1.0
+    if stat not in SUPREME_OVERLORD_STATS:
+        return 1.0
+    return 1.0 + SUPREME_OVERLORD_PER_FALLEN * fallen_allies(party, exclude=pokemon)
+
+
 def paradox_multiplier(pokemon, stat, weather='none', terrain='none'):
     """The Protosynthesis / Quark Drive boost, on the one stat it picked."""
     if not paradox_engine_running(pokemon, weather, terrain):
@@ -3616,7 +3746,8 @@ def paradox_multiplier(pokemon, stat, weather='none', terrain='none'):
     return PARADOX_SPEED_BOOST if stat == 'speed' else PARADOX_BOOST
 
 
-def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=None):
+def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=None,
+                        party=None):
     """
     The flat multiplier an ability puts on one of its owner's own stats.
 
@@ -3625,17 +3756,20 @@ def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=
     nothing applies.
 
     `opponent` is only read by the Ruin quartet, which is the one family that presses on
-    somebody else's stats rather than its own. Callers that have both sides to hand pass
-    it; the ones that do not simply get no Ruin, which is correct for them.
+    somebody else's stats rather than its own. `party` is only read by Supreme Overlord,
+    which is the one that reads the bench. Callers that have neither to hand simply get
+    neither, which is correct for them.
     """
     if not pokemon:
         return 1.0
 
-    # Two multipliers that do not come from the table: what the specimen OPPOSITE is doing
-    # (the Ruin quartet) and the Paradox engines, whose stat is chosen at runtime rather
-    # than named in a row. Both ride alongside the table row rather than replacing it.
-    against = ruin_multiplier(stat, opponent) * paradox_multiplier(
-        pokemon, stat, weather, terrain)
+    # Three multipliers that do not come from the table: what the specimen OPPOSITE is
+    # doing (the Ruin quartet), the Paradox engines, whose stat is chosen at runtime
+    # rather than named in a row, and Supreme Overlord, which counts corpses. All three
+    # ride alongside the table row rather than replacing it.
+    against = (ruin_multiplier(stat, opponent)
+               * paradox_multiplier(pokemon, stat, weather, terrain)
+               * supreme_overlord_multiplier(pokemon, stat, party))
 
     trait = BIOLOGICAL_TRAITS.get('stat_multipliers', {}).get(get_active_ability(pokemon))
     if not trait or stat not in trait['stats']:
@@ -3850,7 +3984,7 @@ def effective_weight(pokemon):
 
 
 def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=False, magic_room=False,
-                         ignore_boosts=False, weather='none', terrain='none'):
+                         ignore_boosts=False, weather='none', terrain='none', party=None):
     """
     Decides which Attack and Defense stats the damage formula reads, applies stat stages,
     Wonder Room and Assault Vest, and reports the category the move resolves as.
@@ -3886,9 +4020,11 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     # than the damage - so Body Press swinging with Defense picks up Marvel Scale, and a
     # Psyshock aimed at physical Defense picks up Fur Coat's owner's Defense boost.
     # Each side is handed the OTHER as `opponent`, which is what lets the Ruin quartet
-    # press on stats that are not its owner's.
-    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain, defender))
-    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain, defender))
+    # press on stats that are not its owner's. Only the ATTACKER is handed the party:
+    # Supreme Overlord counts its own fallen, and the two offensive lines are the only
+    # ones it touches.
+    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain, defender, party))
+    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain, defender, party))
     phys_def = math.floor(phys_def * stat_multiplier_for(defender, 'defense', weather, terrain, attacker))
     spec_def = math.floor(spec_def * stat_multiplier_for(defender, 'sp_def', weather, terrain, attacker))
 
@@ -3909,7 +4045,8 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
         borrowed = apply_stat_stage(defender.get('stats', {}).get('attack', 50),
                                     d_stages_raw.get('attack', 0))
         # The target's Huge Power comes along with its Attack, because it IS the target's
-        # Attack that is being swung
+        # Attack that is being swung. Its Supreme Overlord does not: only one party is
+        # threaded this far down, and it is the attacker's. Stated rather than hidden.
         borrowed = math.floor(borrowed * stat_multiplier_for(defender, 'attack', weather, terrain, attacker))
         return borrowed, phys_def, 'physical'
 
@@ -5602,14 +5739,16 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         # Geyser and Shell Side Arm.
         a, d, effective_class = resolve_combat_stats(move_name, move_class, attacker, defender,
                                                      wonder_room, magic_room,
-                                                     weather=weather, terrain=terrain)
+                                                     weather=weather, terrain=terrain,
+                                                     party=user_party)
 
         # A critical hit reads the same stats with unfavourable stages stripped out. We
         # resolve that variant up front and express it as a ratio, so the multi-strike loop
         # can apply it per hit without recomputing the whole base damage.
         a_crit, d_crit, _ = resolve_combat_stats(move_name, move_class, attacker, defender,
                                                  wonder_room, magic_room, ignore_boosts=True,
-                                                 weather=weather, terrain=terrain)
+                                                 weather=weather, terrain=terrain,
+                                                 party=user_party)
 
         # Choice items reinforce the offensive stat the move ended up swinging with
         if effective_class == 'physical':
