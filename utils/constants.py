@@ -1561,6 +1561,63 @@ UNAWARE_ABILITIES = {'unaware'}
 UNAWARE_DEFENSIVE_STATS = ('defense', 'sp_def')
 UNAWARE_OFFENSIVE_STATS = ('attack', 'sp_atk')
 
+# ==========================================
+# ☀️ BLOCK 22: SIGNATURE FORM CHANGES
+# ==========================================
+# Mega Sol carries its own sky. Its owner's moves read the weather as harsh sunlight
+# whatever is actually overhead - so its Fire moves are strengthened and its Water moves
+# dulled, its Solar Beam needs no charge, and its Thunder is as unreliable as it would be
+# under a real sun. Only its OWN moves: the sky it stands under is unchanged for
+# everybody else, which is what makes this a reading rather than a weather setter.
+PERSONAL_SUN_ABILITIES = {'mega-sol'}
+PERSONAL_SUN_WEATHER = 'sun'
+
+# ...but not over a primordial sky. Desolate Land, Primordial Sea and Delta Stream are
+# the three the engine already refuses to let an ordinary weather setter overwrite, and a
+# personal reading does not get to do what a weather setter cannot.
+UNOVERRIDABLE_SKIES = ('extremely-harsh-sunlight', 'heavy-rain', 'strong-winds')
+
+# ==========================================
+# 👥 BLOCK 23: DOUBLES-ONLY - PARKED, NOT CODED
+# ==========================================
+# Seven abilities that need a SECOND body on your own side of the field. KyuDex is
+# singles, exactly like the existing DOUBLES_ONLY_MOVES set, so there is never an ally
+# for any of them to reach and nothing here to implement.
+#
+# Recorded as decided rather than left off the list, which is the same treatment
+# Telepathy got in Block 7, Run Away in Block 13, the ally-only three in Block 10,
+# Symbiosis and Ball Fetch in Block 19 and the ally-faint pair in Block 20. Naming them
+# is the point: a reader who wonders whether Battery was forgotten finds the decision
+# here, and the ability scanner classifies them as deliberate no-ops rather than as
+# phantoms hiding in a protection set.
+DOUBLES_ONLY_ABILITIES = {
+    'plus',          # 1.5x Sp. Atk when an ally has Plus or Minus
+    'minus',         # the same, from the other side of the pair
+    'friend-guard',  # 0.75x damage taken by an ALLY
+    'healer',        # 30% to cure an adjacent ally's status each turn
+    'battery',       # 1.3x power on an ALLY's moves
+    'power-spot',    # the same, for standing next to it
+    'commander',     # climbs into an ally Dondozo's mouth
+}
+
+# ==========================================
+# 🐸 BATTLE BOND - the half that was missing
+# ==========================================
+# Counted as implemented for eight blocks on one Water Shuriken line, while the form
+# change it exists to drive was never written. Worse, that line keyed the boost on the
+# ABILITY, so an ordinary Greninja that had knocked nothing out was already throwing
+# Ash-Greninja's shuriken.
+#
+# In the games the ability transforms Greninja after it knocks something out, and it is
+# the FORM that carries the stronger Water Shuriken. Both halves are keyed accordingly:
+# the flip is asked at the knockout hook Block 17 built, and the shuriken asks what the
+# specimen currently IS rather than what it can do.
+BATTLE_BOND_ABILITIES = {'battle-bond'}
+BATTLE_BOND_FORM = 'greninja-ash'
+BATTLE_BOND_SHURIKEN = 'water-shuriken'
+BATTLE_BOND_SHURIKEN_POWER = 20
+BATTLE_BOND_SHURIKEN_HITS = 3
+
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
 # should be built from the rules something you could have caught was built from.
@@ -1756,12 +1813,15 @@ MULTI_STRIKE_MOVES = {
     'double-hit':     {'min': 2, 'max': 2},
     'double-iron-bash':     {'min': 2, 'max': 2},
     'dual-wingbeat':     {'min': 2, 'max': 2},
-    'gear-grind':     {'min': 2, 'max': 2},
-    'surging-strikes':     {'min': 3, 'max': 3},
     'tachyon-cutter':     {'min': 2, 'max': 2},
     'twineedle':     {'min': 2, 'max': 2},
-    'water-shuriken':     {'min': 3, 'max': 3},
-    
+    # `gear-grind`, `surging-strikes` and `water-shuriken` were each listed TWICE in this
+    # literal. The first two were harmless - both copies agreed - but Water Shuriken was
+    # 2-to-5 above and a flat 3 here, and a dict literal keeps the LAST one. Every Water
+    # Shuriken in the game was therefore hitting exactly three times, for everybody, which
+    # is Ash-Greninja's privilege and nobody else's. See BATTLE_BOND_SHURIKEN_HITS below,
+    # which is where that three actually belongs.
+
     # The 10-hit swarm anomaly
     'population-bomb': {'min': 1, 'max': 10}
 }
