@@ -3348,7 +3348,7 @@ class SwapMenu(discord.ui.View):
                     p_name=new_active.get('name'), p_level=new_active.get('level'),
                     p_gender=new_active.get('gender'), n_gender=n_active.get('gender'),
                     n_name=n_active.get('name'), n_level=n_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('adaptation')),
+                    p_aura=battle_render.aura_for(state.get('adaptation'), new_active),
                     biome=state.get('warden_biome')
                 )
                 # Attach the newly generated image to the state so render_dashboard can use it!
@@ -3380,7 +3380,7 @@ class SwapMenu(discord.ui.View):
                     p_name=new_active.get('name'), p_level=new_active.get('level'),
                     p_gender=new_active.get('gender'), n_gender=n_active.get('gender'),
                     n_name=n_active.get('name'), n_level=n_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('adaptation')),
+                    p_aura=battle_render.aura_for(state.get('adaptation'), new_active),
                     biome=state.get('warden_biome')
                 )
                 # Because process_turn_end generates its OWN image later in Phase 5, we actually 
@@ -3703,7 +3703,7 @@ class BattleDashboard(discord.ui.View):
             p_name=p_active.get('name'), p_level=p_active.get('level'),
             p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
             n_name=n_active.get('name'), n_level=n_active.get('level'),
-            p_aura=battle_render.aura_for(state.get('adaptation')),
+            p_aura=battle_render.aura_for(state.get('adaptation'), p_active),
             biome=state.get('warden_biome')
         )
         # ==========================================
@@ -3800,7 +3800,11 @@ class BattleDashboard(discord.ui.View):
                 p_active['current_hp'] += hp_boost
                 p_active['name'] = f"{old_name} (Dynamax)"
                 
-                state['adaptation'].update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3})
+                # `holder` is which SPECIMEN spent it. Without it the badge belongs to
+                # the trainer, and a transformed specimen that fainted handed its aura
+                # to whatever was sent out next.
+                state['adaptation'].update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3,
+                                            'holder': battle_render.adaptation_holder(p_active)})
                 log_msg = f"🔴 **{old_name.capitalize()}** absorbed Galar particles and Dynamaxed!"
                 
             else:
@@ -3865,10 +3869,14 @@ class BattleDashboard(discord.ui.View):
                 
                 is_gmax = '-gmax' in form_name
                 state['adaptation'].update({
-                    'used': True, 
-                    'active': True, 
-                    'type': 'gmax' if is_gmax else 'mega', 
-                    'turns': 3 if is_gmax else -1
+                    'used': True,
+                    'active': True,
+                    'type': 'gmax' if is_gmax else 'mega',
+                    'turns': 3 if is_gmax else -1,
+                    # Recorded BEFORE anything else reads it: the specimen's name and dex
+                    # id have already been rewritten above, and instance_id is the one
+                    # handle a Mega Evolution does not change.
+                    'holder': battle_render.adaptation_holder(p_active),
                 })
                 
                 transform_type = "Gigantamaxed" if is_gmax else "Mega Evolved"
@@ -3917,7 +3925,7 @@ class BattleDashboard(discord.ui.View):
                 p_name=p_active.get('name'), p_level=p_active.get('level'),
                 p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
                 n_name=n_active.get('name'), n_level=n_active.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation')),
+                p_aura=battle_render.aura_for(state.get('adaptation'), p_active),
                 biome=state.get('warden_biome')
             )
             
@@ -4239,7 +4247,9 @@ class BattleDashboard(discord.ui.View):
                 hp=p_hp, max_hp=p_max_hp,
                 status=battle_render.normalize_status(p_status),
                 gender=p_gender,
-                sprite=battle_render.load_sprite(player_id, player_shiny),
+                # The gender reaches the sprite loader as well as the HP panel now, so
+                # the hundred-odd species with a distinct female image show it.
+                sprite=battle_render.load_sprite(player_id, player_shiny, p_gender),
                 aura=p_aura,
                 hazards=p_hazards or {},
             )
@@ -4249,7 +4259,7 @@ class BattleDashboard(discord.ui.View):
                 hp=n_hp, max_hp=n_max_hp,
                 status=battle_render.normalize_status(n_status),
                 gender=n_gender,
-                sprite=battle_render.load_sprite(npc_id, npc_shiny),
+                sprite=battle_render.load_sprite(npc_id, npc_shiny, n_gender),
                 aura=n_aura,
                 hazards=n_hazards or {},
             )
@@ -6830,7 +6840,7 @@ class BattleDashboard(discord.ui.View):
                 p_name=p_active.get('name'), p_level=p_active.get('level'),
                 p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
                 n_name=n_active.get('name'), n_level=n_active.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation')),
+                p_aura=battle_render.aura_for(state.get('adaptation'), p_active),
                 biome=state.get('warden_biome')
             )
             # ==========================================
@@ -7424,8 +7434,8 @@ class Combat(commands.Cog):
                 p_name=p1_lead.get('name'), p_level=p1_lead.get('level'),
                 p_gender=p1_lead.get('gender'), n_gender=p2_lead.get('gender'),
                 n_name=p2_lead.get('name'), n_level=p2_lead.get('level'),
-                p_aura=battle_render.aura_for(shared_state.get('p1_adaptation')),
-                n_aura=battle_render.aura_for(shared_state.get('p2_adaptation'))
+                p_aura=battle_render.aura_for(shared_state.get('p1_adaptation'), p1_lead),
+                n_aura=battle_render.aura_for(shared_state.get('p2_adaptation'), p2_lead)
             )
 
             # 6. Render the UI
@@ -7585,7 +7595,8 @@ class Combat(commands.Cog):
                                     active_poke['name'] = f"{active_poke['name']} (Dynamax)"
                                     combat_log += f"🔴 **{owner_name}'s** specimen absorbed Galar particles and Dynamaxed into **{active_poke['name'].capitalize()}**!\n"
                                     
-                                adp_state.update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3})
+                                adp_state.update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3,
+                                                  'holder': battle_render.adaptation_holder(active_poke)})
 
                             # 3. Apply Mega Evolution
                             elif form == 'mega':
@@ -7652,7 +7663,8 @@ class Combat(commands.Cog):
                                     active_poke['name'] = form_name
                                     active_poke['types'] = new_types
                                     
-                                    adp_state.update({'used': True, 'active': True, 'type': 'mega', 'turns': -1})
+                                    adp_state.update({'used': True, 'active': True, 'type': 'mega', 'turns': -1,
+                                                      'holder': battle_render.adaptation_holder(active_poke)})
                                     
                                     # 🚨 Dynamic Log Message
                                     transform_type = "Z-Mega Evolved" if held_item.endswith('-z') else "Mega Evolved"
@@ -7663,7 +7675,8 @@ class Combat(commands.Cog):
 
                             # 4. Apply Z-Move Marker
                             elif form == 'zmove':
-                                adp_state.update({'used': True, 'active': True, 'type': 'zmove', 'turns': 1})
+                                adp_state.update({'used': True, 'active': True, 'type': 'zmove', 'turns': 1,
+                                                  'holder': battle_render.adaptation_holder(active_poke)})
                                 combat_log += f"💎 **{owner_name}'s** {active_poke['name'].capitalize()} surrounded itself with its Z-Power!\n"
 
             # ==========================================
@@ -9251,8 +9264,8 @@ class Combat(commands.Cog):
                     p_name=new_p1_active.get('name'), p_level=new_p1_active.get('level'),
                     p_gender=new_p1_active.get('gender'), n_gender=new_p2_active.get('gender'),
                     n_name=new_p2_active.get('name'), n_level=new_p2_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('p1_adaptation')),
-                    n_aura=battle_render.aura_for(state.get('p2_adaptation'))
+                    p_aura=battle_render.aura_for(state.get('p1_adaptation'), new_p1_active),
+                    n_aura=battle_render.aura_for(state.get('p2_adaptation'), new_p2_active)
                 )
                 
                 embed.set_image(url=f"attachment://{battle_file.filename}")
@@ -9375,8 +9388,8 @@ class Combat(commands.Cog):
                     p_name=p1_active.get('name'), p_level=p1_active.get('level'),
                     p_gender=p1_active.get('gender'), n_gender=p2_active.get('gender'),
                     n_name=p2_active.get('name'), n_level=p2_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('p1_adaptation')),
-                    n_aura=battle_render.aura_for(state.get('p2_adaptation'))
+                    p_aura=battle_render.aura_for(state.get('p1_adaptation'), p1_active),
+                    n_aura=battle_render.aura_for(state.get('p2_adaptation'), p2_active)
                 )
                 embed.set_image(url=f"attachment://{battle_file.filename}")
             except Exception as img_err:
@@ -9671,7 +9684,7 @@ class Combat(commands.Cog):
                 p_name=p_lead.get('name'), p_level=p_lead.get('level'),
                 p_gender=p_lead.get('gender'), n_gender=n_lead.get('gender'),
                 n_name=n_lead.get('name'), n_level=n_lead.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation')),
+                p_aura=battle_render.aura_for(state.get('adaptation'), p_lead),
                 biome=state.get('warden_biome')
             )
 
@@ -10481,7 +10494,7 @@ class Combat(commands.Cog):
                 p_name=p_lead.get('name'), p_level=p_lead.get('level'),
                 p_gender=p_lead.get('gender'), n_gender=n_lead.get('gender'),
                 n_name=n_lead.get('name'), n_level=n_lead.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation')),
+                p_aura=battle_render.aura_for(state.get('adaptation'), p_lead),
                 biome=state.get('warden_biome')
             )
 

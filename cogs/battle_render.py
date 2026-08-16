@@ -22,6 +22,8 @@ from typing import Dict, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from utils.sprites import resolve_sprite, HOME, ARTWORK
+
 # ---------------------------------------------------------------- constants
 
 W, H = 800, 450          # output size (16:9 downsizes cleanly in Discord)
@@ -748,36 +750,70 @@ def normalize_biome(sector) -> str:
     return SECTOR_BIOMES.get(key, DEFAULT_BIOME)
 
 
-def aura_for(adaptation) -> Optional[str]:
-    """`state['adaptation']`-shaped dict -> aura name, or None when inactive."""
+def adaptation_holder(specimen) -> Optional[str]:
+    """
+    A stable handle for "which specimen is wearing this adaptation".
+
+    instance_id, because it is the one thing that does NOT change when a specimen Mega
+    Evolves - its name and its dex id both do, which is exactly why neither can be the
+    key. Returns None for anything without one, such as a wild or NPC specimen.
+    """
+    if not isinstance(specimen, dict):
+        return None
+    holder = specimen.get('instance_id')
+    return str(holder) if holder else None
+
+
+def aura_for(adaptation, specimen=None) -> Optional[str]:
+    """
+    `state['adaptation']`-shaped dict -> aura name, or None when it does not apply here.
+
+    An adaptation belongs to the SPECIMEN that spent it, not to the trainer. Without
+    `specimen` this could only ask "is an adaptation active", and a Mega that fainted
+    handed its badge to whatever was sent out next - the replacement was drawn wearing
+    MEGA on its HP panel despite never having transformed.
+
+    A `holder` that was never recorded means "we do not know", and the old unconditional
+    behaviour stands: better a stale badge on a battle that started before this existed
+    than no badge at all on one that did transform.
+    """
     if not isinstance(adaptation, dict) or not adaptation.get("active"):
         return None
+
+    holder = adaptation.get("holder")
+    if holder is not None and specimen is not None:
+        if adaptation_holder(specimen) != holder:
+            return None
+
     return ADAPTATION_AURAS.get(str(adaptation.get("type", "")).lower())
 
 
 @lru_cache(maxsize=512)
-def load_sprite(pokedex_id, shiny=False, base_path=None) -> Optional[Image.Image]:
+def load_sprite(pokedex_id, shiny=False, gender=None, style=HOME) -> Optional[Image.Image]:
     """
-    Load official artwork off local disk. Returns None when it isn't there.
+    Load a specimen's image off local disk. Returns None when there is nothing to load.
+
+    Asks utils.sprites for the path rather than building one, so the battle scene, the
+    box browser and anything added later agree about which picture a specimen has - and
+    so the female sprite reaches the battlefield, which a hand-built path never did.
+
+    HOME by default, falling through to the official artwork. That is not only a style
+    choice: of the 49 forms the battle engine can turn a specimen INTO, two have no
+    official artwork at all - mimikyu-busted (10143) and mimikyu-totem-busted - so a
+    Disguise breaking used to drop the scene to a placeholder blob. Both exist in the
+    HOME set, and the fallback covers anything HOME is missing in the other direction.
 
     Cached: this was two stat() calls and a full PNG decode per combatant per turn, which
     on an SD card is the slowest thing in the render. The decoded image is only ever read
     from - place_sprite rebinds through crop/resize/transpose, all of which return new
     images - so one copy can safely be shared by every battle.
 
-    512 entries covers the whole roster twice over (plain and shiny) at a few hundred KB
-    each, and the working set in practice is far smaller than that.
+    512 entries still covers the roster several times over; the extra key is `gender`,
+    and only about a hundred species have a distinct female image to cache.
     """
-    if base_path is None:
-        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-    name = f"{pokedex_id}.png"
-    path = os.path.join(base_path, "shiny", name) if shiny else os.path.join(base_path, name)
-    if not os.path.exists(path):
-        # Shiny artwork is patchier than the base set; fall back rather than
-        # dropping to the placeholder blob.
-        path = os.path.join(base_path, name)
-        if not os.path.exists(path):
-            return None
+    path = resolve_sprite(pokedex_id, shiny=bool(shiny), gender=gender, style=style)
+    if not path:
+        return None
     try:
         return Image.open(path).convert("RGBA")
     except Exception as e:
