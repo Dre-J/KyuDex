@@ -1578,6 +1578,39 @@ PERSONAL_SUN_WEATHER = 'sun'
 UNOVERRIDABLE_SKIES = ('extremely-harsh-sunlight', 'heavy-rain', 'strong-winds')
 
 # ==========================================
+# 🌦️ WEATHER-GATED ACCURACY
+# ==========================================
+# Some moves are aimed by the sky. Two different things happen, and they are kept apart
+# because only one of them is a number:
+#
+#   perfect - the move SKIPS its accuracy check altogether. Not "100%": the check is not
+#             made, so evasion stages, an accuracy drop and Sand Veil are all bypassed
+#             too. hit_chance returns early for exactly that reason.
+#   dimmed  - the move keeps checking, at a worse figure.
+#
+# Found while implementing Block 22's Mega Sol, whose whole text is "as if the weather
+# were harsh sunlight" - and Thunder, the clearest thing that should have answered it,
+# turned out to have a flat 70 in every sky. Recorded as a MOVE-layer gap at the time
+# rather than smuggled into an ability block; this is that gap closed.
+WEATHER_ACCURACY_MOVES = {
+    'thunder':   {'perfect': ('rain', 'heavy-rain'),
+                  'dimmed': {'sun': 50, 'extremely-harsh-sunlight': 50}},
+    'hurricane': {'perfect': ('rain', 'heavy-rain'),
+                  'dimmed': {'sun': 50, 'extremely-harsh-sunlight': 50}},
+    'blizzard':  {'perfect': ('hail', 'snow')},
+
+    # The Forces of Nature signature storms, which never check accuracy in rain.
+    'bleakwind-storm': {'perfect': ('rain', 'heavy-rain')},
+    'wildbolt-storm':  {'perfect': ('rain', 'heavy-rain')},
+    'sandsear-storm':  {'perfect': ('rain', 'heavy-rain')},
+
+    # `springtide-storm` is deliberately absent. It is the fourth of that family and sits
+    # in base_moves at the same 80 accuracy, but I could not confirm it shares the rain
+    # rule, and guessing would put a wrong number in a table that reads as researched.
+    # One row here if it turns out it does.
+}
+
+# ==========================================
 # 👥 BLOCK 23: DOUBLES-ONLY - PARKED, NOT CODED
 # ==========================================
 # Seven abilities that need a SECOND body on your own side of the field. KyuDex is
