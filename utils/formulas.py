@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -567,6 +567,10 @@ def apply_transform(attacker, defender):
     borrowed['hp'] = (attacker.get('stats') or {}).get('hp', borrowed.get('hp', 50))
 
     attacker['pokedex_id'] = defender.get('pokedex_id')
+    # The name has always been stashed in the snapshot above and was never actually
+    # changed here, so a Transform swapped the SPRITE and left the label reading Ditto.
+    # Found by Block 20, where Imposter pays for this on arrival rather than on a turn.
+    attacker['name'] = defender.get('name')
     attacker['types'] = list(defender.get('types') or [])
     attacker['stats'] = borrowed
     # Read through the accessor rather than the raw key, so a suppressed target hands
@@ -577,7 +581,8 @@ def apply_transform(attacker, defender):
                          for slot in (defender.get('moves') or [])]
     attacker.setdefault('volatile_statuses', {})['transformed'] = True
 
-    return f"🎭 {attacker['name'].capitalize()} transformed into {defender['name'].capitalize()}!"
+    return (f"🎭 {attacker['_pre_transform']['name'].capitalize()} transformed into "
+            f"{defender['name'].capitalize()}!")
 
 
 def restore_pre_transform(pokemon):
@@ -1156,6 +1161,26 @@ CAMOUFLAGE_TYPES = {
 # Moves that burn away one of the user's own types once they connect
 TYPE_SHEDDING_MOVES = {'burn-up': 'fire', 'double-shock': 'electric'}
 
+def type_from_item(kind, held_item):
+    """
+    The element one of the three signature item families dictates, or None.
+
+    Split out of resolve_item_move_type for Block 20: Multitype and RKS System ask the
+    same question of the same items that Judgment and Multi-Attack do, and asking it in
+    two places is how the Plate table would eventually come to have two versions.
+    """
+    item = (held_item or '').lower().replace(' ', '-')
+
+    if kind == 'plate':
+        return PLATE_TYPES.get(item)
+    if kind == 'drive':
+        return DRIVE_TYPES.get(item)
+    if kind == 'memory' and item.endswith('-memory'):
+        # Memories are uniformly "<type>-memory"
+        return item[:-len('-memory')]
+    return None
+
+
 def resolve_item_move_type(move_name, held_item, default_type):
     """
     Element for the signature moves that read a held item. Falls back to the stored type
@@ -1164,18 +1189,7 @@ def resolve_item_move_type(move_name, held_item, default_type):
     kind = ITEM_TYPE_MOVES.get(move_name)
     if not kind:
         return default_type
-
-    item = (held_item or '').lower().replace(' ', '-')
-
-    if kind == 'plate':
-        return PLATE_TYPES.get(item, default_type)
-    if kind == 'drive':
-        return DRIVE_TYPES.get(item, default_type)
-    if kind == 'memory':
-        # Memories are uniformly "<type>-memory"
-        if item.endswith('-memory'):
-            return item[:-len('-memory')]
-    return default_type
+    return type_from_item(kind, held_item) or default_type
 
 def find_resisting_type(incoming_type, type_chart):
     """
@@ -1230,6 +1244,135 @@ UNSWAPPABLE_ABILITIES = FORM_LOCKED_ABILITIES | {'hunger-switch', 'illusion',
 
 # Moves that staple a fixed ability onto the target
 ABILITY_IMPLANT_MOVES = {'worry-seed': 'insomnia', 'simple-beam': 'simple'}
+
+
+# ==========================================
+# 🎭 BLOCK 20: WEARING ANOTHER IDENTITY
+# ==========================================
+def traced_ability(tracer, opponent):
+    """
+    What Trace copies off the specimen standing opposite, or None.
+
+    Read through the ACTIVE accessor on both ends: a Trace that has itself been
+    suppressed copies nothing, and a target sitting under a Gastro Acid has nothing to
+    hand over. UNCOPYABLE_ABILITIES is the same guard Role Play and Doodle answer to -
+    duplicating a form-locked ability would hand out the machinery of somebody else's
+    body.
+    """
+    if get_active_ability(tracer) not in TRACE_ABILITIES:
+        return None
+    if opponent is None or opponent.get('current_hp', 0) <= 0:
+        return None
+
+    theirs = get_active_ability(opponent)
+    if theirs in ('none', '') or theirs in UNCOPYABLE_ABILITIES:
+        return None
+    return theirs
+
+
+def disguise_model(party, wearer):
+    """
+    Illusion: whose face the wearer puts on - the LAST conscious member of its own party.
+
+    Identity rather than name, so a party carrying two of a species does not have one
+    answering for the other, and a fainted member is never worn: the disguise is meant to
+    be a specimen the opponent could plausibly still be sent.
+    """
+    for member in reversed(list(party or [])):
+        if member is None or member is wearer:
+            continue
+        if member.get('current_hp', 0) > 0:
+            return member
+    return None
+
+
+def wear_illusion(wearer, model):
+    """
+    Put the disguise on. Returns True when one went on.
+
+    ONLY the name and the dex id are borrowed. Types, stats, ability and movelist stay
+    the wearer's own - that is the whole difference between Illusion and Transform, and
+    it is why this cannot reuse apply_transform however similar the two look.
+    """
+    if wearer is None or model is None:
+        return False
+    if wearer.get(ILLUSION_MARKER):
+        return False
+    if get_active_ability(wearer) not in ILLUSION_ABILITIES:
+        return False
+
+    wearer[ILLUSION_MARKER] = {'name': wearer.get('name'),
+                               'pokedex_id': wearer.get('pokedex_id')}
+    wearer['name'] = model.get('name')
+    wearer['pokedex_id'] = model.get('pokedex_id')
+    return True
+
+
+def drop_illusion(wearer):
+    """
+    Take the disguise off. Returns the real name when one came off, or None.
+
+    Deliberately does NOT ask whether the ability is still Illusion. Once the face is on,
+    what takes it off is a hit landing - and by then a Mummy or a Skill Swap may well
+    have painted over the ability that put it there.
+    """
+    real = (wearer or {}).pop(ILLUSION_MARKER, None)
+    if not real:
+        return None
+    wearer['name'] = real['name']
+    wearer['pokedex_id'] = real['pokedex_id']
+    return real['name']
+
+
+def true_pokedex_id(pokemon):
+    """
+    The specimen's OWN dex id, seeing through any disguise.
+
+    Illusion is meant to fool a trainer, not the physics. Everything species-derived that
+    is read during a battle has to ask this rather than the borrowed id, or a disguised
+    Zoroark would be weighed as whatever it is pretending to be and Grass Knot would
+    quietly tell the opponent it was lying.
+    """
+    real = (pokemon or {}).get(ILLUSION_MARKER)
+    return real['pokedex_id'] if real else (pokemon or {}).get('pokedex_id')
+
+
+def rewrite_plate_type(pokemon, magic_room=False):
+    """
+    Multitype and RKS System: be whatever the held Plate or Memory says.
+
+    Returns the element it has just become, or None when nothing changed. The specimen's
+    OWN types are stashed the first time it is asked, so an item that goes away - a Magic
+    Room, an Embargo - puts the real ones back instead of leaving it stuck wearing the
+    last Plate it held.
+
+    Written straight onto `types`, the way Colour Change already writes, rather than as a
+    read-through accessor: Mimicry is the read-through one and its own docstring records
+    that it reaches the damage formula but not the places that read `types` directly.
+    A type this permanent should reach all of them.
+    """
+    kind = PLATE_TYPE_ABILITIES.get(get_active_ability(pokemon))
+    if not kind:
+        return None
+
+    pokemon.setdefault(PLATE_BASE_TYPES, list(pokemon.get('types') or []))
+    # Handed the room rather than defaulting it: get_active_item cannot see a Magic Room
+    # it was not told about, and the whole reason this is re-asked every turn is that the
+    # room can come down.
+    worn = type_from_item(kind, get_active_item(pokemon, magic_room))
+    wanted = [worn] if worn else list(pokemon[PLATE_BASE_TYPES])
+
+    if list(pokemon.get('types') or []) == wanted:
+        return None
+    pokemon['types'] = wanted
+    return wanted[0] if wanted else None
+
+
+def restore_own_types(pokemon):
+    """Undo a Plate type on the way out, so the roster keeps the specimen's real one."""
+    own = (pokemon or {}).pop(PLATE_BASE_TYPES, None)
+    if own is not None:
+        pokemon['types'] = list(own)
 
 
 def pretty_ability(ability):
@@ -2368,8 +2511,12 @@ def item_is_stuck(pokemon):
     Read off the ACTIVE ability, so a Gastro Acid frees the item the same turn it lands.
     Deliberately says nothing about what the holder itself does with the item - see the
     note beside STICKY_HOLD_ABILITIES for where the line falls.
+
+    Block 20 adds Multitype and RKS System to the same question rather than standing up a
+    second one. Their Plate or Memory is not equipment, it is what the specimen currently
+    IS, and the games have never let a Knock Off take it.
     """
-    return get_active_ability(pokemon) in STICKY_HOLD_ABILITIES
+    return get_active_ability(pokemon) in (STICKY_HOLD_ABILITIES | ITEM_WELDED_ABILITIES)
 
 
 def harvest_regrows(pokemon, weather='none'):
@@ -2849,6 +2996,12 @@ def leave_field(pokemon):
         # ability asks whether the hands are empty, not how long they have been.
         pokemon.pop(CUD_CHEW_MARKER, None)
         pokemon.pop(ITEM_SPENT_MARKER, None)
+        # Block 20. The disguise and the Plate type are both borrowed identities, and
+        # neither may follow the specimen back to the roster - a Zoroark filed under
+        # somebody else's name would be a lasting corruption rather than a battle effect.
+        # Both are re-established on the way back in by the entry hook.
+        drop_illusion(pokemon)
+        restore_own_types(pokemon)
         # Palafin transforms on the way OUT, and comes back a hero. Requested here
         # rather than done here for the usual reason: this function is synchronous
         # and the species tables are not.
@@ -4219,7 +4372,10 @@ def effective_weight(pokemon):
     Heavy Metal doubles it and Light Metal halves it, so this wraps the species lookup
     rather than every caller remembering to ask.
     """
-    raw = get_species_weight(pokemon)
+    # Asked of the REAL species, not the borrowed one. An Illusion fools the trainer;
+    # letting it fool Grass Knot as well would have the disguise announce itself the
+    # first time somebody weighed it.
+    raw = get_species_weight({'pokedex_id': true_pokedex_id(pokemon)})
     factor = WEIGHT_MULTIPLIER_ABILITIES.get(get_active_ability(pokemon), 1.0)
     return max(0.1, raw * factor)
 
@@ -6783,6 +6939,15 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
                 attacker['status_condition'] = {'name': 'burn', 'duration': -1}
                 msg += (f" \U0001f336\ufe0f {attacker['name'].capitalize()} was burned "
                         f"by {defender['name'].capitalize()}'s Spicy Spray!")
+
+    # BLOCK 20: ILLUSION - the disguise comes off the moment a damaging move connects.
+    # Placed beside Colour Change because it answers exactly the same question, and
+    # BEFORE it so the reveal reads in the right order in the log.
+    if damage > 0 and move.get('class') != 'status':
+        _unmasked = drop_illusion(defender)
+        if _unmasked:
+            msg += (f" 🎭 The illusion shattered - it was "
+                    f"{_unmasked.capitalize()} all along!")
 
     # COLOUR CHANGE - the target takes on the element that just hit it
     if (def_ability == 'color-change' and damage > 0 and move.get('class') != 'status'

@@ -1480,6 +1480,52 @@ ITEM_SPENT_MARKER = '_item_spent_this_turn'  # Pickup: what the foe used up
 NO_ALLY_ITEM_ABILITIES = {'symbiosis'}
 NO_BALL_THROW_ABILITIES = {'ball-fetch'}
 
+# ==========================================
+# 🎭 BLOCK 20: WEARING ANOTHER IDENTITY
+# ==========================================
+# Seven abilities about carrying somebody else's ability, species or type. All seven were
+# counted as implemented on their membership of the protection sets - UNCOPYABLE,
+# UNSWAPPABLE, FIELD_READING - which exist precisely because these are the abilities that
+# must not be copied, and say nothing whatever about whether they work.
+
+# Trace copies the ability standing opposite, on arrival. Read through the ACTIVE
+# accessor, so a Gastro Acid'd target has nothing to hand over, and written through
+# set_active_ability, so withdrawing puts Trace back.
+TRACE_ABILITIES = {'trace'}
+
+# Imposter is Transform, paid on arrival instead of by spending a turn. The move already
+# exists and is already careful about copying a copy, so this is one call rather than a
+# second implementation.
+IMPOSTER_ABILITIES = {'imposter'}
+
+# Illusion wears the face of the last conscious party member until a damaging move
+# connects. Only `name` and `pokedex_id` are borrowed - types, stats and ability stay the
+# specimen's own, which is what makes it a disguise rather than a Transform. The real
+# identity rides on the specimen under this marker so weight can see through it.
+ILLUSION_ABILITIES = {'illusion'}
+ILLUSION_MARKER = '_illusion'
+
+# Multitype and RKS System are the same ability twice: be whatever the held item says.
+# The value is the item FAMILY, which is the same vocabulary Judgment and Multi-Attack
+# already read off PLATE_TYPES and the '-memory' suffix - so this block adds a question,
+# not a table.
+PLATE_TYPE_ABILITIES = {'multitype': 'plate', 'rks-system': 'memory'}
+PLATE_BASE_TYPES = '_own_types'
+
+# ...and both weld the item on, exactly as Sticky Hold does. Without this a Knock Off
+# would strip Arceus's Plate, which the games have never allowed.
+ITEM_WELDED_ABILITIES = set(PLATE_TYPE_ABILITIES)
+
+# Receiver and Power of Alchemy inherit an ALLY's ability when that ally faints, and
+# KyuDex is singles - the specimen that replaces a corpse is not its ally, it is its
+# successor. Recorded as decided, like the ally-only three in Block 10 and Symbiosis in
+# Block 19.
+ALLY_FAINT_ABILITIES = {'receiver', 'power-of-alchemy'}
+
+# Where the two engines keep their rosters. Illusion needs the party of whoever just
+# walked in, and the shared entry hook is handed the battle state rather than a side.
+BATTLE_STATE_TEAM_KEYS = ('player_team', 'npc_team', 'p1_team', 'p2_team')
+
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
 # should be built from the rules something you could have caught was built from.
