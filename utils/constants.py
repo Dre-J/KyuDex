@@ -371,6 +371,53 @@ EQUIPMENT_CATALOG = {
     "fire-stone":    {"name": "Fire Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, orange and glistens.", "emoji": "💎", "category": "evoitems"},
     "rare-candy":    {"name": "Rare Candy", "price": 10000, "desc": "A sweet treat that increases a pokemon's level by 1.", "emoji": "🍬", "category": "evoitems"},
 
+    # ==========================================
+    # HELD BATTLE EQUIPMENT
+    # ==========================================
+    # Every entry below is an item the ENGINE ACTUALLY READS, and the description says
+    # what the engine does rather than what the games do. That distinction is the whole
+    # point of this block: a scan of the source turns up around sixty competitive item
+    # names, and most of them are ghosts. `wise-glasses`, `eviolite`, `wide-lens`,
+    # `heavy-duty-boots`, `weakness-policy`, the type-boosting stones and the four seeds
+    # appear only in FLING_POWER (what the item weighs when thrown), in ONE_USE_ITEMS
+    # (that it is spent, not what it does), or in an NPC's `item_pool`. None of those is
+    # an implementation, and selling them would be selling nothing.
+    #
+    # Priced cheap on purpose - this is meant to make team building possible, not to be
+    # a money sink. Six hundred for the ones that define a set, four hundred for the
+    # situational ones; a single trainer battle already pays several hundred.
+    #
+    # The rest of the competitive roster arrives as the item layer gets coded. Adding one
+    # here before the engine reads it would put a ghost in the shop.
+
+    # -- the ones that define a set --
+    "leftovers":     {"name": "Leftovers", "price": 600, "desc": "Restores 1/16 max HP at the end of each turn.", "emoji": "🍎", "category": "battleitems"},
+    "choice-band":   {"name": "Choice Band", "price": 600, "desc": "1.5x Attack, but locks the holder into its first move.", "emoji": "🎗️", "category": "battleitems"},
+    "choice-specs":  {"name": "Choice Specs", "price": 600, "desc": "1.5x Special Attack, but locks the holder into its first move.", "emoji": "🎗️", "category": "battleitems"},
+    "choice-scarf":  {"name": "Choice Scarf", "price": 600, "desc": "1.5x Speed, but locks the holder into its first move.", "emoji": "🎗️", "category": "battleitems"},
+    "life-orb":      {"name": "Life Orb", "price": 600, "desc": "1.3x damage on every attack.", "emoji": "🔮", "category": "battleitems"},
+    "focus-sash":    {"name": "Focus Sash", "price": 600, "desc": "Survives one otherwise-lethal hit on 1 HP, from full health. Single use.", "emoji": "🎀", "category": "battleitems"},
+    "assault-vest":  {"name": "Assault Vest", "price": 600, "desc": "1.5x Special Defense, but the holder cannot use status moves.", "emoji": "🦺", "category": "battleitems"},
+
+    # -- situational --
+    "black-sludge":  {"name": "Black Sludge", "price": 400, "desc": "Restores 1/16 max HP each turn to Poison types, and costs 1/8 to everything else.", "emoji": "🧪", "category": "battleitems"},
+    "expert-belt":   {"name": "Expert Belt", "price": 400, "desc": "1.2x damage on super-effective hits.", "emoji": "🥋", "category": "battleitems"},
+    "rocky-helmet":  {"name": "Rocky Helmet", "price": 400, "desc": "Hurts attackers that make contact.", "emoji": "⛑️", "category": "battleitems"},
+    "air-balloon":   {"name": "Air Balloon", "price": 400, "desc": "Lifts the holder out of reach of Ground-type moves and ground hazards.", "emoji": "🎈", "category": "battleitems"},
+    "scope-lens":    {"name": "Scope Lens", "price": 400, "desc": "Raises the holder's critical-hit rate.", "emoji": "🔍", "category": "battleitems"},
+    "razor-claw":    {"name": "Razor Claw", "price": 400, "desc": "Raises the holder's critical-hit rate.", "emoji": "🪒", "category": "battleitems"},
+    "toxic-orb":     {"name": "Toxic Orb", "price": 400, "desc": "Badly poisons the holder at the end of the turn. For Poison Heal, Toxic Boost and Guts.", "emoji": "☣️", "category": "battleitems"},
+    "flame-orb":     {"name": "Flame Orb", "price": 400, "desc": "Burns the holder at the end of the turn. For Flare Boost and Guts.", "emoji": "🔥", "category": "battleitems"},
+    "power-herb":    {"name": "Power Herb", "price": 400, "desc": "Fires a two-turn move instantly. Single use.", "emoji": "🌿", "category": "battleitems"},
+    "light-clay":    {"name": "Light Clay", "price": 400, "desc": "Extends Reflect, Light Screen and Aurora Veil from 5 turns to 8.", "emoji": "🔆", "category": "battleitems"},
+
+    # -- field extenders, one per sky plus the terrain --
+    "heat-rock":     {"name": "Heat Rock", "price": 400, "desc": "Extends the holder's harsh sunlight from 5 turns to 8.", "emoji": "☀️", "category": "battleitems"},
+    "damp-rock":     {"name": "Damp Rock", "price": 400, "desc": "Extends the holder's rain from 5 turns to 8.", "emoji": "🌧️", "category": "battleitems"},
+    "smooth-rock":   {"name": "Smooth Rock", "price": 400, "desc": "Extends the holder's sandstorm from 5 turns to 8.", "emoji": "🏜️", "category": "battleitems"},
+    "icy-rock":      {"name": "Icy Rock", "price": 400, "desc": "Extends the holder's hail from 5 turns to 8.", "emoji": "❄️", "category": "battleitems"},
+    "terrain-extender": {"name": "Terrain Extender", "price": 400, "desc": "Extends the holder's terrain from 5 turns to 8.", "emoji": "🌐", "category": "battleitems"},
+
     # GENERAL FIELD SUPPLIES
     "purifier":  {"name": "Purifier", "price": 50, "desc": "Instantly removes pollution from a server", "emoji": "🫧", "category": "general"},
     
@@ -441,6 +488,7 @@ CATEGORY_OPTIONS = [
     discord.SelectOption(label="General Supplies", value="general", emoji="🫧"),
     discord.SelectOption(label="Medicine", value="medicine", emoji="🧪"),
     discord.SelectOption(label="Vitamins", value="vitamin", emoji="💊"),
+    discord.SelectOption(label="Battle Equipment", value="battleitems", emoji="⚔️"),
     discord.SelectOption(label="Berries", value="berry", emoji="🫐"),
     discord.SelectOption(label="Z-Crystals", value="zcrystal", emoji="💎"),
     discord.SelectOption(label="Mega Stones", value="megastone", emoji="🧬"),

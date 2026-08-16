@@ -12,6 +12,7 @@ from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSION
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics
 import re
 from utils import checks
+from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 
 # Memory dictionary to track what is currently spawned in each server
 # Format: { 'guild_id': {'pokedex_id': 1, 'name': 'bulbasaur', 'capture_rate': 45} }
@@ -431,20 +432,20 @@ class PokemonPaginator(discord.ui.View):
         # ==========================================
         # LOCAL ASSET LOADING
         # ==========================================
-        base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-        
-        if is_shiny:
-            file_path = os.path.join(base_path, "shiny", f"{poke_id}.png")
-            safe_filename = f"{poke_id}_shiny.png"
-        else:
-            file_path = os.path.join(base_path, f"{poke_id}.png")
-            safe_filename = f"{poke_id}.png"
-            
+        # The box browser shows HOME artwork, and shows the FEMALE sprite for the
+        # hundred-odd species that have one. Both questions are asked by utils.sprites,
+        # which owns the fallback chain - only about 8% of the roster has a female
+        # image, so "give me the female HOME sprite" has to be a preference with
+        # somewhere to land rather than a filename.
+        safe_filename = sprite_attachment_name(poke_id, is_shiny, gender)
+        file_path = resolve_sprite(poke_id, shiny=is_shiny, gender=gender, style=HOME)
+
         sprite_file = None
-        if os.path.exists(file_path):
+        if file_path:
             sprite_file = discord.File(file_path, filename=safe_filename)
         else:
-            print(f"⚠️ WARNING: Local sprite missing for ID {poke_id} at {file_path}")
+            print(f"⚠️ WARNING: no sprite anywhere for ID {poke_id} "
+                  f"(shiny={is_shiny}, gender={gender})")
 
         # --- BUILD EMBED ---
         color = discord.Color.gold() if is_shiny else discord.Color.green()
