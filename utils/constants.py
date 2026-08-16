@@ -1526,6 +1526,41 @@ ALLY_FAINT_ABILITIES = {'receiver', 'power-of-alchemy'}
 # walked in, and the shared entry hook is handed the battle state rather than a side.
 BATTLE_STATE_TEAM_KEYS = ('player_team', 'npc_team', 'p1_team', 'p2_team')
 
+# ==========================================
+# 🌫️ BLOCK 21: ABILITY SUPPRESSION
+# ==========================================
+# Deliberately last of the mechanical blocks, because it changes what every OTHER ability
+# reads. All three of these are answered inside get_active_ability rather than at the
+# two hundred places that call it - the accessor split has existed since Gastro Acid, and
+# this block is what it was built for.
+#
+# Both of the new suppressors ride on the specimen as a volatile, for the same reason
+# Gastro Acid does: get_active_ability takes ONE argument and cannot be handed the field.
+# Neither is a property of the ability - both are properties of the SLOT - so both are
+# swept away by restore_base_ability on the way out.
+
+# The mould-breaker family. Its marker is scoped to a single strike: it goes onto the
+# DEFENDER for the length of one damage calculation and comes off in a finally, so
+# nothing outside that calculation can ever see it.
+MOLD_BREAKING_ABILITIES = {'mold-breaker', 'turboblaze', 'teravolt'}
+MOULD_BROKEN_MARKER = 'mould_broken'
+
+# Neutralizing Gas switches off everything ELSE on the field for as long as its owner
+# stands there. Recomputed from scratch rather than toggled, so a gasser that faints,
+# switches or is itself replaced cannot leave the marker behind.
+NEUTRALIZING_GAS_ABILITIES = {'neutralizing-gas'}
+GAS_SUPPRESSED_MARKER = 'gas_suppressed'
+
+# Unaware reads the OTHER side's sheet as though nothing had been done to it. Which
+# stages that covers depends on which end of the move its owner is standing:
+#   attacking - the target's walls stop counting
+#   defending - the attacker's offence stops counting
+# Everything else the two of them have done to themselves still counts, which is what
+# makes Unaware a counter to a sweeper rather than a Haze.
+UNAWARE_ABILITIES = {'unaware'}
+UNAWARE_DEFENSIVE_STATS = ('defense', 'sp_def')
+UNAWARE_OFFENSIVE_STATS = ('attack', 'sp_atk')
+
 # How often a generated specimen comes up with its hidden ability rather than a
 # standard one. The same figure the capture path in cogs/ecology.py uses - a rival
 # should be built from the rules something you could have caught was built from.

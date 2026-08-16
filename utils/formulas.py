@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -1245,6 +1245,43 @@ UNSWAPPABLE_ABILITIES = FORM_LOCKED_ABILITIES | {'hunger-switch', 'illusion',
 # Moves that staple a fixed ability onto the target
 ABILITY_IMPLANT_MOVES = {'worry-seed': 'insomnia', 'simple-beam': 'simple'}
 
+# What a mould-breaker's move stops noticing on the way in.
+#
+# DERIVED from the tables that already say what blunts or refuses a move, rather than
+# hand-listed. Two reasons, and the second is the important one: a hand-list of forty
+# names would be wrong the day it was written, and it would go on being wrong every time
+# a later block added an immunity - Mold Breaker would silently stop covering it. Built
+# this way, the next defensive ability anybody adds is ignored the moment it exists.
+#
+# The rule, stated: a mould-breaker ignores anything that would BLUNT OR REFUSE the
+# incoming move. It does not touch anything that merely answers a move once it has
+# landed - Rough Skin, Iron Barbs, Static, Effect Spore, Colour Change, Cursed Body and
+# Aftermath all still fire, because none of them stops the move.
+#
+# FORM_LOCKED_ABILITIES is subtracted for the same reason it exists everywhere else in
+# this file: those are not defences, they are the machinery of somebody's body.
+MOLD_BREAKER_IGNORES = (
+    set(BIOLOGICAL_TRAITS.get('immunities', {}))
+    | set(BIOLOGICAL_TRAITS.get('incoming_multipliers', {}))
+    | set(STATUS_IMMUNE_ABILITIES)
+    | set(VOLATILE_IMMUNE_ABILITIES)
+    | set(STATUS_MOVE_IMMUNE_ABILITIES)
+    | set(MOVE_FAMILY_IMMUNE_ABILITIES)
+    | set(STAT_DROP_IMMUNE_ABILITIES)
+    | set(EVASION_MULTIPLIER_ABILITIES)
+    | set(SECONDARY_IMMUNE_ABILITIES)
+    | set(INTIMIDATE_IMMUNE_ABILITIES)
+    | set(EXPLOSION_BLOCKING_ABILITIES)
+    | set(WIND_IMMUNE_ABILITIES)
+    | set(TERA_SHELL_ABILITIES)
+    | set(MAGIC_BOUNCE_ABILITIES)
+    | set(PRIORITY_BLOCKING_ABILITIES)
+    | set(LEVITATION_ABILITIES)
+    | set(FORCED_SWITCH_IMMUNE_ABILITIES)
+    # The handful that live in a branch rather than a table, so no set names them.
+    | {'sturdy', 'wonder-guard', 'battle-armor', 'shell-armor'}
+) - FORM_LOCKED_ABILITIES
+
 
 # ==========================================
 # 🎭 BLOCK 20: WEARING ANOTHER IDENTITY
@@ -1406,12 +1443,33 @@ def get_active_ability(pokemon):
     name has to survive in order to come back when the specimen is withdrawn. Every
     battle-time read goes through here so a suppressed ability is genuinely inert; only
     code that PERSISTS an ability (evolution, Mega forms) touches ['ability'] directly.
+
+    Block 21 adds the other two suppressors here rather than at the two hundred places
+    that call this, which is what the accessor split was built for. All three are
+    properties of the SLOT, so restore_base_ability sweeps all three away on withdrawal:
+
+      ability_suppressed  Gastro Acid and Core Enforcer. Switches off everything except
+                          the form-locked machinery, and lasts until the specimen leaves.
+      gas_suppressed      Neutralizing Gas, standing opposite. Same reach, but recomputed
+                          from the field every time anybody arrives or the turn ends, so
+                          it lapses the moment the gasser does.
+      mould_broken        A mould-breaker's move, mid-strike. Reaches only the abilities
+                          that would have BLUNTED OR REFUSED it, and is gone again before
+                          the call that set it returns.
     """
     if pokemon is None:
         return 'none'
-    if (pokemon.get('volatile_statuses') or {}).get('ability_suppressed'):
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+    if volatiles.get('ability_suppressed'):
         return 'none'
-    return get_stored_ability(pokemon)
+
+    stored = get_stored_ability(pokemon)
+    if volatiles.get(GAS_SUPPRESSED_MARKER) and stored not in UNSUPPRESSABLE_ABILITIES:
+        return 'none'
+    if volatiles.get(MOULD_BROKEN_MARKER) and stored in MOLD_BREAKER_IGNORES:
+        return 'none'
+    return stored
 
 
 def set_active_ability(pokemon, new_ability):
@@ -1437,7 +1495,88 @@ def restore_base_ability(pokemon):
         return
     if '_base_ability' in pokemon:
         pokemon['ability'] = pokemon.pop('_base_ability')
-    (pokemon.get('volatile_statuses') or {}).pop('ability_suppressed', None)
+    volatiles = pokemon.get('volatile_statuses') or {}
+    volatiles.pop('ability_suppressed', None)
+    # Block 21's two, for the same reason: all three are properties of the slot. The gas
+    # is recomputed on arrival anyway, but a specimen must not sit on the bench carrying
+    # a suppression from a field it is no longer standing on.
+    volatiles.pop(GAS_SUPPRESSED_MARKER, None)
+    volatiles.pop(MOULD_BROKEN_MARKER, None)
+
+
+def breaks_moulds(attacker):
+    """Whether this specimen's move ignores what the target would do to stop it."""
+    return get_active_ability(attacker) in MOLD_BREAKING_ABILITIES
+
+
+def begin_mould_break(attacker, defender):
+    """
+    Mark the defender for the length of ONE strike, and return what to put back.
+
+    Scoped rather than standing, because a mould-breaker only breaks moulds with its own
+    moves: the defender's Levitate is off while the Mold Breaker's Earthquake is landing
+    and on again the instant it has. The previous value is returned rather than assumed
+    absent, so a nested calculation could never clear a marker it did not set.
+    """
+    if defender is None or not breaks_moulds(attacker):
+        return None
+    volatiles = defender.setdefault('volatile_statuses', {})
+    previous = volatiles.get(MOULD_BROKEN_MARKER)
+    volatiles[MOULD_BROKEN_MARKER] = True
+    return ('restore', previous)
+
+
+def end_mould_break(defender, token):
+    """Undo begin_mould_break. Always reached, because its caller uses a finally."""
+    if token is None or defender is None:
+        return
+    volatiles = defender.get('volatile_statuses') or {}
+    _, previous = token
+    if previous is None:
+        volatiles.pop(MOULD_BROKEN_MARKER, None)
+    else:
+        volatiles[MOULD_BROKEN_MARKER] = previous
+
+
+def refresh_neutralizing_gas(*combatants):
+    """
+    Recompute who is standing in the gas, and return a log line for a change.
+
+    Recomputed from the field rather than toggled on and off, because every way the gas
+    can END is a way somebody forgets to toggle it: the gasser switching out, fainting to
+    a move, fainting to poison, or being replaced by something that is also a gasser.
+    Asking the question again is cheap; remembering to unask it is what goes wrong.
+
+    A fainted gasser holds nothing down - it is not on the field any more.
+    """
+    live = [c for c in combatants if c is not None and c.get('current_hp', 0) > 0]
+    gassers = [c for c in live
+               if get_stored_ability(c) in NEUTRALIZING_GAS_ABILITIES
+               and not (c.get('volatile_statuses') or {}).get('ability_suppressed')]
+
+    log = ""
+    for combatant in combatants:
+        if combatant is None:
+            continue
+        volatiles = combatant.setdefault('volatile_statuses', {})
+        # Its own gas never switches itself off.
+        gassed = bool(gassers) and not any(g is combatant for g in gassers)
+        was = bool(volatiles.get(GAS_SUPPRESSED_MARKER))
+
+        if gassed and not was:
+            volatiles[GAS_SUPPRESSED_MARKER] = True
+            if get_stored_ability(combatant) not in ('none', ''):
+                log += (f"☁️ **{combatant['name'].capitalize()}**'s "
+                        f"{pretty_ability(get_stored_ability(combatant))} "
+                        f"was smothered by the Neutralizing Gas!\n")
+        elif was and not gassed:
+            volatiles.pop(GAS_SUPPRESSED_MARKER, None)
+            if get_stored_ability(combatant) not in ('none', ''):
+                log += (f"💨 The gas cleared, and **{combatant['name'].capitalize()}**'s "
+                        f"{pretty_ability(get_stored_ability(combatant))} "
+                        f"came back!\n")
+
+    return log
 
 
 def suppress_ability(pokemon):
@@ -4355,6 +4494,13 @@ def hit_chance(attacker, defender, move, weather='none'):
         eva_stage = min(0, eva_stage)
         acc_stage = max(0, acc_stage)
 
+    # BLOCK 21: Unaware discards the OTHER side's stage outright, in both directions -
+    # where Mind's Eye above only discards the half that would hurt its owner.
+    if get_active_ability(attacker) in UNAWARE_ABILITIES:
+        eva_stage = 0
+    if get_active_ability(defender) in UNAWARE_ABILITIES:
+        acc_stage = 0
+
     net_stage = max(-6, min(6, acc_stage - eva_stage))
     if net_stage >= 0:
         stage_mod = (3.0 + net_stage) / 3.0
@@ -4406,6 +4552,26 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
         a_stages = {k: max(0, v) for k, v in a_stages.items()}
         d_stages = {k: min(0, v) for k, v in d_stages.items()}
         d_stages_raw = {k: max(0, v) for k, v in d_stages_raw.items()}
+
+    # BLOCK 21: UNAWARE reads the other side's sheet as though nothing had been done to
+    # it - both directions, unlike the crit filter above, which only discards changes
+    # that would make the hit weaker. Applied after that filter for exactly that reason:
+    # blanking is the stronger claim of the two.
+    #
+    # Which stages it covers depends on which end of the move its owner is standing. An
+    # Unaware attacker ignores the target's WALLS and nothing else - notably not the
+    # target's Attack, which is why Foul Play's borrowed stage is untouched here.
+    if get_active_ability(attacker) in UNAWARE_ABILITIES:
+        d_stages = {k: (0 if k in UNAWARE_DEFENSIVE_STATS else v)
+                    for k, v in d_stages.items()}
+
+    if get_active_ability(defender) in UNAWARE_ABILITIES:
+        blanked = set(UNAWARE_OFFENSIVE_STATS)
+        # Body Press attacks with Defense, so for that move Defense IS the offensive
+        # stage and an Unaware wall ignores it too.
+        if move_name == 'body-press':
+            blanked.add('defense')
+        a_stages = {k: (0 if k in blanked else v) for k, v in a_stages.items()}
 
     phys_atk = apply_stat_stage(attacker.get('stats', {}).get('attack', 50), a_stages.get('attack', 0))
     spec_atk = apply_stat_stage(attacker.get('stats', {}).get('sp_atk', 50), a_stages.get('sp_atk', 0))
@@ -4631,6 +4797,31 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     """
     Acts as the central physics and biology engine for field combat.
     Processes raw damage, parasitic drains, status afflictions, and hybrid field hazards.
+
+    A thin wrapper, and the whole of Block 21's mould-breaker family. The marker goes
+    onto the DEFENDER for the length of this one call and comes off in a `finally`, so
+    the forty-odd defensive reads inside need no arguments they did not already have and
+    the twenty early returns below cannot leak it. Everything else lives in
+    _resolve_damage, which is this function as it has always been.
+
+    __wrapped__ is set below the body, so `inspect.getsource(calculate_damage)` still
+    hands back the formula rather than these eight lines. Nine suites read the damage
+    formula that way to prove an ability is reachable at all, and none of them means
+    this wrapper when it says "the damage formula".
+    """
+    token = begin_mould_break(attacker, defender)
+    try:
+        return _resolve_damage(attacker, defender, move, weather, terrain,
+                               target_hazards, user_hazards, wonder_room, gravity,
+                               magic_room, user_party, field)
+    finally:
+        end_mould_break(defender, token)
+
+
+def _resolve_damage(attacker, defender, move, weather='none', terrain='none', target_hazards=None, user_hazards=None, wonder_room=False, gravity=False, magic_room=False, user_party=None, field=None):
+    """
+    The damage calculation itself. Reached only through calculate_damage, which scopes
+    the mould-breaker marker around it.
     """
     damage = 0
     msg = ""
@@ -7506,6 +7697,15 @@ async def fetch_base_stats(db, pokedex_id):
             base_stats[stat_map[api_name]] = value
             
     return base_stats
+
+
+# Block 21. calculate_damage is a wrapper that scopes the mould-breaker marker around
+# _resolve_damage; this makes inspect.getsource(calculate_damage) hand back the FORMULA
+# rather than the eight-line wrapper, which is what nine suites mean when they read it to
+# prove an ability is reachable at all. It is the same protocol functools.wraps uses,
+# written out here because the two functions are declared in the other order.
+calculate_damage.__wrapped__ = _resolve_damage
+
 
 def get_xp_requirement(level, growth_rate):
     """Calculates the total XP required to reach a specific level based on biology."""
