@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2346,6 +2346,9 @@ def get_active_item(pokemon, magic_room=False):
     stored name has to survive: Trick can still swap an embargoed Choice Scarf, and the
     Scarf comes back to life the moment the room wears off. Passive item effects read
     this; the moves that physically move or destroy an item read get_stored_item.
+
+    Block 19's Klutz is a third suppressor of exactly that shape, which is why it is a
+    clause here rather than a check at the forty-odd places an item is read.
     """
     if pokemon is None:
         return 'none'
@@ -2353,7 +2356,105 @@ def get_active_item(pokemon, magic_room=False):
         return 'none'
     if (pokemon.get('volatile_statuses') or {}).get('embargo'):
         return 'none'
+    if get_active_ability(pokemon) in CLUMSY_ABILITIES:
+        return 'none'
     return get_stored_item(pokemon)
+
+
+def item_is_stuck(pokemon):
+    """
+    Sticky Hold: whether another specimen is allowed to take this item away.
+
+    Read off the ACTIVE ability, so a Gastro Acid frees the item the same turn it lands.
+    Deliberately says nothing about what the holder itself does with the item - see the
+    note beside STICKY_HOLD_ABILITIES for where the line falls.
+    """
+    return get_active_ability(pokemon) in STICKY_HOLD_ABILITIES
+
+
+def harvest_regrows(pokemon, weather='none'):
+    """
+    The berry Harvest grows back this turn, or None.
+
+    Three conditions, and all three are the ability's own text rather than convenience:
+    the hands must be empty ("has held no items in the meantime"), there must be a berry
+    it ate to grow back, and the roll must come up - which it always does in the sun.
+    """
+    if pokemon is None or pokemon.get('current_hp', 0) <= 0:
+        return None
+    if get_active_ability(pokemon) not in HARVEST_ABILITIES:
+        return None
+    if get_stored_item(pokemon) != 'none':
+        return None
+
+    berry = pokemon.get(LAST_BERRY_MARKER)
+    if not berry or not is_berry(berry):
+        return None
+
+    chance = HARVEST_SUN_CHANCE if weather in HARVEST_SUN else HARVEST_CHANCE
+    return berry if random.random() < chance else None
+
+
+def cud_chew_due(pokemon):
+    """
+    Advance the Cud Chew clock by one turn and return the berry that has come back up,
+    or None.
+
+    Mutating and asking in one call is deliberate: two callers that could disagree about
+    whether the clock had already been wound is exactly how the Truant marker nearly went
+    wrong. There is one clock, and asking it is what turns it.
+    """
+    if pokemon is None:
+        return None
+
+    pending = pokemon.get(CUD_CHEW_MARKER)
+    if not pending:
+        return None
+
+    berry, turns = pending[0], pending[1] - 1
+    if turns > 0:
+        pokemon[CUD_CHEW_MARKER] = [berry, turns]
+        return None
+
+    pokemon.pop(CUD_CHEW_MARKER, None)
+    # A corpse chews nothing, but the clock still had to be wound - otherwise a specimen
+    # that fainted and was revived would come back holding a stale countdown.
+    if pokemon.get('current_hp', 0) <= 0:
+        return None
+    return berry
+
+
+def pickup_finds(taker, dropper):
+    """
+    What Pickup lifts off the floor this turn, or None.
+
+    Empty hands only, and only something the specimen opposite SPENT rather than had
+    destroyed - see the by_owner note on mark_item_consumed. Reading the foe's marker
+    rather than the field is what keeps it from recovering its own used berry.
+    """
+    if taker is None or dropper is None or taker is dropper:
+        return None
+    if taker.get('current_hp', 0) <= 0:
+        return None
+    if get_active_ability(taker) not in PICKUP_ABILITIES:
+        return None
+    if get_stored_item(taker) != 'none':
+        return None
+
+    dropped = dropper.get(ITEM_SPENT_MARKER)
+    return dropped if dropped and dropped != 'none' else None
+
+
+def clear_spent_item_markers(*combatants):
+    """
+    Wipe the "used something up this turn" note once Pickup has had its look.
+
+    Left set, a single eaten berry would be picked up again every turn for the rest of
+    the battle - which is the same shape of bug as the pivot flags PvP never flushed.
+    """
+    for combatant in combatants:
+        if combatant is not None:
+            combatant.pop(ITEM_SPENT_MARKER, None)
 
 
 def is_transferable_item(item):
@@ -2402,7 +2503,7 @@ def is_consumable(item):
     return is_berry(item) or item in ONE_USE_ITEMS
 
 
-def mark_item_consumed(pokemon, item):
+def mark_item_consumed(pokemon, item, by_owner=True):
     """
     Record that a specific held item was USED UP - eaten, triggered or burnt away - as
     opposed to being tricked, bestowed, knocked off or stolen.
@@ -2414,10 +2515,19 @@ def mark_item_consumed(pokemon, item):
     The item NAME is recorded rather than a bare flag, because a specimen can lose its
     own Leftovers to a Trick and then eat a berry it was handed - the Leftovers still has
     to come home.
+
+    `by_owner` is Block 19's Pickup, which recovers what somebody else SPENT and not what
+    somebody else DESTROYED. Incinerate, Bug Bite and Pluck are the three routes here
+    that use up a berry on the foe's initiative rather than the holder's, and they pass
+    False: a berry burnt to a crisp is not lying around to be picked up.
     """
     if pokemon is None:
         return
     item = (item or '').lower().replace(' ', '-')
+    if item in ('', 'none'):
+        return
+    if by_owner:
+        pokemon[ITEM_SPENT_MARKER] = item
     if is_consumable(item):
         pokemon.setdefault('_consumed_items', set()).add(item)
 
@@ -2472,6 +2582,46 @@ def get_fling_power(item):
     return FLING_POWER.get(item, FLING_DEFAULT_POWER)
 
 
+def berry_threshold(pokemon, base):
+    """
+    The HP fraction a berry actually waits for on THIS specimen.
+
+    Gluttony is a floor rather than a replacement: a pinch berry that would hold out for
+    a quarter goes off at a half, and the berries already keyed to a half are untouched.
+    """
+    if get_active_ability(pokemon) in GLUTTONY_ABILITIES:
+        return max(base, GLUTTONY_THRESHOLD)
+    return base
+
+
+def ripened(pokemon, amount):
+    """Ripen doubles what a berry is worth. Applied to the figure, not to the berry."""
+    if get_active_ability(pokemon) in RIPEN_ABILITIES:
+        return amount * RIPEN_MULTIPLIER
+    return amount
+
+
+def cheek_pouch_refill(pokemon, owner_str=""):
+    """
+    What eating a berry is worth on top of the berry, and a log line for it.
+
+    Answers the EATING rather than the holding, so a berry forced down by Teatime, a
+    Fling or a Bug Bite pays exactly the same - which is why it is charged from the one
+    place every route to swallowing a berry passes through.
+    """
+    if get_active_ability(pokemon) not in CHEEK_POUCH_ABILITIES:
+        return ""
+    max_hp = pokemon.get('max_hp', 100)
+    if pokemon.get('current_hp', 0) >= max_hp:
+        return ""
+
+    heal = max(1, math.floor(max_hp / CHEEK_POUCH_FRACTION))
+    pokemon['current_hp'] = min(max_hp, pokemon['current_hp'] + heal)
+    who = f"{owner_str.strip()} " if owner_str else ""
+    return (f"🐿️ {who}**{pokemon['name'].capitalize()}**'s Cheek Pouch "
+            f"gave it back some HP! (+{heal} HP)\n")
+
+
 def apply_berry_effect(pokemon, item, ignore_threshold=False, owner_str=""):
     """
     Resolve one berry on one specimen and return a log line, or '' if nothing happened.
@@ -2479,7 +2629,19 @@ def apply_berry_effect(pokemon, item, ignore_threshold=False, owner_str=""):
     check_consumables uses this with the normal HP/status thresholds; Teatime, Bug Bite,
     Pluck and a flung berry force it through with ignore_threshold, which is what "eats
     the berry regardless" means.
+
+    Cheek Pouch is charged here rather than inside the resolver because a non-empty log
+    line is exactly the signal that a berry went down: every branch below that returns
+    something has already called eaten(), and every branch that eats returns something.
     """
+    note = _resolve_berry(pokemon, item, ignore_threshold, owner_str)
+    if note:
+        note += cheek_pouch_refill(pokemon, owner_str)
+    return note
+
+
+def _resolve_berry(pokemon, item, ignore_threshold=False, owner_str=""):
+    """The berry itself. Wrapped by apply_berry_effect, which pays Cheek Pouch after."""
     item = (item or '').lower().replace(' ', '-')
     data = CONSUMABLE_DATABASE.get(item)
     if not data or pokemon is None or pokemon.get('current_hp', 0) <= 0:
@@ -2500,20 +2662,26 @@ def apply_berry_effect(pokemon, item, ignore_threshold=False, owner_str=""):
         if get_stored_item(pokemon) == item:
             pokemon['held_item'] = 'none'
             mark_item_consumed(pokemon, item)
+            # Block 19. Both of these answer for a berry that came out of this
+            # specimen's OWN slot, which is also what stops the second helping arming a
+            # third: by the time Cud Chew re-eats, the slot is already empty.
+            pokemon[LAST_BERRY_MARKER] = item
+            if get_active_ability(pokemon) in CUD_CHEW_ABILITIES:
+                pokemon[CUD_CHEW_MARKER] = [item, CUD_CHEW_DELAY]
         # Belch needs to know this happened, and it has to outlive a switch, so it lives
         # on the specimen rather than in the volatiles that get wiped on withdrawal.
         pokemon['_ate_berry'] = True
 
-    if behavior == 'heal_flat' and (ignore_threshold or hp_pct <= data.get('threshold', 0.5)):
+    if behavior == 'heal_flat' and (ignore_threshold or hp_pct <= berry_threshold(pokemon, data.get('threshold', 0.5))):
         if not ignore_threshold or current_hp < max_hp:
-            heal_amt = data.get('value', 10)
+            heal_amt = ripened(pokemon, data.get('value', 10))
             pokemon['current_hp'] = min(max_hp, current_hp + heal_amt)
             eaten()
             return f"{data.get('icon', '🫐')} {who}**{name}** consumed its {label}! (+{heal_amt} HP)\n"
 
-    elif behavior == 'heal_pct' and (ignore_threshold or hp_pct <= data.get('threshold', 0.5)):
+    elif behavior == 'heal_pct' and (ignore_threshold or hp_pct <= berry_threshold(pokemon, data.get('threshold', 0.5))):
         if not ignore_threshold or current_hp < max_hp:
-            heal_amt = max(1, math.floor(max_hp * data.get('value', 0.25)))
+            heal_amt = max(1, math.floor(max_hp * ripened(pokemon, data.get('value', 0.25))))
             pokemon['current_hp'] = min(max_hp, current_hp + heal_amt)
             eaten()
             return f"{data.get('icon', '🍋')} {who}**{name}** consumed its {label}! (+{heal_amt} HP)\n"
@@ -2525,9 +2693,9 @@ def apply_berry_effect(pokemon, item, ignore_threshold=False, owner_str=""):
             eaten()
             return f"{data.get('icon', '🌿')} {who}**{name}** consumed its {label} and cured its {status_name}!\n"
 
-    elif behavior == 'stat_boost' and (ignore_threshold or hp_pct <= data.get('threshold', 0.25)):
+    elif behavior == 'stat_boost' and (ignore_threshold or hp_pct <= berry_threshold(pokemon, data.get('threshold', 0.25))):
         stat_target = data.get('stat', 'attack')
-        boost_val = data.get('value', 1)
+        boost_val = ripened(pokemon, data.get('value', 1))
         if 'stat_stages' not in pokemon:
             pokemon['stat_stages'] = {stat: 0 for stat in ALL_STAT_STAGES}
 
@@ -2675,6 +2843,12 @@ def leave_field(pokemon):
         # Truant starts afresh: whatever it was owed, it acts on the turn it
         # arrives back. Left set, a Slaking could bank its loafing on the bench.
         pokemon.pop(TRUANT_MARKER, None)
+        # A half-chewed cud does not survive the walk to the bench, and neither does
+        # "used something up this turn" - the turn it referred to is over for this
+        # specimen. Harvest's memory of WHICH berry deliberately does survive: the
+        # ability asks whether the hands are empty, not how long they have been.
+        pokemon.pop(CUD_CHEW_MARKER, None)
+        pokemon.pop(ITEM_SPENT_MARKER, None)
         # Palafin transforms on the way OUT, and comes back a hero. Requested here
         # rather than done here for the usual reason: this function is synchronous
         # and the species tables are not.
@@ -4954,6 +5128,11 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if (mine != 'none' and not is_transferable_item(mine)) or \
            (theirs != 'none' and not is_transferable_item(theirs)):
             return 0, "But it failed! Those items cannot be swapped!", 'none', [], 0
+        # ...and so does a Sticky Hold, on either end of the swap. Half a Trick is not a
+        # thing the move can do.
+        if item_is_stuck(defender) or item_is_stuck(attacker):
+            return 0, (f"But it failed! {defender['name'].capitalize()}'s grip is "
+                       f"too sticky!"), 'none', [], 0
 
         attacker['held_item'] = theirs
         defender['held_item'] = mine
@@ -4973,6 +5152,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         theirs = get_stored_item(defender)
         if not is_transferable_item(theirs):
             return 0, "But it failed! There is nothing to corrode!", 'none', [], 0
+        if item_is_stuck(defender):
+            return 0, (f"But it failed! {defender['name'].capitalize()}'s Sticky Hold "
+                       f"kept hold of its {pretty_item(theirs)}!"), 'none', [], 0
 
         defender['held_item'] = 'none'
         return 0, (f"🧪 The corrosive gas dissolved {defender['name'].capitalize()}'s "
@@ -6234,9 +6416,14 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             if strike == 0 and defender_item in berry_resist_map:
                 protected_type = berry_resist_map[defender_item]
                 if move_type == protected_type and (type_multiplier > 1.0 or protected_type == 'normal'):
-                    hit_damage = math.floor(hit_damage * 0.5)
+                    # Ripen doubles what a berry is worth here too: half again off a
+                    # half, so the bite taken out of the hit is a quarter rather than a
+                    # half. The resist berries never reach apply_berry_effect, which is
+                    # why this is the one place the doubling is written out by hand.
+                    hit_damage = math.floor(hit_damage / ripened(defender, 2))
                     defender['held_item'] = 'none'
                     defender['_ate_berry'] = True
+                    defender[LAST_BERRY_MARKER] = defender_item
                     mark_item_consumed(defender, defender_item)
                     defender_item = 'none' 
                     msg += f" 🛡️ {defender['name'].capitalize()}'s {protected_type.title()}-Resistance Berry weakened the damage! "
@@ -6502,6 +6689,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         if def_ability in ITEM_THIEF_ON_CONTACT:
             _loot = get_stored_item(attacker)
             if (_loot and _loot != 'none' and is_transferable_item(_loot)
+                    and not item_is_stuck(attacker)
                     and get_stored_item(defender) in (None, '', 'none')):
                 attacker['held_item'] = 'none'
                 defender['held_item'] = _loot
@@ -6565,6 +6753,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
             and move.get('class') != 'status'):
         _prize = get_stored_item(defender)
         if (_prize and _prize != 'none' and is_transferable_item(_prize)
+                and not item_is_stuck(defender)
                 and get_stored_item(attacker) in (None, '', 'none')):
             defender['held_item'] = 'none'
             attacker['held_item'] = _prize
@@ -6704,7 +6893,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     elif move_name == 'knock-off' and damage > 0:
         target_item_check = get_stored_item(defender)
 
-        if is_transferable_item(target_item_check):
+        # The damage bonus is paid for having an item to knock off, and a Sticky Hold
+        # holder still has one - so only the removal is refused here, not the boost,
+        # which was applied long before this point.
+        if is_transferable_item(target_item_check) and item_is_stuck(defender):
+            msg += (f" 🧲 {defender['name'].capitalize()}'s Sticky Hold kept its "
+                    f"{pretty_item(target_item_check)} exactly where it was!")
+        elif is_transferable_item(target_item_check):
             defender['held_item'] = 'none'
             msg += f" 💥 {attacker['name'].capitalize()} knocked off {defender['name'].capitalize()}'s {target_item_check.replace('-', ' ').title()}!"
 
@@ -6712,9 +6907,13 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
     elif move_name in ['thief', 'covet'] and damage > 0:
         atk_item = get_stored_item(attacker)
         def_item = get_stored_item(defender)
-        
+
+        if atk_item == 'none' and is_transferable_item(def_item) and item_is_stuck(defender):
+            msg += (f" 🧲 {attacker['name'].capitalize()} could not prise the "
+                    f"{pretty_item(def_item)} out of "
+                    f"{defender['name'].capitalize()}'s Sticky Hold!")
         # Can only steal if the attacker's hands are empty and the defender's item is removable!
-        if atk_item == 'none' and is_transferable_item(def_item):
+        elif atk_item == 'none' and is_transferable_item(def_item):
             attacker['held_item'] = defender.get('held_item')
             defender['held_item'] = 'none'
             msg += f" 🥷 {attacker['name'].capitalize()} stole the target's {def_item.replace('-', ' ').title()}!"
@@ -6744,7 +6943,9 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         target_item = get_stored_item(defender)
         if is_berry(target_item) and is_transferable_item(target_item):
             defender['held_item'] = 'none'
-            mark_item_consumed(defender, target_item)
+            # Destroyed on the attacker's initiative, so there is nothing left for a
+            # Pickup opposite to recover - see the by_owner note on mark_item_consumed.
+            mark_item_consumed(defender, target_item, by_owner=False)
             msg += (f" 🔥 {defender['name'].capitalize()}'s {pretty_item(target_item)} "
                     f"was burnt to a crisp!")
 
@@ -6753,7 +6954,7 @@ def calculate_damage(attacker, defender, move, weather='none', terrain='none', t
         target_item = get_stored_item(defender)
         if is_berry(target_item) and is_transferable_item(target_item):
             defender['held_item'] = 'none'
-            mark_item_consumed(defender, target_item)
+            mark_item_consumed(defender, target_item, by_owner=False)
             snack = apply_berry_effect(attacker, target_item, ignore_threshold=True)
             msg += (f" 😋 {attacker['name'].capitalize()} ate "
                     f"{defender['name'].capitalize()}'s {pretty_item(target_item)}!")
