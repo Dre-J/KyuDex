@@ -568,49 +568,86 @@ class BackpackPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
 class MarketView(discord.ui.View):
+    # Discord refuses any embed carrying more than 25 fields, and one field is one
+    # item, so the shelf has a hard ceiling no matter how the catalogue grows. Ten
+    # to a page stays readable and leaves the ceiling a long way off.
+    ITEMS_PER_PAGE = 10
+
     def __init__(self, catalog):
         super().__init__(timeout=120)
         self.catalog = catalog
         self.current_category = "all"
-        
+        self.current_page = 0
+
         # Add the dropdown dynamically
         self.select_menu = discord.ui.Select(
             placeholder="Select an equipment category...",
             options=CATEGORY_OPTIONS,
-            custom_id="market_category_select"
+            custom_id="market_category_select",
+            row=0
         )
         self.select_menu.callback = self.select_callback
         self.add_item(self.select_menu)
+        self.update_buttons()
+
+    def visible_items(self):
+        """Everything on sale in the chosen category, in catalogue order."""
+        return [
+            (item_key, data) for item_key, data in self.catalog.items()
+            if data.get("purchasable") is not False
+            and (self.current_category == "all"
+                 or data.get("category") == self.current_category)
+        ]
+
+    @property
+    def max_pages(self):
+        return max(1, math.ceil(len(self.visible_items()) / self.ITEMS_PER_PAGE))
+
+    def update_buttons(self):
+        self.prev_button.disabled = self.current_page <= 0
+        self.next_button.disabled = self.current_page >= self.max_pages - 1
 
     async def select_callback(self, interaction: discord.Interaction):
         # Update the state based on what they clicked
         self.current_category = self.select_menu.values[0]
+        # A shorter category must not strand the reader past its last page.
+        self.current_page = 0
+        self.update_buttons()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
     def generate_embed(self):
         embed = discord.Embed(title="🛒 Ecological Supply Market", color=discord.Color.green())
         embed.description = "Use `!buy [quantity] [item_name]` to requisition supplies."
-        
-        has_items = False
-        for item_key, data in self.catalog.items():
-            if data.get("purchasable") == False:
-                continue
-            # Filter logic
-            if self.current_category != "all" and data.get("category") != self.current_category:
-                continue
-                
-            has_items = True
+
+        stock = self.visible_items()
+        start = self.current_page * self.ITEMS_PER_PAGE
+        for item_key, data in stock[start:start + self.ITEMS_PER_PAGE]:
             embed.add_field(
-                name=f"{data['emoji']} {data['name']} (🪙 {data['price']})", 
-                value=data['desc'], 
+                name=f"{data['emoji']} {data['name']} (🪙 {data['price']})",
+                value=data['desc'],
                 inline=False
             )
-            
-        if not has_items:
+
+        if not stock:
             embed.description += "\n\n*No items available in this category.*"
-            
+        else:
+            embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} "
+                                  f"| {len(stock)} items in stock")
+
         return embed
-    
+
+    @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary, row=1)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, row=1)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+
 class MarketPaginator(discord.ui.View):
     def __init__(self, ctx, listings):
         super().__init__(timeout=180)
