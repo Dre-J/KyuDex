@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from utils.constants import DB_FILE
+from utils.accounts import wipe_user
 from utils import checks
 import time
 import aiosqlite
@@ -906,30 +907,16 @@ class Social(commands.Cog):
                 # ==========================================
                 # 2. THE CASCADING DATA PURGE
                 # ==========================================
-                # Remove active market listings
-                await db.execute("DELETE FROM global_market WHERE seller_id = ?", (user_id,))
-                
-                # Clear financial and material assets
-                await db.execute("DELETE FROM user_inventory WHERE user_id = ?", (user_id,))
-                
-                # Wipe active and completed research tasks
-                await db.execute("DELETE FROM field_directives WHERE user_id = ?", (user_id,))
-                
-                # Erase local sector contributions
-                await db.execute("DELETE FROM guild_members WHERE user_id = ?", (user_id,))
-                
-                # Terminate the tactical roster bindings
-                await db.execute("DELETE FROM user_party WHERE user_id = ?", (user_id,))
-                
-                # Release all captured specimens back into the void
-                await db.execute("DELETE FROM caught_pokemon WHERE user_id = ?", (user_id,))
-                
-                # Finally, execute the core profile
-                await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-                # ==========================================
-                
+                # One cascade, shared with !reset and !privacy delete. This command used
+                # to carry its own copy of the list, and that copy had fallen four
+                # tables behind - it left the target's TMs, alerts, deployed specimens
+                # and GTS deposits sitting in the database, the last two pointing at
+                # Pokemon it had just deleted.
+                removed = await wipe_user(db, user_id, keep_account=False)
+
                 # 3. Commit the eradication
                 await db.commit()
+                print(f"ADMIN WIPE {user_id}: {removed}")
             
             embed = discord.Embed(
                 title="☣️ ECOLOGICAL PURGE AUTHORIZED",
