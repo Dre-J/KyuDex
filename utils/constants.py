@@ -507,6 +507,31 @@ TM_SHOP = {
     'swords-dance': 1500
 }
 
+# ==========================================
+# 🎓 ONBOARDING: THE STARTER KIT
+# ==========================================
+# A starter used to roll its genetics like any wild specimen, 0-31 on all six. That is
+# the one place a random roll cannot be allowed: the starter is the specimen people name
+# and keep, and rolling it randomly means some trainers lose a coin flip before they
+# have typed a second command. At level 5 the difference is barely mechanical - it is
+# the FEELING of having started behind, which no amount of compensating tokens fixes.
+#
+# So: a floor, not a fixed value. Three perfect stats guaranteed, the rest rolled in a
+# narrow band. Every starter is good, no two are identical, and nobody starts behind.
+STARTER_PERFECT_IVS = 3      # stats guaranteed to come out at 31
+STARTER_IV_FLOOR = 20        # the worst any remaining stat can roll
+STARTER_IV_CEILING = 31
+
+# Never. A shiny starter turns every reset into a slot machine, and no cooldown fully
+# fixes a slot machine - see utils/accounts.py, which is the other half of this rule.
+STARTER_CAN_BE_SHINY = False
+
+# Enough for a few Great Balls or one cheap piece of battle equipment, not enough to
+# skip the early game. A Poke Ball is free and unlimited, so the first catch is never
+# blocked; Great Balls are the first real upgrade and the first thing worth spending on.
+STARTER_TOKENS = 500
+STARTER_ITEMS = {'greatball': 5}
+
 BIOLOGICAL_TRAITS = {
     'weather_setters': {
         'drizzle': ('rain', "🌧️ **{owner} {name}**'s Drizzle made it rain!\n"),

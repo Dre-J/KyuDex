@@ -7,8 +7,8 @@ import datetime
 import random
 import math
 import uuid
-from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS
-from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon
+from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS, STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY, STARTER_IV_CEILING
+from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
@@ -119,7 +119,9 @@ class StarterSelect(discord.ui.Select):
         starters = {
             'Kanto': [('Bulbasaur', '1', '🌿 Grass/Poison'), ('Charmander', '4', '🔥 Fire'), ('Squirtle', '7', '💧 Water')],
             'Johto': [('Chikorita', '152', '🌿 Grass'), ('Cyndaquil', '155', '🔥 Fire'), ('Totodile', '158', '💧 Water')],
-            'Hoenn': [('Treecko', '252', '🌿 Grass'), ('Torchic', '255', '🔥 Fire'), ('Totodile', '258', '💧 Water')],
+            # 258 is Mudkip. This row said 'Totodile', so the Hoenn water starter was
+            # offered under the Johto one's name while handing over the right species.
+            'Hoenn': [('Treecko', '252', '🌿 Grass'), ('Torchic', '255', '🔥 Fire'), ('Mudkip', '258', '💧 Water')],
             'Sinnoh': [('Turtwig', '387', '🌿 Grass'), ('Chimchar', '390', '🔥 Fire'), ('Piplup', '393', '💧 Water')],
             'Unova': [('Snivy', '495', '🌿 Grass'), ('Tepig', '498', '🔥 Fire'), ('Oshawott', '501', '💧 Water')],
             'Kalos': [('Chespin', '650', '🌿 Grass'), ('Fennekin', '653', '🔥 Fire'), ('Froakie', '656', '💧 Water')],
@@ -149,19 +151,36 @@ class StarterSelect(discord.ui.Select):
                 # ==========================================
                 # 1. CREATE THE RESEARCHER PROFILE
                 # ==========================================
-                # Initialize with 0 tokens and the default 'canopy' visa
+                # Initialize with the onboarding grant and the default 'canopy' visa
                 await db.execute("""
-                    INSERT INTO users (user_id, eco_tokens, unlocked_visas) 
-                    VALUES (?, 0, 'canopy')
-                """, (user_id,))
+                    INSERT INTO users (user_id, eco_tokens, unlocked_visas)
+                    VALUES (?, ?, 'canopy')
+                """, (user_id, STARTER_TOKENS))
+
+                # A handful of Great Balls. Poke Balls are free and unlimited, so the
+                # first catch was never blocked - what a new trainer lacked was the
+                # first upgrade, and buying one took a while at zero tokens.
+                for item_name, quantity in STARTER_ITEMS.items():
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, item_name) DO UPDATE SET
+                            quantity = quantity + excluded.quantity
+                    """, (user_id, item_name, quantity))
                 
                 # ==========================================
                 # 2. GENERATE THE BIOLOGICAL SPECIMEN
                 # ==========================================
                 # Roll genetics and traits
-                ivs = {stat: random.randint(0, 31) for stat in ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']}
+                # A guaranteed floor rather than a free roll - see STARTER_PERFECT_IVS.
+                # The starter is the specimen people name and keep, and it is the one
+                # roll a trainer has no chance to do anything about.
+                ivs = roll_starter_ivs()
                 nature = random.choice(NATURES)
-                is_shiny = 1 if random.randint(1, 4096) == 1 else 0
+
+                # Never shiny. A shiny starter makes every reset a slot machine, and
+                # no cooldown fully answers a slot machine.
+                is_shiny = 1 if STARTER_CAN_BE_SHINY and random.randint(1, 4096) == 1 else 0
                 
                 # ==========================================
                 # FETCH THE SPECIES' ABILITY & GENDER RATE
@@ -231,8 +250,17 @@ class StarterSelect(discord.ui.Select):
                 await db.commit()
             
             shiny_icon = "✨ " if is_shiny else ""
+            perfect = sum(1 for value in ivs.values() if value == STARTER_IV_CEILING)
+            kit = ", ".join(f"{qty}x {name.replace('-', ' ').title()}"
+                            for name, qty in STARTER_ITEMS.items())
             await interaction.response.edit_message(
-                content=f"🎉 **Registration Complete!**\n\nYou have secured your field license. Your new symbiotic partner, {shiny_icon}**{species_name}**, has been registered to your roster.\n\nUse `!profile` to view your clearance or `!expedition canopy` to begin your research!", 
+                content=(f"🎉 **Registration Complete!**\n\nYou have secured your field "
+                         f"license. Your new symbiotic partner, {shiny_icon}**{species_name}**, "
+                         f"has been registered to your roster with **{perfect} perfect "
+                         f"genetic markers** — every starter is issued screened stock.\n\n"
+                         f"🎒 **Starter kit:** 🪙 {STARTER_TOKENS:,} Eco Tokens, {kit}\n\n"
+                         f"Use `!profile` to view your clearance or `!expedition canopy` "
+                         f"to begin your research!"),
                 view=None
             )
             
