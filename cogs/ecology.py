@@ -7,11 +7,12 @@ import datetime
 import random
 import math
 import uuid
-from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS, STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY, STARTER_IV_CEILING
+from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS, STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY, STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
+from utils.trading import mark_as_starter
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 # Every sprite path in this cog goes through utils.sprites now - the box browser, the
 # wild spawns, the expedition encounter, the admin spawn and the catch confirmation.
@@ -237,6 +238,13 @@ class StarterSelect(discord.ui.Select):
                     moves[0], moves[1], moves[2], moves[3]
                 ))
                 
+                # Marked as the starter, which is what makes it non-tradeable. Written
+                # as a follow-up UPDATE rather than a column in the INSERT above so
+                # that registration still works on a database where the trade-ledger
+                # migration has not been run - the same way every other new column in
+                # this codebase is read.
+                await mark_as_starter(db, instance_id)
+
                 # ==========================================
                 # 3. ASSIGN THE TACTICAL ROSTER
                 # ==========================================
@@ -2555,8 +2563,11 @@ class Ecology(commands.Cog):
                 # 🌐 GLOBAL BROADCAST MECHANIC
                 # ==========================================
                 if is_legendary or is_mythical or is_shiny:
-                    OFFICIAL_BROADCAST_CHANNEL_ID = 1491524019495895171 #Kyu Official Server: 1487606904321736764 / Kyu Beta: 1491524019495895171
-                    broadcast_channel = self.bot.get_channel(OFFICIAL_BROADCAST_CHANNEL_ID)
+                    # The id and its beta counterpart live in constants.CHANNELS now,
+                    # switched by ACTIVE_SERVER, rather than here with the other
+                    # server's id surviving in a trailing comment.
+                    broadcast_channel = (self.bot.get_channel(OFFICIAL_BROADCAST_CHANNEL_ID)
+                                         if OFFICIAL_BROADCAST_CHANNEL_ID else None)
                     
                     if broadcast_channel:
                         rarity_parts = []

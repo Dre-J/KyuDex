@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 from utils.constants import DB_FILE
 from utils.accounts import wipe_user
+from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
+                           log_trade, snapshot)
 from utils import checks
 import time
 import aiosqlite
@@ -66,20 +68,41 @@ class GiftPokemonView(discord.ui.View):
 
         try:
             async with aiosqlite.connect(self.db_file) as db:
-                # 1. Update the specimen's owner
+                # 0. A starter does not leave. Checked HERE rather than only when the
+                #    gift was proposed, because the proposal is a message that keeps
+                #    working - and a gift is the simplest way to move a farmed bundle.
+                refusal = await blocked_from_trading(db, tag, author_id)
+                if refusal:
+                    for child in self.children:
+                        child.disabled = True
+                    return await interaction.response.edit_message(
+                        content=refusal, embed=None, view=self)
+
+                # 1. Snapshot BEFORE the transfer, while it is still the sender's.
+                given = await snapshot(db, [tag])
+
+                # 2. Update the specimen's owner
                 await db.execute(
                     "UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ? AND user_id = ?",
                     (target_id, tag, author_id)
                 )
-                
-                # 2. Safety Sweep: Remove from active partner if applicable
+
+                # 3. Safety Sweep: Remove from active partner if applicable
                 async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (author_id,)) as cursor:
                     partner = await cursor.fetchone()
                     if partner and partner[0] == tag:
                         await db.execute("UPDATE users SET active_partner = NULL WHERE user_id = ?", (author_id,))
-                
+
+                await log_trade(db, trade_type='gift', user_a=author_id, user_b=target_id,
+                                side_a=given, side_b=[],
+                                guild_id=getattr(interaction.guild, 'id', None))
+
                 await db.commit()
-                
+
+            await announce_trade(interaction.client, trade_type='gift',
+                                 user_a=self.author, user_b=self.target,
+                                 side_a=given, side_b=[])
+
             embed = discord.Embed(
                 title="🎁 Specimen Transferred!",
                 description=f"Successfully transferred **{self.specimen['name'].capitalize()}** (Lvl {self.specimen['level']}) to {self.target.mention}.",
@@ -308,8 +331,18 @@ class AddSpecimenModal(discord.ui.Modal, title="Add Specimen(s) to Exchange"):
 
             # 3. Add each fetched specimen to the offer list
             added_count = 0
+            refused = []
             for pokemon in found_pokemon:
                 poke_name, poke_level, exact_tag, pokedex_id, held_item, box_num = pokemon
+
+                # A starter never reaches the table. Refused as it is OFFERED rather
+                # than when the trade is confirmed, so the other player never sees a
+                # specimen appear and then vanish.
+                async with aiosqlite.connect(DB_FILE) as guard_db:
+                    refusal = await blocked_from_trading(guard_db, exact_tag, user_id)
+                if refusal:
+                    refused.append(refusal)
+                    continue
 
                 # Check if already offered
                 if self.user == self.trade_view.player1 and any(p['tag'] == exact_tag for p in self.trade_view.p1_offer):
@@ -335,7 +368,10 @@ class AddSpecimenModal(discord.ui.Modal, title="Add Specimen(s) to Exchange"):
                 added_count += 1
 
             if added_count == 0:
-                 return await interaction.response.send_message("All of those specimens are already in your offer!", ephemeral=True)
+                 return await interaction.response.send_message(
+                     refused[0] if refused
+                     else "All of those specimens are already in your offer!",
+                     ephemeral=True)
 
             # 4. Un-ready players and update UI
             self.trade_view.p1_ready = False
@@ -471,6 +507,22 @@ class ActiveTradeView(discord.ui.View):
             try:
                 # 1. LOCK THE ECOSYSTEM (Start Transaction)
                 async with aiosqlite.connect(DB_FILE) as db:
+                    # Checked once more at the point of no return. The offer builder
+                    # already refuses a starter, but the trade window is a live message
+                    # and the guard that matters is the one nearest the write.
+                    for offer, owner in ((self.p1_offer, user_a_id),
+                                         (self.p2_offer, user_b_id)):
+                        stopped = await first_blocked(db, [p['tag'] for p in offer], owner)
+                        if stopped:
+                            return await interaction.response.edit_message(
+                                content=f"❌ **Trade Aborted:** {stopped[1]}",
+                                view=None, embed=None)
+
+                    # Snapshot both sides BEFORE anything moves, so the record survives
+                    # the evolutions this trade is about to trigger.
+                    snap_a = await snapshot(db, [p['tag'] for p in self.p1_offer])
+                    snap_b = await snapshot(db, [p['tag'] for p in self.p2_offer])
+
                     await db.execute("BEGIN TRANSACTION")
 
                     try:
@@ -544,7 +596,15 @@ class ActiveTradeView(discord.ui.View):
                             if b_partner and b_partner[0] in p2_tags:
                                 await cursor.execute("UPDATE users SET active_partner = NULL WHERE user_id = ?", (user_b_id,))
                             
-                            # 5. COMMIT THE BATCH TRANSFER
+                            # 5. RECORD IT, then COMMIT THE BATCH TRANSFER.
+                            # Inside the transaction on purpose: a trade that rolls
+                            # back must not leave a record of a transfer that never
+                            # happened.
+                            await log_trade(db, trade_type='trade',
+                                            user_a=user_a_id, user_b=user_b_id,
+                                            side_a=snap_a, side_b=snap_b,
+                                            guild_id=getattr(interaction.guild, 'id', None))
+
                             await db.commit()
 
                     except ValueError as ve:
@@ -562,8 +622,12 @@ class ActiveTradeView(discord.ui.View):
                 final_embed = self.generate_embed()
                 final_embed.color = discord.Color.green()
                 final_embed.title = "✅ Exchange Completed Successfully!"
-                
+
                 await interaction.response.edit_message(embed=final_embed, view=self)
+
+                await announce_trade(interaction.client, trade_type='trade',
+                                     user_a=self.player1, user_b=self.player2,
+                                     side_a=snap_a, side_b=snap_b)
             finally:
                 # UNLOCK NO MATTER WHAT HAPPENS
                 self.active_trades.discard(self.player1.id)
