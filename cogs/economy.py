@@ -4,6 +4,8 @@ import random
 import discord
 from discord.ext import commands
 from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP, CATEGORY_OPTIONS
+from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
+                           suggest_species)
 from utils import checks
 import math
 import aiosqlite
@@ -202,12 +204,73 @@ class GTSSearchPaginator(discord.ui.View):
                 print(f"GTS 1-Click Swap Error: {e}")
                 await interaction.followup.send("❌ A database error occurred during the transfer.")
 
+class SpeciesPicker(discord.ui.View):
+    """
+    A dropdown of species, for when a typed name did not resolve.
+
+    There is no dropdown of ALL 1344 species anywhere, and there cannot be: Discord
+    allows 25 options in a select menu. So the flow is to get the player to a list
+    short enough to BE one - either the species actually on the GTS, or the closest
+    matches to whatever they typed - and let them click instead of spell.
+    """
+    def __init__(self, owner, candidates, on_pick, *, placeholder="Pick a species..."):
+        super().__init__(timeout=120)
+        self.owner = owner
+        self.on_pick = on_pick
+
+        menu = discord.ui.Select(
+            placeholder=placeholder,
+            options=[discord.SelectOption(label=pretty_species(name), value=name)
+                     for name in candidates[:MAX_CHOICES]])
+        menu.callback = self._picked
+        self.menu = menu
+        self.add_item(menu)
+
+    async def _picked(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner.id:
+            return await interaction.response.send_message(
+                "This isn't your search.", ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await self.on_pick(interaction, self.menu.values[0])
+
+
+async def offer_species_choices(interaction, typed, on_pick, *, candidates=None):
+    """
+    Turn an unrecognised species name into a dropdown, or explain why it cannot.
+
+    Returns nothing useful - it either sends a picker or sends a refusal. The point is
+    that it never accepts the name, because accepting an unrecognised name is exactly
+    what left deposits sitting on the GTS that could never match anything.
+    """
+    choices = candidates if candidates is not None else suggest_species(typed)
+
+    send = (interaction.followup.send if interaction.response.is_done()
+            else interaction.response.send_message)
+
+    if not choices:
+        return await send(
+            f"❓ No species matches **{typed}**. Check the spelling — the network "
+            f"lists them the way the Pokédex does, so Mr. Mime and Nidoran♀ are "
+            f"`mr-mime` and `nidoran-f`.",
+            ephemeral=True)
+
+    await send(
+        f"❓ **{typed}** isn't a species the network recognises. "
+        f"Did you mean one of these?",
+        view=SpeciesPicker(interaction.user, choices, on_pick),
+        ephemeral=True)
+
+
 class GTSSearchModal(discord.ui.Modal, title="GTS Network Search"):
     wanted_species = discord.ui.TextInput(
         label="Specimen Wanted",
-        placeholder="e.g., Eevee",
-        min_length=2,
-        max_length=20
+        placeholder="Leave blank to browse what's on the network",
+        required=False,
+        # 34 species names are longer than twenty characters, so the old cap made them
+        # literally impossible to ask for. The longest is 27.
+        max_length=30
     )
     wanted_gender = discord.ui.TextInput(
         label="Gender (M / F / Any)",
@@ -231,10 +294,10 @@ class GTSSearchModal(discord.ui.Modal, title="GTS Network Search"):
 
     async def on_submit(self, interaction: discord.Interaction):
         # 1. Parse the Inputs
-        species = self.wanted_species.value.strip().capitalize()
+        typed = self.wanted_species.value.strip()
         gender = self.wanted_gender.value.strip().upper()
         if gender not in ["M", "F"]: gender = "ANY"
-        
+
         is_shiny = 1 if self.shiny_only.value.strip().upper() == "Y" else 0
 
         try:
@@ -245,7 +308,43 @@ class GTSSearchModal(discord.ui.Modal, title="GTS Network Search"):
         except ValueError:
             return await interaction.response.send_message("⚠️ Invalid level format.", ephemeral=True)
 
+        criteria = (min_lvl, max_lvl, gender, is_shiny)
+
+        async def run(picked_interaction, species):
+            await self.run_search(picked_interaction, species, criteria)
+
+        # Blank means "show me what is actually out there" - the one place a dropdown
+        # of everything available really is possible, because what is ON the network
+        # is a handful of species rather than all 1344.
+        if not typed:
+            async with aiosqlite.connect(self.db_file) as db:
+                async with db.execute(
+                        "SELECT DISTINCT dep_species FROM gts_deposits WHERE user_id != ?"
+                        " ORDER BY dep_species", (str(interaction.user.id),)) as cursor:
+                    stock = [row[0] for row in await cursor.fetchall()]
+
+            listed = [resolve_species(name) or name for name in stock]
+            if not listed:
+                return await interaction.response.send_message(
+                    "📭 Nothing is on the GTS network right now.", ephemeral=True)
+            return await interaction.response.send_message(
+                "🌐 Species currently on the network:",
+                view=SpeciesPicker(interaction.user, listed, run,
+                                   placeholder="Browse the network..."),
+                ephemeral=True)
+
+        species = resolve_species(typed)
+        if not species:
+            return await offer_species_choices(interaction, typed, run)
+
         await interaction.response.defer()
+        await self.run_search(interaction, species, criteria)
+
+    async def run_search(self, interaction, species, criteria):
+        """The search itself, reachable from a typed name or from the dropdown."""
+        min_lvl, max_lvl, gender, is_shiny = criteria
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
         # 2. Query the Database for Matches
         query = """
@@ -278,9 +377,10 @@ class GTSSearchModal(discord.ui.Modal, title="GTS Network Search"):
 class GTSDepositModal(discord.ui.Modal, title="Global Trade Station Deposit"):
     req_species = discord.ui.TextInput(
         label="Species you want to receive",
-        placeholder="e.g., Bulbasaur",
+        placeholder="e.g., Bulbasaur, Mr. Mime, Nidoran F",
         min_length=2,
-        max_length=20
+        # 34 species names are longer than twenty characters; the longest is 27.
+        max_length=30
     )
     req_level = discord.ui.TextInput(
         label="Desired Level Range",
@@ -334,11 +434,37 @@ class GTSDepositModal(discord.ui.Modal, title="Global Trade Station Deposit"):
         # 3. Parse Shiny Requirement (Y/N to 1/0)
         req_shiny_val = 1 if self.req_shiny.value.strip().upper() == "Y" else 0
 
-        req_species_val = self.req_species.value.strip().capitalize()
+        # 4. Resolve the requested species against the species table.
+        # This is the whole bug: the name used to be `.capitalize()`d and stored as
+        # typed. The matching engine compares two stored strings, so "Mr. Mime" against
+        # a database that says `mr-mime` produced a deposit that was accepted, listed,
+        # and could never match anything - with nothing anywhere to say why.
+        typed = self.req_species.value.strip()
+        species = resolve_species(typed)
+
+        if not species:
+            async def finish(picked_interaction, chosen):
+                await self.finalise(picked_interaction, chosen, min_lvl, max_lvl,
+                                    req_gender_val, req_shiny_val)
+            return await offer_species_choices(interaction, typed, finish)
+
+        await interaction.response.defer(ephemeral=True)
+        await self.finalise(interaction, species, min_lvl, max_lvl,
+                            req_gender_val, req_shiny_val)
+
+    async def finalise(self, interaction, species, min_lvl, max_lvl,
+                       req_gender_val, req_shiny_val):
+        """Write the deposit. Reached from a resolved name or from the dropdown."""
+        user_id = str(interaction.user.id)
         gts_id = str(uuid.uuid4())[:8]
 
-        # 4. Defer response while we hit the database
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        # Stored canonically on BOTH sides, so a future deposit typed any other way
+        # still resolves to the same string these queries compare.
+        req_species_val = species
+        deposited = resolve_species(self.specimen['name']) or self.specimen['name']
 
         async with aiosqlite.connect(self.db_file) as db:
             # CHECK LIMITS FIRST
@@ -352,14 +478,17 @@ class GTSDepositModal(discord.ui.Modal, title="Global Trade Station Deposit"):
                 INSERT INTO gts_deposits 
                 (gts_id, user_id, instance_id, dep_species, dep_level, dep_gender, req_species, req_min_level, req_max_level, req_gender, req_is_shiny, message)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (gts_id, user_id, self.specimen['instance_id'], self.specimen['name'].capitalize(), self.specimen['level'], self.specimen['gender'], 
+            """, (gts_id, user_id, self.specimen['instance_id'], deposited, self.specimen['level'], self.specimen['gender'],
                   req_species_val, min_lvl, max_lvl, req_gender_val, req_shiny_val, self.message.value))
-            
+
             await db.commit()
 
         # 6. Trigger the Matching Engine in the background
-        await interaction.followup.send(f"✅ **{self.specimen['name'].capitalize()}** successfully uploaded to the GTS network!\n*Searching for compatible exchange partners...*")
-        
+        await interaction.followup.send(
+            f"✅ **{pretty_species(deposited)}** uploaded to the GTS network in "
+            f"exchange for a **{pretty_species(req_species_val)}**!\n"
+            f"*Searching for compatible exchange partners...*")
+
         await process_gts_match(interaction.client, self.db_file, gts_id)
 
 async def process_gts_match(bot, db_file, new_gts_id):
@@ -435,8 +564,11 @@ async def process_gts_match(bot, db_file, new_gts_id):
                 """, (n_user, n_instance, match_user_id, match_instance))
                 
                 # 🚨 INLINE THE ALERTS DIRECTLY INTO THE TRANSACTION!
-                alert_1 = f"🤝 **GTS Update:** Your deposited **{n_dep_species}** was successfully traded for a **{n_req_species}**! It is now in your PC."
-                alert_2 = f"🤝 **GTS Update:** Your deposited **{n_req_species}** was successfully traded for a **{n_dep_species}**! It is now in your PC."
+                # Prettified for the reader: species are stored canonically now, which
+                # means 'mr-mime' rather than 'Mr. Mime'.
+                dep_label, req_label = pretty_species(n_dep_species), pretty_species(n_req_species)
+                alert_1 = f"🤝 **GTS Update:** Your deposited **{dep_label}** was successfully traded for a **{req_label}**! It is now in your PC."
+                alert_2 = f"🤝 **GTS Update:** Your deposited **{req_label}** was successfully traded for a **{dep_label}**! It is now in your PC."
                 
                 await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (n_user, alert_1))
                 await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (match_user_id, alert_2))
@@ -873,8 +1005,9 @@ class Economy(commands.Cog):
             lvl_req = f"Lvl {req_min}-{req_max}" if req_min != req_max else f"Lvl {req_min}"
             
             embed.add_field(
-                name=f"ID: `{gts_id}`", 
-                value=f"**Offered:** {dep_sp} (Lvl {dep_lvl})\n**Seeking:** {req_sp} ({lvl_req})", 
+                name=f"ID: `{gts_id}`",
+                value=f"**Offered:** {pretty_species(dep_sp)} (Lvl {dep_lvl})\n"
+                      f"**Seeking:** {pretty_species(req_sp)} ({lvl_req})",
                 inline=False
             )
             
