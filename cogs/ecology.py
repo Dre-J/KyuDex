@@ -801,7 +801,7 @@ class Ecology(commands.Cog):
             if current_pollution == 'spatial_rift':
                 habitat_condition = "The local environment is being warped by invasive dimensional energy."
                 rarity_name = "🛸 ULTRA BEAST"
-                async with db.execute("SELECT pokedex_id, name, capture_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
+                async with db.execute("SELECT pokedex_id, name, capture_rate, gender_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
                     spawned_data = await cursor.fetchone()
             else:
                 # --- STANDARD BIOME & POLLUTION LOGIC ---
@@ -1252,8 +1252,8 @@ class Ecology(commands.Cog):
                 
                 # 🚨 UPDATED: Priority Sorting! Exact matches win, prefix matches randomize.
                 query = """
-                    SELECT pokedex_id, name, capture_rate 
-                    FROM base_pokemon_species 
+                    SELECT pokedex_id, name, capture_rate, gender_rate
+                    FROM base_pokemon_species
                     WHERE name = ? OR name LIKE ?
                     ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, RANDOM() LIMIT 1;
                 """
@@ -1282,7 +1282,7 @@ class Ecology(commands.Cog):
                 if current_pollution == 'spatial_rift':
                     habitat_condition = "The local environment is being warped by invasive dimensional energy."
                     rarity_name = "🛸 ULTRA BEAST"
-                    async with db.execute("SELECT pokedex_id, name, capture_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
+                    async with db.execute("SELECT pokedex_id, name, capture_rate, gender_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
                         spawned_data = await cursor.fetchone()
                 else:
                     # --- STANDARD BIOME & POLLUTION LOGIC ---
