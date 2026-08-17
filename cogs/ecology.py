@@ -11,6 +11,7 @@ from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSION
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
+from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 # Every sprite path in this cog goes through utils.sprites now - the box browser, the
 # wild spawns, the expedition encounter, the admin spawn and the catch confirmation.
@@ -151,23 +152,22 @@ class StarterSelect(discord.ui.Select):
                 # ==========================================
                 # 1. CREATE THE RESEARCHER PROFILE
                 # ==========================================
-                # Initialize with the onboarding grant and the default 'canopy' visa
-                await db.execute("""
-                    INSERT INTO users (user_id, eco_tokens, unlocked_visas)
-                    VALUES (?, ?, 'canopy')
-                """, (user_id, STARTER_TOKENS))
+                # Asked again here, not just in !start. The menu is a message that
+                # keeps working after it is sent, so without this a trainer could hold
+                # one open, pick a starter, and pick a second one from the same message.
+                allowed, reason = await may_choose_starter(db, user_id)
+                if not allowed:
+                    return await interaction.response.edit_message(
+                        content="⚠️ You already have a partner registered to your "
+                                "licence. Use `!reset` if you want to start over.",
+                        view=None)
 
-                # A handful of Great Balls. Poke Balls are free and unlimited, so the
-                # first catch was never blocked - what a new trainer lacked was the
-                # first upgrade, and buying one took a while at zero tokens.
-                for item_name, quantity in STARTER_ITEMS.items():
-                    await db.execute("""
-                        INSERT INTO user_inventory (user_id, item_name, quantity)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(user_id, item_name) DO UPDATE SET
-                            quantity = quantity + excluded.quantity
-                    """, (user_id, item_name, quantity))
-                
+                # Registers a new licence or re-equips a reset one, and hands over the
+                # onboarding kit. A handful of Great Balls: Poke Balls are free and
+                # unlimited, so the first catch was never blocked - what a new trainer
+                # lacked was the first upgrade, at zero tokens.
+                await grant_starter_licence(db, user_id, STARTER_TOKENS, STARTER_ITEMS)
+
                 # ==========================================
                 # 2. GENERATE THE BIOLOGICAL SPECIMEN
                 # ==========================================
@@ -1028,13 +1028,20 @@ class Ecology(commands.Cog):
     async def start_journey(self, ctx):
         user_id = str(ctx.author.id)
         
-        # Check if they already exist
+        # Whether they hold a LICENCE is the wrong question - !reset keeps the licence
+        # and empties the roster, so asking that stranded reset trainers with no
+        # specimens and no way to obtain one.
         async with aiosqlite.connect(DB_FILE) as db:
+            allowed, reason = await may_choose_starter(db, user_id)
 
-            async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                if await cursor.fetchone():
-                    return await ctx.send("⚠️ You are already a registered researcher! You cannot pick another starter.")
-        
+        if not allowed:
+            if reason == 'spent':
+                return await ctx.send(
+                    "⚠️ Your roster is empty, but your licence has already been issued "
+                    "a partner. Use `!reset` if you want to start over from scratch.")
+            return await ctx.send(
+                "⚠️ You are already a registered researcher! You cannot pick another starter.")
+
         # Spawn the interactive UI
         view = discord.ui.View()
         view.add_item(RegionSelect())

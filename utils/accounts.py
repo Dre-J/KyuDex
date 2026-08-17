@@ -141,6 +141,11 @@ async def wipe_user(db, user_id, keep_account=False):
             await db.execute(
                 "UPDATE users SET last_reset_at = CURRENT_TIMESTAMP WHERE user_id = ?",
                 (user_id,))
+        # The licence survives, so "has no specimens" cannot be what !start tests -
+        # it has to be told that this particular empty roster is owed a partner.
+        if await _has_column(db, 'users', 'needs_starter'):
+            await db.execute(
+                "UPDATE users SET needs_starter = 1 WHERE user_id = ?", (user_id,))
     else:
         cursor = await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
         removed['users'] = cursor.rowcount
@@ -170,6 +175,79 @@ async def reset_available_at(db, user_id):
     if days_since >= RESET_COOLDOWN_DAYS:
         return True, 0
     return False, RESET_COOLDOWN_DAYS - days_since
+
+
+async def may_choose_starter(db, user_id):
+    """
+    Whether this trainer may pick a starter, as (allowed: bool, reason: str).
+
+    Three states, and the middle one is the whole reason this function exists:
+
+    - `new`        - no licence at all. The ordinary first run.
+    - `reset`      - a licence with `needs_starter` set. Reset keeps the row, so
+                     without this flag `!start` refused and the account was stranded
+                     with no Pokemon and no way to get one.
+    - `has_roster` - already holds specimens. Refused.
+    - `spent`      - an empty roster that is NOT owed a partner, which is what
+                     releasing every specimen looks like. Refused, because otherwise
+                     the starter kit becomes a repeatable grant of tokens and balls.
+
+    On a database where the migration has not been run, an empty roster is treated as
+    entitlement: unbricking accounts matters more than the farm, and the farm needs a
+    player to release their entire collection each time.
+    """
+    user_id = str(user_id)
+
+    async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        if not await cursor.fetchone():
+            return True, 'new'
+
+    async with db.execute(
+            "SELECT COUNT(*) FROM caught_pokemon WHERE user_id = ?", (user_id,)) as cursor:
+        if (await cursor.fetchone())[0]:
+            return False, 'has_roster'
+
+    if not await _has_column(db, 'users', 'needs_starter'):
+        return True, 'reset'
+
+    async with db.execute(
+            "SELECT COALESCE(needs_starter, 0) FROM users WHERE user_id = ?",
+            (user_id,)) as cursor:
+        row = await cursor.fetchone()
+
+    return (True, 'reset') if row and row[0] else (False, 'spent')
+
+
+async def grant_starter_licence(db, user_id, tokens, items):
+    """
+    Register the trainer and hand over the onboarding kit, for a new OR reset account.
+
+    An upsert rather than an insert, because a reset trainer already has the row - the
+    plain INSERT this replaced raised IntegrityError and told them they were already
+    registered, which was true and unhelpful.
+    """
+    user_id = str(user_id)
+
+    await db.execute("""
+        INSERT INTO users (user_id, eco_tokens, unlocked_visas)
+        VALUES (?, ?, 'canopy')
+        ON CONFLICT(user_id) DO UPDATE SET
+            eco_tokens = eco_tokens + excluded.eco_tokens,
+            unlocked_visas = COALESCE(users.unlocked_visas, 'canopy')
+    """, (user_id, tokens))
+
+    for item_name, quantity in items.items():
+        await db.execute("""
+            INSERT INTO user_inventory (user_id, item_name, quantity)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, item_name) DO UPDATE SET
+                quantity = quantity + excluded.quantity
+        """, (user_id, item_name, quantity))
+
+    # Entitlement spent. Without this the kit could be claimed again from a stale menu.
+    if await _has_column(db, 'users', 'needs_starter'):
+        await db.execute("UPDATE users SET needs_starter = 0 WHERE user_id = ?",
+                         (user_id,))
 
 
 async def account_summary(db, user_id):
