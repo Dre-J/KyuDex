@@ -16,6 +16,7 @@ phrase typed out rather than a button pressed, and a grace period afterwards. Pe
 reset in anger and regret it within the hour, and a button is one misclick away.
 """
 import asyncio
+import traceback
 
 import aiosqlite
 import discord
@@ -59,6 +60,28 @@ class Account(commands.Cog):
     # ==========================================
     # SHARED MACHINERY
     # ==========================================
+    @staticmethod
+    def _forget(container, *keys):
+        """
+        Drop a trainer from a session store, whichever shape that store happens to be.
+
+        These two are not the same kind of object and never have been: combat keeps
+        `active_battles` as a dict keyed by str(id), social keeps `active_trades` as a
+        SET of int ids. Treating both as dicts is what broke this - `set.pop()` takes no
+        arguments, so the TypeError killed the command before it opened the database.
+        """
+        if container is None:
+            return
+        for key in keys:
+            if isinstance(container, dict):
+                container.pop(key, None)
+            elif isinstance(container, (set, frozenset)):
+                if isinstance(container, set):
+                    container.discard(key)
+            elif isinstance(container, list):
+                while key in container:
+                    container.remove(key)
+
     def release_live_sessions(self, user_id):
         """
         Drop the trainer out of any in-memory battle or trade before the wipe.
@@ -67,15 +90,19 @@ class Account(commands.Cog):
         rather than the first: an in-memory battle holding a pointer to a specimen that
         is about to stop existing is the same orphan problem as a stale market listing,
         just in RAM instead of SQLite.
+
+        Both spellings of the id are tried because the two stores disagree about which
+        one they use, and being wrong here is cheap while guessing wrong is not.
         """
         combat = self.bot.get_cog("Combat")
-        if combat and hasattr(combat, 'active_battles'):
-            combat.active_battles.pop(str(user_id), None)
+        if combat is not None:
+            self._forget(getattr(combat, 'active_battles', None),
+                         str(user_id), int(user_id))
 
         social = self.bot.get_cog("Social")
-        if social and hasattr(social, 'active_trades'):
-            social.active_trades.pop(int(user_id), None)
-            social.active_trades.pop(str(user_id), None)
+        if social is not None:
+            self._forget(getattr(social, 'active_trades', None),
+                         int(user_id), str(user_id))
 
     async def confirm_destruction(self, ctx, *, title, phrase, colour, warning):
         """
@@ -162,18 +189,21 @@ class Account(commands.Cog):
         if not proceed:
             return
 
-        self.release_live_sessions(user_id)
-
+        # Inside the try, deliberately. This used to sit above it, so when it raised the
+        # command died before touching the database and said nothing at all - the wipe
+        # looked like it had silently refused to commit.
         try:
+            self.release_live_sessions(user_id)
             async with aiosqlite.connect(DB_FILE) as db:
                 await db.execute("BEGIN TRANSACTION")
                 removed = await wipe_user(db, user_id, keep_account=True)
                 await db.commit()
         except Exception as e:
+            traceback.print_exc()
             print(f"Account Reset Error for {user_id}: {e}")
             return await ctx.send(
-                "❌ A critical database error occurred. **Your account was not "
-                "changed** — the wipe runs as a single transaction and rolled back.")
+                "❌ A critical error occurred. **Your account was not changed** — the "
+                "wipe runs as a single transaction and rolled back.")
 
         print(f"RESET {user_id}: {removed}")
         embed = discord.Embed(
@@ -231,19 +261,20 @@ class Account(commands.Cog):
         if not proceed:
             return
 
-        self.release_live_sessions(user_id)
-
+        # Inside the try - see the note in reset_account.
         try:
+            self.release_live_sessions(user_id)
             async with aiosqlite.connect(DB_FILE) as db:
                 await db.execute("BEGIN TRANSACTION")
                 removed = await wipe_user(db, user_id, keep_account=False)
                 await db.commit()
         except Exception as e:
+            traceback.print_exc()
             print(f"Account Deletion Error for {user_id}: {e}")
             return await ctx.send(
-                "❌ A critical database error occurred. **Nothing was erased** — the "
-                "wipe runs as a single transaction and rolled back. Please try again, "
-                "or contact an administrator so this can be completed manually.")
+                "❌ A critical error occurred. **Nothing was erased** — the wipe runs "
+                "as a single transaction and rolled back. Please try again, or contact "
+                "an administrator so this can be completed manually.")
 
         print(f"ERASED {user_id}: {removed}")
         await ctx.send(embed=discord.Embed(
