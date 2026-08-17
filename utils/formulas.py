@@ -4952,6 +4952,16 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
     # 1. CONTAINMENT FIELD DEPLOYMENT & DECAY
     # =========================================
     if move_name in PROTECT_MOVES:
+        # Stance Change reads the move being USED, not the damage it deals - and this
+        # branch returns long before the form hook near the end of the function, which
+        # is why Aegislash only ever drew its blade and never raised its shield. Banked
+        # here, before the success roll, because the games change forme when the move is
+        # used rather than when it works: a King's Shield that fails to a repeated-use
+        # roll still puts Aegislash back in Shield Forme.
+        _stance = stance_form_for(attacker, move_name, move)
+        if _stance:
+            request_form_flip(attacker, _stance, 'changed stance')
+
         # Selective guards are cheap to spam in the franchise, so only the full shields
         # suffer the diminishing-returns roll.
         is_selective = move_name in SELECTIVE_GUARDS
