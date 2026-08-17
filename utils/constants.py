@@ -668,6 +668,35 @@ EQUIPMENT_CATALOG.update(build_type_booster_stock())
 
 
 # ==========================================
+# 📡 BROADCAST CHANNELS
+# ==========================================
+# These were bare numbers in the middle of a function, with the alternative server's id
+# kept alive in a trailing comment. Switching servers meant editing a line of code and
+# hoping the comment stayed accurate.
+#
+# Both servers are named here instead, and the active one is chosen once. Every reader
+# treats a missing channel as "do not broadcast" rather than as an error, so setting an
+# id to None is a supported way to turn a broadcast off.
+CHANNELS = {
+    'official': {
+        'broadcast': 1487606904321736764,   # rare, shiny and legendary spawns
+        'trade_log': 1487605383857176777,   # the trade ledger's readable tail
+    },
+    'beta': {
+        'broadcast': 1491524019495895171,
+        # Beta has no trade-log channel of its own yet. None means "do not broadcast",
+        # which is a working configuration rather than a broken one - the ledger is the
+        # database table, and the channel post is a convenience on top of it.
+        'trade_log': None,
+    },
+}
+
+ACTIVE_SERVER = 'official'
+
+OFFICIAL_BROADCAST_CHANNEL_ID = CHANNELS[ACTIVE_SERVER]['broadcast']
+TRADE_LOG_CHANNEL_ID = CHANNELS[ACTIVE_SERVER]['trade_log']
+
+# ==========================================
 # 🎓 ONBOARDING: THE STARTER KIT
 # ==========================================
 # A starter used to roll its genetics like any wild specimen, 0-31 on all six. That is

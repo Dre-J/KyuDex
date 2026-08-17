@@ -6,6 +6,8 @@ from discord.ext import commands
 from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP, CATEGORY_OPTIONS
 from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
                            suggest_species)
+from utils.trading import (announce_trade, blocked_from_trading, log_trade,
+                           snapshot)
 from utils import checks
 import math
 import aiosqlite
@@ -75,23 +77,40 @@ class GTSFulfillModal(discord.ui.Modal, title="Fulfill GTS Trade"):
                     
                     gts_instance_id = gts_instance_row[0]
 
+                    refusal = await blocked_from_trading(db, offered_id, user_id)
+                    if refusal:
+                        await db.rollback()
+                        return await interaction.followup.send(refusal, ephemeral=True)
+
+                    given = await snapshot(db, [offered_id])
+                    received = await snapshot(db, [gts_instance_id])
+
                     # Swap the IDs!
                     await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (target_user_id, offered_id))
                     await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (user_id, gts_instance_id))
-                    
+
                     await db.execute("DELETE FROM gts_deposits WHERE gts_id = ?", (gts_id,))
-                    
+
                     # 🚨 INLINE ALERT DISPATCH!
                     alert_msg = f"🤝 **GTS Update:** Your deposited **{self.trade_data[7]}** was successfully traded for a **{offered_name}** by {interaction.user.name}!"
                     await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (target_user_id, alert_msg))
+
+                    await log_trade(db, trade_type='gts-swap', user_a=user_id,
+                                    user_b=target_user_id, side_a=given, side_b=received,
+                                    guild_id=getattr(interaction.guild, 'id', None),
+                                    detail=f"One-click swap against listing {gts_id}")
 
                     await db.commit()
 
                     # Success UI Update
                     for child in self.parent_view.children: child.disabled = True
                     await interaction.message.edit(view=self.parent_view)
-                    
+
                     await interaction.followup.send(f"🎉 **Trade Successful!** The {self.trade_data[7]} has been transferred to your PC.")
+
+                    await announce_trade(interaction.client, trade_type='gts-swap',
+                                         user_a=interaction.user, user_b=target_user_id,
+                                         side_a=given, side_b=received)
 
                 except Exception as e:
                     await db.rollback()
@@ -187,17 +206,34 @@ class GTSSearchPaginator(discord.ui.View):
                 
                 gts_instance_id = gts_instance_row[0]
 
+                refusal = await blocked_from_trading(db, self.preselected_instance, user_id)
+                if refusal:
+                    await db.rollback()
+                    return await interaction.followup.send(refusal, ephemeral=True)
+
+                given = await snapshot(db, [self.preselected_instance])
+                received = await snapshot(db, [gts_instance_id])
+
                 # Atomic Swap!
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (target_user_id, self.preselected_instance))
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (user_id, gts_instance_id))
-                
+
                 await db.execute("DELETE FROM gts_deposits WHERE gts_id = ?", (gts_id,))
+
+                await log_trade(db, trade_type='gts-swap', user_a=user_id,
+                                user_b=target_user_id, side_a=given, side_b=received,
+                                guild_id=getattr(interaction.guild, 'id', None),
+                                detail=f"One-click swap against listing {gts_id}")
                 await db.commit()
 
                 # UI Update
                 for child in self.children: child.disabled = True
                 await interaction.message.edit(view=self)
                 await interaction.followup.send(f"🎉 **Trade Successful!** The {current_trade[7]} has been transferred to your PC.")
+
+                await announce_trade(interaction.client, trade_type='gts-swap',
+                                     user_a=interaction.user, user_b=target_user_id,
+                                     side_a=given, side_b=received)
                 
             except Exception as e:
                 await db.rollback()
@@ -467,6 +503,12 @@ class GTSDepositModal(discord.ui.Modal, title="Global Trade Station Deposit"):
         deposited = resolve_species(self.specimen['name']) or self.specimen['name']
 
         async with aiosqlite.connect(self.db_file) as db:
+            # The GTS is a transfer route like any other, so the starter lock applies
+            # here too - and it has to refuse at DEPOSIT, because once a deposit is
+            # listed the match can fire without the owner being present.
+            refusal = await blocked_from_trading(db, self.specimen['instance_id'], user_id)
+            if refusal:
+                return await interaction.followup.send(refusal, ephemeral=True)
             # CHECK LIMITS FIRST
             async with db.execute("SELECT COUNT(*) FROM gts_deposits WHERE user_id = ?", (user_id,)) as cursor:
                 count = await cursor.fetchone()
@@ -549,6 +591,10 @@ async def process_gts_match(bot, db_file, new_gts_id):
             
             await db.execute("BEGIN TRANSACTION")
             try:
+                # Snapshot both specimens while they are still with their owners.
+                snap_new = await snapshot(db, [n_instance])
+                snap_match = await snapshot(db, [match_instance])
+
                 # Swap Ownership
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (match_user_id, n_instance))
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (n_user, match_instance))
@@ -572,13 +618,26 @@ async def process_gts_match(bot, db_file, new_gts_id):
                 
                 await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (n_user, alert_1))
                 await db.execute("INSERT INTO user_alerts (user_id, alert_text) VALUES (?, ?)", (match_user_id, alert_2))
-                
+
+                await log_trade(db, trade_type='gts', user_a=n_user, user_b=match_user_id,
+                                side_a=snap_new, side_b=snap_match,
+                                detail=f"GTS auto-match {new_gts_id} ↔ {match_gts_id}")
+
                 # Commit everything (Trades + Alerts) all at once!
                 await db.commit()
-                
+
             except Exception as e:
                 await db.rollback()
                 print(f"GTS Atomic Trade Error: {e}")
+                return
+
+            # Inside `if match:` - there is nothing to announce when no partner was
+            # found - but outside the transaction, so a failed broadcast cannot undo a
+            # trade that has already committed.
+            await announce_trade(bot, trade_type='gts', user_a=n_user,
+                                 user_b=match_user_id,
+                                 side_a=snap_new, side_b=snap_match,
+                                 detail="Matched automatically by the GTS")
 
 
 class BackpackPaginator(discord.ui.View):
@@ -1180,9 +1239,16 @@ class Economy(commands.Cog):
                     if await cursor.fetchone():
                         return await ctx.send("⚠️ This specimen is already listed on the open market!")
                     
+                # The market is a transfer route too, so it refuses a starter at the
+                # point of LISTING - a listing that could never legally complete is
+                # worse than a refusal, because it wastes the buyer's time as well.
+                refusal = await blocked_from_trading(db, actual_tag, user_id)
+                if refusal:
+                    return await ctx.send(refusal)
+
                 # 4. Process the Listing (Generate a 48-hour expiration timestamp)
                 expiration_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=48)
-                
+
                 await db.execute("""
                     INSERT INTO global_market (seller_id, instance_id, price, expires_at)
                     VALUES (?, ?, ?, ?)
@@ -1403,11 +1469,19 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                         ON CONFLICT(user_id) DO UPDATE SET eco_tokens = eco_tokens + ?
                     """, (seller_id, price, price))
                     
-                    # C. Reassign biological ownership
+                    # C. Reassign biological ownership, snapshotting it first.
+                    sold = await snapshot(db, [instance_id])
                     await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (buyer_id, instance_id))
-                    
+
                     # D. Destroy the market listing
                     await db.execute("DELETE FROM global_market WHERE listing_id = ?", (listing_id,))
+
+                    # The buyer's side is tokens rather than specimens, which is why
+                    # the ledger records a `detail` as well as two lists.
+                    await log_trade(db, trade_type='market', user_a=seller_id,
+                                    user_b=buyer_id, side_a=sold, side_b=[],
+                                    guild_id=getattr(ctx.guild, 'id', None),
+                                    detail=f"Sold for {price:,} tokens (listing {listing_id})")
                     
                     # E. Fetch species name for the receipt
                     async with db.execute("""
@@ -1433,9 +1507,13 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             embed.add_field(name="Conservation Grant Paid", value=f"🪙 {price:,} Tokens", inline=True)
             embed.add_field(name="Remaining Balance", value=f"🪙 {buyer_balance - price:,} Tokens", inline=True)
             embed.set_footer(text=f"Tag ID: {instance_id[:8]} | Seller ID: {seller_id}")
-            
+
             await ctx.send(embed=embed)
-            
+
+            await announce_trade(self.bot, trade_type='market', user_a=seller_id,
+                                 user_b=ctx.author, side_a=sold, side_b=[],
+                                 detail=f"Sold for 🪙 {price:,} tokens")
+
         except Exception as e:
             print(f"Global Market Buy Error: {e}")
             await ctx.send("❌ A critical database error occurred. The transaction has been securely aborted and no tokens were lost.")
