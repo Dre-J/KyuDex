@@ -489,6 +489,9 @@ CATEGORY_OPTIONS = [
     discord.SelectOption(label="Medicine", value="medicine", emoji="🧪"),
     discord.SelectOption(label="Vitamins", value="vitamin", emoji="💊"),
     discord.SelectOption(label="Battle Equipment", value="battleitems", emoji="⚔️"),
+    # Its own shelf rather than fifty-eight more rows under Battle Equipment, which
+    # would have buried the Choice trio and the rocks six pages deep.
+    discord.SelectOption(label="Type Boosters", value="typeboost", emoji="💠"),
     discord.SelectOption(label="Berries", value="berry", emoji="🫐"),
     discord.SelectOption(label="Z-Crystals", value="zcrystal", emoji="💎"),
     discord.SelectOption(label="Mega Stones", value="megastone", emoji="🧬"),
@@ -506,6 +509,163 @@ TM_SHOP = {
     'thunderbolt': 2000,
     'swords-dance': 1500
 }
+
+# ==========================================
+# 💎 ITEM PHASE 1: THE TYPE-BOOSTER TABLE
+# ==========================================
+# There was no type-booster table in the engine at all. That single absence is why every
+# item in PokeAPI's `type-enhancement` category was a ghost AND why all seventeen
+# elemental plates were only half-live: PLATE_TYPES already drove Judgment's element and
+# Multitype's form, but the "20% more damage" half of every plate description had never
+# existed anywhere. One dict finishes both, plus the gems, which are the same rule with
+# a single-use flag.
+#
+# The plate half is NOT repeated here. It is derived from PLATE_TYPES in formulas.py,
+# because that table already exists and a second copy of it is precisely the drift
+# `type_from_item` was split out to prevent.
+
+TYPE_BOOST_MULTIPLIER = 1.2
+
+# Moved here from formulas.py, where it drove Judgment's element and Multitype's form.
+# It has a second reader now - the shop stocks the same seventeen names - and formulas.py
+# re-exports it, so anything importing it from there is unaffected.
+PLATE_TYPES = {
+    'draco-plate': 'dragon', 'dread-plate': 'dark', 'earth-plate': 'ground',
+    'fist-plate': 'fighting', 'flame-plate': 'fire', 'icicle-plate': 'ice',
+    'insect-plate': 'bug', 'iron-plate': 'steel', 'meadow-plate': 'grass',
+    'mind-plate': 'psychic', 'pixie-plate': 'fairy', 'sky-plate': 'flying',
+    'splash-plate': 'water', 'spooky-plate': 'ghost', 'stone-plate': 'rock',
+    'toxic-plate': 'poison', 'zap-plate': 'electric',
+}
+
+# The permanent holdables: one per element, 1.2x to moves of that type.
+TYPE_ENHANCER_ITEMS = {
+    'black-belt':     'fighting',
+    'black-glasses':  'dark',
+    'charcoal':       'fire',
+    'dragon-fang':    'dragon',
+    'hard-stone':     'rock',
+    'magnet':         'electric',
+    'metal-coat':     'steel',
+    'miracle-seed':   'grass',
+    'mystic-water':   'water',
+    'never-melt-ice': 'ice',
+    'poison-barb':    'poison',
+    'sharp-beak':     'flying',
+    'silk-scarf':     'normal',
+    'silver-powder':  'bug',
+    'soft-sand':      'ground',
+    'spell-tag':      'ghost',
+    'twisted-spoon':  'psychic',
+    # The incenses are the same 1.2x under different names, kept as separate entries
+    # rather than aliased because a player holding a Sea Incense holds a Sea Incense.
+    'odd-incense':    'psychic',
+    'rock-incense':   'rock',
+    'rose-incense':   'grass',
+    'sea-incense':    'water',
+    'wave-incense':   'water',
+    # Fairy Feather sits in a different PokeAPI category and so fell outside the phase
+    # as scoped. Included anyway: leaving Fairy as the one element with no booster is a
+    # hole a team builder finds in about a minute.
+    'fairy-feather':  'fairy',
+}
+
+# Gems are consumed on use. Gen VI onwards they are 1.3x, not the 1.5x the PokeAPI
+# text still quotes - and this engine is Gen VI+ elsewhere (CRIT_DAMAGE_MULTIPLIER is
+# 1.5, not the old 2.0), so following the generation beats following the description.
+TYPE_GEM_MULTIPLIER = 1.3
+
+# Written out rather than generated from the type list. A comprehension would be shorter
+# and would put none of these eighteen names in the source, which matters: the item
+# audit finds an implementation by looking for the item's name, and a table whose keys
+# only exist at runtime reads as eighteen items nobody has done yet.
+TYPE_GEMS = {
+    'bug-gem':      'bug',
+    'dark-gem':     'dark',
+    'dragon-gem':   'dragon',
+    'electric-gem': 'electric',
+    'fairy-gem':    'fairy',
+    'fighting-gem': 'fighting',
+    'fire-gem':     'fire',
+    'flying-gem':   'flying',
+    'ghost-gem':    'ghost',
+    'grass-gem':    'grass',
+    'ground-gem':   'ground',
+    'ice-gem':      'ice',
+    'normal-gem':   'normal',
+    'poison-gem':   'poison',
+    'psychic-gem':  'psychic',
+    'rock-gem':     'rock',
+    'steel-gem':    'steel',
+    'water-gem':    'water',
+}
+
+# Deliberately NOT boosters, and named here so their absence reads as a decision.
+# Blank Plate reverts Arceus to Normal and Legend Plate grants every type at once;
+# neither is "1.2x to one element", so neither belongs in the table and neither is
+# sold until somebody implements what they actually do.
+INERT_PLATES = {'blank-plate', 'legend-plate'}
+
+TYPE_EMOJI = {
+    'normal': '⬜', 'fire': '🔥', 'water': '💧', 'electric': '⚡', 'grass': '🌿',
+    'ice': '🧊', 'fighting': '🥊', 'poison': '☠️', 'ground': '⛰️', 'flying': '🕊️',
+    'psychic': '🔮', 'bug': '🐛', 'rock': '🪨', 'ghost': '👻', 'dragon': '🐉',
+    'dark': '🌑', 'steel': '⚙️', 'fairy': '🧚',
+}
+
+# Prices, in the same band as the battle equipment already on sale (400 situational,
+# 600 set-defining). A plate costs more than a plain enhancer because it does two jobs:
+# the 20% AND Judgment's element. A gem costs least because it is gone after one move.
+PLATE_PRICE = 500
+TYPE_ENHANCER_PRICE = 400
+TYPE_GEM_PRICE = 200
+
+
+def build_type_booster_stock():
+    """
+    The shop shelf for Phase 1, generated from the tables the ENGINE reads.
+
+    Written out programmatically rather than as fifty-eight literal rows, so the shop
+    cannot come to disagree with the damage formula about which items exist or what
+    element they boost - which is the failure this whole phase was fixing, one layer up.
+    """
+    stock = {}
+
+    for item, element in PLATE_TYPES.items():
+        stock[item] = {
+            "name": item.replace('-', ' ').title(),
+            "price": PLATE_PRICE,
+            "desc": f"1.2x to {element.title()} moves, and sets Arceus/Judgment to {element.title()}.",
+            "emoji": TYPE_EMOJI.get(element, '💠'),
+            "category": "typeboost",
+        }
+
+    for item, element in TYPE_ENHANCER_ITEMS.items():
+        stock[item] = {
+            "name": item.replace('-', ' ').title(),
+            "price": TYPE_ENHANCER_PRICE,
+            "desc": f"1.2x damage to the holder's {element.title()}-type moves.",
+            "emoji": TYPE_EMOJI.get(element, '💠'),
+            "category": "typeboost",
+        }
+
+    for item, element in TYPE_GEMS.items():
+        stock[item] = {
+            "name": item.replace('-', ' ').title(),
+            "price": TYPE_GEM_PRICE,
+            "desc": f"{TYPE_GEM_MULTIPLIER}x to one {element.title()}-type move, then it is used up.",
+            "emoji": TYPE_EMOJI.get(element, '💠'),
+            "category": "typeboost",
+        }
+
+    return stock
+
+
+# Stocked onto the shelf here rather than by hand inside EQUIPMENT_CATALOG above,
+# because the tables this reads are defined below it - and because fifty-eight rows
+# typed out by hand is fifty-eight chances to mistype an element.
+EQUIPMENT_CATALOG.update(build_type_booster_stock())
+
 
 # ==========================================
 # 🎓 ONBOARDING: THE STARTER KIT
