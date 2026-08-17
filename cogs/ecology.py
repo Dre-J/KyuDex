@@ -8,7 +8,7 @@ import random
 import math
 import uuid
 from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS
-from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics
+from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon
 import re
 from utils import checks
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
@@ -184,11 +184,7 @@ class StarterSelect(discord.ui.Select):
                     gender_rate = 4 
 
                 # --- GENDER ROLL ---
-                gender = "None"
-                if gender_rate != -1:
-                    female_chance = (gender_rate / 8.0) * 100
-                    roll = random.uniform(0, 100)
-                    gender = "F" if roll <= female_chance else "M"
+                gender = roll_gender(gender_rate)
                 
                 # Fetch Level 1-5 starting moves
                 async with db.execute("""
@@ -382,9 +378,7 @@ class PokemonPaginator(discord.ui.View):
 
         # --- CALCULATIONS ---
         # Format the Gender Icon
-        if gender == 'M': gender_icon = " ♂️"
-        elif gender == 'F': gender_icon = " ♀️"
-        else: gender_icon = " ⚧️" # Genderless
+        gender_badge = " " + gender_icon(gender)
         
         # --- Original Trainer Logic ---
         if str(original_user_id) == str(self.user_id):
@@ -455,7 +449,7 @@ class PokemonPaginator(discord.ui.View):
         title_prefix = "🌟" if is_shiny else ""
 
         # Inject the gender icon directly into the title!
-        embed = discord.Embed(title=f"{title_prefix}{display_title}{gender_icon}{gmax_icon}", color=color)
+        embed = discord.Embed(title=f"{title_prefix}{display_title}{gender_badge}{gmax_icon}", color=color)
         
         # Attach the local file to the embed using the safe filename
         if sprite_file:
@@ -831,7 +825,7 @@ class Ecology(commands.Cog):
                 else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
 
                 query = f"""
-                    SELECT s.pokedex_id, s.name, s.capture_rate 
+                    SELECT s.pokedex_id, s.name, s.capture_rate, s.gender_rate
                     FROM base_pokemon_species s
                     JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                     WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
@@ -844,7 +838,10 @@ class Ecology(commands.Cog):
         if not spawned_data:
             return
 
-        poke_id, name, cap_rate = spawned_data
+        poke_id, name, cap_rate, gender_rate = spawned_data
+        # Rolled HERE, not at capture. A spawn that shows a sex has to hand the
+        # same one to the specimen that gets caught.
+        gender = roll_gender(gender_rate)
         is_shiny = random.randint(1, 4096) == 1 
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
         
@@ -857,7 +854,8 @@ class Ecology(commands.Cog):
 
         # 🚨 Store it UNDER the unique spawn_id, not just the guild_id!
         active_spawns[guild_id][spawn_id] = {
-            'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate, 'is_shiny': is_shiny 
+            'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate,
+            'is_shiny': is_shiny, 'gender': gender
         }
 
     # 1. Generate the Mutation Status
@@ -872,8 +870,8 @@ class Ecology(commands.Cog):
         # browser and the battle scene use. A wild specimen has no gender yet; one is
         # assigned when it is caught, so there is nothing to prefer here.
         embed_color = discord.Color.gold() if is_shiny else discord.Color.green()
-        safe_filename = sprite_attachment_name(poke_id, is_shiny)
-        file_path = resolve_sprite(poke_id, shiny=is_shiny, style=HOME)
+        safe_filename = sprite_attachment_name(poke_id, is_shiny, gender)
+        file_path = resolve_sprite(poke_id, shiny=is_shiny, gender=gender, style=HOME)
 
         # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
         if not file_path:
@@ -900,7 +898,7 @@ class Ecology(commands.Cog):
         # 4. Build the Visual Camera Trap Embed
         embed = discord.Embed(
             title=f"📸 Habitat Activity Detected!", 
-            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} `{masked_display}`** has appeared!\n\nUse `!catch <pokemon>` to deploy equipment and rescue it.",
+            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} `{masked_display}`** {gender_icon(gender)} has appeared!\n\nUse `!catch <pokemon>` to deploy equipment and rescue it.",
             color=embed_color
         )
 
@@ -1079,7 +1077,7 @@ class Ecology(commands.Cog):
 
                 # We inject the rarity_filter dynamically into the query
                 async with db.execute(f"""
-                    SELECT DISTINCT s.pokedex_id, s.name, s.capture_rate 
+                    SELECT DISTINCT s.pokedex_id, s.name, s.capture_rate, s.gender_rate 
                     FROM base_pokemon_species s
                     JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                     WHERE t.type_name IN {type_tuple} 
@@ -1093,7 +1091,8 @@ class Ecology(commands.Cog):
             if not spawn_data:
                 return await ctx.send("📡 Scanner error: Could not locate native wildlife in this sector. Try again.")
                 
-            poke_id, poke_name, true_capture_rate = spawn_data
+            poke_id, poke_name, true_capture_rate, gender_rate = spawn_data
+            gender = roll_gender(gender_rate)
             
             # Roll for shiny (1/4096 standard rate)
             is_shiny = random.randint(1, 4096) == 1
@@ -1108,6 +1107,7 @@ class Ecology(commands.Cog):
                 'pokedex_id': poke_id,
                 'name': poke_name,
                 'is_shiny': is_shiny,
+                'gender': gender,
                 'capture_rate': true_capture_rate # Dynamically assigned!
             }
             
@@ -1129,7 +1129,7 @@ class Ecology(commands.Cog):
             masked_display = mask_name(poke_name)
             embed = discord.Embed(
                 title=f"{b_emoji} {biome.title()} Expedition",
-                description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**`{masked_display}`** appeared!",
+                description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**`{masked_display}`** {gender_icon(gender)} appeared!",
                 color=discord.Color.dark_green()
             )
             embed.set_footer(text="This is a private encounter. Use !catch [name]")
@@ -1139,8 +1139,8 @@ class Ecology(commands.Cog):
             # ==========================================
             # Construct the safe OS path to your sprites
             # HOME art, falling through to the official artwork.
-            safe_filename = sprite_attachment_name(poke_id, is_shiny)
-            file_path = resolve_sprite(poke_id, shiny=is_shiny, style=HOME)
+            safe_filename = sprite_attachment_name(poke_id, is_shiny, gender)
+            file_path = resolve_sprite(poke_id, shiny=is_shiny, gender=gender, style=HOME)
 
             # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
             if not file_path:
@@ -1306,7 +1306,7 @@ class Ecology(commands.Cog):
                     else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
 
                     query = f"""
-                        SELECT s.pokedex_id, s.name, s.capture_rate 
+                        SELECT s.pokedex_id, s.name, s.capture_rate, s.gender_rate 
                         FROM base_pokemon_species s
                         JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                         WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
@@ -1323,7 +1323,10 @@ class Ecology(commands.Cog):
         if not spawned_data:
             return await ctx.send("The environment is currently too unstable to support life.")
 
-        poke_id, name, cap_rate = spawned_data
+        poke_id, name, cap_rate, gender_rate = spawned_data
+        # Rolled HERE, not at capture. A spawn that shows a sex has to hand the
+        # same one to the specimen that gets caught.
+        gender = roll_gender(gender_rate)
         
         # Ensure Ultra Beasts get a shiny roll too if it wasn't defined!
         if 'is_shiny' not in locals():
@@ -1342,7 +1345,8 @@ class Ecology(commands.Cog):
         
         # Update the active spawns memory using the unique ID
         active_spawns[guild_id][spawn_id] = {
-            'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate, 'is_shiny': is_shiny 
+            'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate,
+            'is_shiny': is_shiny, 'gender': gender
         }
         
         # ==========================================
@@ -1351,8 +1355,8 @@ class Ecology(commands.Cog):
         # Construct the safe OS path to your sprites
         # HOME art, falling through to the official artwork.
         embed_color = discord.Color.gold() if is_shiny else discord.Color.green()
-        safe_filename = sprite_attachment_name(poke_id, is_shiny)
-        file_path = resolve_sprite(poke_id, shiny=is_shiny, style=HOME)
+        safe_filename = sprite_attachment_name(poke_id, is_shiny, gender)
+        file_path = resolve_sprite(poke_id, shiny=is_shiny, gender=gender, style=HOME)
 
         # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
         if not file_path:
@@ -1378,7 +1382,7 @@ class Ecology(commands.Cog):
         # Build the Visual Camera Trap Embed
         embed = discord.Embed(
             title=f"📸 Habitat Activity Detected!", 
-            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} `{masked_display}`** has migrated into the area!\n\nUse `!catch <pokemon>` to deploy equipment and rescue it.",
+            description=f"🌍 *{habitat_condition}*\n\nA {shiny_text}**{rarity_name} `{masked_display}`** {gender_icon(gender)} has migrated into the area!\n\nUse `!catch <pokemon>` to deploy equipment and rescue it.",
             color=embed_color
         )
 
@@ -2347,19 +2351,15 @@ class Ecology(commands.Cog):
                 else:
                     gender_rate = 4
 
-                if gender_rate != -1:
-                    female_chance = (gender_rate / 8.0) * 100
-                    roll = random.uniform(0, 100)
-                    gender = "F" if roll <= female_chance else "M"
-                else:
-                    gender = "None"
-
-                if gender == "M":
-                    gender_emoji = "♂️"
-                elif gender == "F":
-                    gender_emoji = "♀️"
-                else:
-                    gender_emoji = "⚧️" 
+                # The SPAWN decided this, and the catch inherits it. Rolling again here
+                # would be rolling a second specimen: the wild encounter has already
+                # shown a sex and drawn the matching sprite, and a fresh roll would
+                # contradict both about a third of the time.
+                #
+                # The fallback is for a spawn created before this existed - one already
+                # sitting in a channel when the bot restarted - which carries no sex.
+                gender = target.get('gender') or roll_gender(gender_rate)
+                gender_emoji = gender_icon(gender) 
 
                 # ==========================================
                 # BIOMETRICS & ALPHA IV LOGIC

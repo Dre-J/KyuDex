@@ -7810,6 +7810,34 @@ def get_xp_requirement(level, growth_rate):
         return int(L**3)
 
 
+def roll_gender(gender_rate) -> str:
+    """
+    Decide a specimen's sex from its species' gender_rate.
+
+    PokeAPI's `gender_rate` is EIGHTHS FEMALE: 0 is always male, 8 always female, and -1
+    means the species has no sex at all. A missing value is treated as an even 4, which
+    is what both hand-rolled copies of this already did.
+
+    Returns 'M', 'F' or the literal string 'None' - the last because that is what
+    `caught_pokemon.gender` stores for the genderless, and every reader in the codebase
+    compares against that string rather than a real None.
+
+    Pulled out of the two places that rolled it so a WILD SPAWN can roll one too: a
+    spawn that shows a sex has to hand the same one to the specimen that gets caught,
+    and it cannot do that if the roll lives inside the catch.
+    """
+    if gender_rate is None:
+        gender_rate = 4
+    if gender_rate == -1:
+        return 'None'
+    return 'F' if random.uniform(0, 100) <= (gender_rate / 8.0) * 100 else 'M'
+
+
+def gender_icon(gender) -> str:
+    """The badge shown beside a specimen's name. One spelling, everywhere."""
+    return {'M': '♂️', 'F': '♀️'}.get(str(gender or '').strip().upper(), '⚧️')
+
+
 def generate_biometrics() -> tuple[float, float, str]:
     """
     Rolls for biological size and weight variance based on standard ecological distribution.
