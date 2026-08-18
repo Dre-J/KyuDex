@@ -23,8 +23,9 @@ import discord
 from discord.ext import commands
 
 from utils import checks
-from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary, reset_available_at,
-                            wipe_user)
+from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary,
+                            levelup_pings_enabled, reset_available_at,
+                            set_levelup_pings, wipe_user)
 from utils.constants import DB_FILE
 
 # Long enough to read the list, short enough that nobody wanders off mid-confirmation.
@@ -215,6 +216,51 @@ class Account(commands.Cog):
         await ctx.send(embed=embed)
 
     # ==========================================
+    # NOTIFICATIONS - how loudly the bot talks to you
+    # ==========================================
+    # NOT aliased to "notifications" - `!inbox` already owns that one, and a duplicate
+    # alias is not a warning: it raises CommandRegistrationError and takes the whole
+    # cog down with it.
+    @commands.command(name="notify", aliases=["pings"])
+    @checks.has_started()
+    async def notify(self, ctx, setting: str = None):
+        """Turn level-up announcements on or off. `!notify off`"""
+        user_id = str(ctx.author.id)
+        wanted = {'on': True, 'enable': True, 'enabled': True, 'yes': True,
+                  'off': False, 'disable': False, 'disabled': False, 'no': False}
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            # No argument reads the setting back rather than guessing at a toggle.
+            # Flipping an unseen boolean is how people end up turning a thing on when
+            # they meant to check whether it was off.
+            if setting is None or setting.lower() not in wanted:
+                current = await levelup_pings_enabled(db, user_id)
+                state = "**on**" if current else "**off**"
+                return await ctx.send(
+                    f"🔔 Level-up announcements are {state}.\n"
+                    f"Use `!notify on` or `!notify off` to change it.\n"
+                    f"*Announcements never ping or reply to you either way — this "
+                    f"controls whether they are posted at all.*")
+
+            enabled = wanted[setting.lower()]
+            stored = await set_levelup_pings(db, user_id, enabled)
+            await db.commit()
+
+        if not stored:
+            return await ctx.send(
+                "⚠️ This database has not had `migrate_notifications.py` run against "
+                "it yet, so the preference cannot be saved. Announcements stay on for "
+                "now — they are silent regardless.")
+
+        if enabled:
+            await ctx.send("🔔 Level-up announcements are **on**. They will not ping "
+                           "or reply to you.")
+        else:
+            await ctx.send("🔕 Level-up announcements are **off**. Evolution prompts "
+                           "still appear — they need an answer, and there is no other "
+                           "way to reach a level-up evolution.")
+
+    # ==========================================
     # PRIVACY - keeps nothing
     # ==========================================
     @commands.group(name="privacy", invoke_without_command=True)
@@ -239,6 +285,12 @@ class Account(commands.Cog):
             name="Erasure",
             value="`!privacy delete` removes everything, including the account itself. "
                   "No cooldown. Not reversible.",
+            inline=False)
+        embed.add_field(
+            name="Being contacted",
+            value="`!notify off` stops level-up announcements. They never ping or "
+                  "reply to you either way. Battle and trade requests from other "
+                  "players still mention you — that is how you are told about them.",
             inline=False)
         await ctx.send(embed=embed)
 
