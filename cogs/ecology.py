@@ -2163,7 +2163,9 @@ class Ecology(commands.Cog):
         
         await ctx.send(embed=embed)
 
-    @commands.command(name="inventory", aliases=["inv", "find pokemon", "box", "pc"])
+    # "find pokemon" used to sit in this list. An alias containing a space can never be
+    # reached - the parser splits on whitespace first - so it was decoration.
+    @commands.command(name="inventory", aliases=["inv", "box", "pc"])
     @checks.has_started()
     @checks.is_authorized()
     async def inventory(self, ctx, *, search_query: str = ""):
