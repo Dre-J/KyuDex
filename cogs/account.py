@@ -20,13 +20,14 @@ import traceback
 
 import aiosqlite
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from utils import checks
 from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary,
                             levelup_pings_enabled, reset_available_at,
                             set_levelup_pings, wipe_user)
 from utils.constants import DB_FILE
+from utils.trading import LOG_RETENTION_DAYS, purge_expired_logs
 
 # Long enough to read the list, short enough that nobody wanders off mid-confirmation.
 CONFIRM_TIMEOUT = 60.0
@@ -57,6 +58,54 @@ def summary_lines(counts):
 class Account(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.prune_trade_logs.start()
+
+    def cog_unload(self):
+        self.prune_trade_logs.cancel()
+
+    # ==========================================
+    # RETENTION
+    # ==========================================
+    # The ledger is append-only for correctness - nothing may rewrite the history of a
+    # trade - but append-only FOREVER is a different promise from the one the privacy
+    # policy makes. Twelve months, and this is the only thing in the codebase that
+    # deletes a trade record.
+    #
+    # A daily sweep rather than a purge on every write: the cost is the same either way
+    # on a table this size, but a scheduled job is a thing you can point at when
+    # somebody asks how retention is enforced, and a side effect buried in log_trade is
+    # not. Runs once at startup too, so a bot that is restarted nightly still prunes.
+    @tasks.loop(hours=24)
+    async def prune_trade_logs(self):
+        # A bot that has not logged in is a test harness or an import, not a
+        # deployment. Housekeeping that writes to the live database must not run
+        # because somebody registered the cog to read its command list.
+        if not self.bot.is_ready():
+            return
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                removed = await purge_expired_logs(db)
+                await db.commit()
+            if removed:
+                print(f"🧹 Retention: removed {removed} trade record(s) older than "
+                      f"{LOG_RETENTION_DAYS} days.")
+        except Exception as e:
+            # Housekeeping must never take the bot down, and must never stop the loop -
+            # an exception escaping a tasks.loop body cancels the task for good.
+            print(f"⚠️ Trade log retention sweep failed: {e}")
+
+    @prune_trade_logs.before_loop
+    async def _wait_for_bot(self):
+        try:
+            await self.bot.wait_until_ready()
+        except Exception:
+            # Anything at all. `wait_until_ready` raises RuntimeError on a Client that
+            # was never logged in, and AttributeError on a test double that never had
+            # the method - and an exception escaping before_loop CANCELS THE TASK for
+            # the rest of the process, which would silently disable retention rather
+            # than merely delaying it. The loop body checks is_ready() itself, so
+            # falling straight through is safe.
+            pass
 
     # ==========================================
     # SHARED MACHINERY
@@ -275,6 +324,16 @@ class Account(commands.Cog):
             value=("Your Discord user ID, the specimens you have caught and their "
                    "statistics, your tokens and items, market and GTS activity, and "
                    "per-server contribution totals."),
+            inline=False)
+        embed.add_field(
+            name="How long trade records are kept",
+            value=(f"Every transfer — gift, trade, GTS, market — is recorded so that "
+                   f"duplication bugs and disputed trades can be reconstructed. Those "
+                   f"records are deleted after **{LOG_RETENTION_DAYS} days**. "
+                   f"Erasing your account "
+                   f"takes your name off yours straight away; the record itself stays, "
+                   f"because it is also the other trainer's evidence of a trade they "
+                   f"made."),
             inline=False)
         embed.add_field(
             name="Starting over",

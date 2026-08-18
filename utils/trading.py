@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 
 import discord
 
+from utils import audit
 from utils.constants import TRADE_LOG_CHANNEL_ID
 
 # How many specimens a trainer must have caught themselves before their starter is
@@ -35,6 +36,36 @@ from utils.constants import TRADE_LOG_CHANNEL_ID
 STARTER_LOCK_CATCHES = 50
 
 TRADE_TYPES = ('gift', 'trade', 'gts', 'gts-swap', 'market')
+
+# How long a trade record is kept. Twelve months, set by the operator rather than
+# guessed at here: the ledger exists to reconstruct incidents, and a duplication bug or
+# a scam report can surface months after the fact, but "we keep it because we might want
+# it" is not a retention policy. This is the number the privacy policy states, and
+# `!privacy` reads it from here so the two cannot drift.
+LOG_RETENTION_DAYS = 365
+
+
+async def purge_expired_logs(db):
+    """
+    Delete trade records past the retention window. Returns how many went.
+
+    Deliberately the ONLY thing in this module that removes a row. The ledger is
+    append-only for correctness - nothing may rewrite the history of a trade - but
+    append-only forever is a different promise from the one the privacy policy makes,
+    and this is the seam between them.
+
+    Does not commit; the caller owns the transaction.
+    """
+    try:
+        cursor = await db.execute(
+            "DELETE FROM trade_logs "
+            "WHERE logged_at < datetime('now', ?)", (f'-{LOG_RETENTION_DAYS} days',))
+        return cursor.rowcount
+    except Exception as e:
+        # A database without the ledger table yet, or without the column. Never let
+        # housekeeping take the bot down.
+        print(f"⚠️ Trade log purge failed: {e}")
+        return 0
 
 
 async def _has_column(db, table, column):
@@ -192,30 +223,22 @@ async def announce_trade(bot, *, trade_type, user_a, user_b, side_a, side_b,
     Discord outage must never turn into a player losing a Pokemon - the authoritative
     record is the trade_logs table, and this is a convenience on top of it.
     """
-    if not TRADE_LOG_CHANNEL_ID or bot is None:
-        return
-
-    try:
-        channel = bot.get_channel(TRADE_LOG_CHANNEL_ID)
-        if channel is None:
-            return
-
-        title, colour = TRADE_HEADINGS.get(trade_type, ('📦 Transfer',
-                                                        discord.Colour.greyple()))
-        embed = discord.Embed(title=title, colour=colour,
-                              timestamp=datetime.now(timezone.utc))
-        embed.add_field(name=f"{_label(user_a)} gave", value=describe_side(side_a),
+    title, colour = TRADE_HEADINGS.get(trade_type, ('📦 Transfer',
+                                                    discord.Colour.greyple()))
+    embed = discord.Embed(title=title, colour=colour,
+                          timestamp=datetime.now(timezone.utc))
+    embed.add_field(name=f"{_label(user_a)} gave", value=describe_side(side_a),
+                    inline=False)
+    if user_b is not None:
+        embed.add_field(name=f"{_label(user_b)} gave", value=describe_side(side_b),
                         inline=False)
-        if user_b is not None:
-            embed.add_field(name=f"{_label(user_b)} gave", value=describe_side(side_b),
-                            inline=False)
-        if detail:
-            embed.add_field(name="Detail", value=detail, inline=False)
-        embed.set_footer(text=f"{trade_type} · IDs {_id(user_a)} / {_id(user_b)}")
+    if detail:
+        embed.add_field(name="Detail", value=detail, inline=False)
+    embed.set_footer(text=f"{trade_type} · IDs {_id(user_a)} / {_id(user_b)}")
 
-        await channel.send(embed=embed)
-    except Exception as e:
-        print(f"⚠️ Trade log broadcast failed ({trade_type}): {e}")
+    # The channel plumbing lives in utils/audit.py now, because the owner tools need the
+    # same thing and two copies of "post this, swallow everything" is one too many.
+    await audit.post(bot, embed)
 
 
 def _label(user):
