@@ -1176,19 +1176,45 @@ class Economy(commands.Cog):
         
         await ctx.send("📡 GTS Search Terminal ready. Click below to enter your search criteria.", view=view)
 
-    # This creates the base command group. If they just type !global market, it shows them the help menu.
-    @commands.group(name="global market", invoke_without_command=True)
-    @checks.has_started()
-    @checks.is_authorized()
-    async def global_market(self, ctx):
-        """Base command for the Global Trade Station."""
+    @staticmethod
+    def station_embed():
+        """The station's front page, shown by `!global` and by `!global market`."""
         embed = discord.Embed(title="🌐 Global Transfer Station", color=discord.Color.blue())
         embed.description = (
             "`!global market sell [Tag ID] [Price]` - List a specimen on the market.\n"
             "`!global market view` - Browse available assets.\n"
-            "`!global market buy [Listing ID]` - Procure a specimen."
+            "`!global market inspect [Listing ID]` - Full genetic assay of a listing.\n"
+            "`!global market buy [Listing ID]` - Procure a specimen.\n"
+            "`!global market cancel [Listing ID]` - Recall your own listing."
         )
-        await ctx.send(embed=embed)
+        return embed
+
+    # ==========================================
+    # THE GLOBAL TRANSFER STATION
+    # ==========================================
+    # This group was registered under the single name "global market" - one dictionary
+    # key with a space in it. discord.py's prefix parser splits the message on
+    # whitespace BEFORE it looks anything up, so `!global market view` made it search
+    # `all_commands` for "global", found nothing, raised CommandNotFound, and the
+    # default handler swallowed it. No reply, no error, nothing in the log.
+    #
+    # The whole station - sell, view, inspect, buy, cancel - had been unreachable that
+    # way since the group was renamed. A real `global` group with `market` as a real
+    # sub-group makes every documented invocation work exactly as written, rather than
+    # renaming the feature out from under everyone who has already learned it.
+    @commands.group(name="global", invoke_without_command=True)
+    @checks.has_started()
+    @checks.is_authorized()
+    async def global_root(self, ctx):
+        """The Global Trade Station. See `!global market`."""
+        await ctx.send(embed=self.station_embed())
+
+    @global_root.group(name="market", invoke_without_command=True)
+    @checks.has_started()
+    @checks.is_authorized()
+    async def global_market(self, ctx):
+        """Base command for the Global Trade Station."""
+        await ctx.send(embed=self.station_embed())
 
     @global_market.command(name="sell")
     @checks.has_started()
