@@ -3,11 +3,13 @@ import os
 import random
 import discord
 from discord.ext import commands
-from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP, CATEGORY_OPTIONS
+from utils.constants import (DB_FILE, EQUIPMENT_CATALOG, SHOP_CATALOG, TM_SHOP,
+                             CATEGORY_OPTIONS)
 from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
                            suggest_species)
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
                            snapshot)
+from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import checks
 import math
 import aiosqlite
@@ -764,10 +766,13 @@ class MarketView(discord.ui.View):
     # to a page stays readable and leaves the ceiling a long way off.
     ITEMS_PER_PAGE = 10
 
-    def __init__(self, catalog):
+    def __init__(self, catalog, category="all"):
         super().__init__(timeout=120)
         self.catalog = catalog
-        self.current_category = "all"
+        # `!tmshop` opens this same view already on its own shelf, which is what makes
+        # folding the TM shop in here a consolidation rather than a removal - one
+        # implementation, one UI, and the command people already type still works.
+        self.current_category = category
         self.current_page = 0
 
         # Add the dropdown dynamically
@@ -809,6 +814,8 @@ class MarketView(discord.ui.View):
     def generate_embed(self):
         embed = discord.Embed(title="🛒 Ecological Supply Market", color=discord.Color.green())
         embed.description = "Use `!buy [quantity] [item_name]` to requisition supplies."
+        if self.current_category == "tm":
+            embed.description += "\nTMs are applied to a specimen with `!tm`."
 
         stock = self.visible_items()
         start = self.current_page * self.ITEMS_PER_PAGE
@@ -1352,7 +1359,7 @@ class Economy(commands.Cog):
                     SELECT gm.price, gm.seller_id, gm.expires_at,
                         cp.pokedex_id, s.name, cp.level, cp.nature, cp.is_shiny, cp.ability,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                        cp.gmax_factor
+                        cp.gmax_factor, cp.gender
                     FROM global_market gm
                     JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -1364,7 +1371,8 @@ class Economy(commands.Cog):
                 return await ctx.send(f"❌ Listing `#{listing_id}` does not exist or has already expired.")
                 
             # Unpack the massive data payload, including the new marker
-            price, seller_id, expires_at, p_id, name, level, nature, is_shiny, ability, iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, gmax_factor = data
+            (price, seller_id, expires_at, p_id, name, level, nature, is_shiny, ability,
+             iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, gmax_factor, gender) = data
             
             # 2. Calculate Genetic Potential (IVs)
             iv_total = iv_hp + iv_atk + iv_def + iv_spa + iv_spd + iv_spe
@@ -1378,20 +1386,20 @@ class Economy(commands.Cog):
             # ==========================================
             # 4. LOCAL ASSET LOADING
             # ==========================================
-            # Construct the safe OS path to your sprites
-            base_path = os.path.join("KyuSprites", "sprites", "pokemon", "other", "official-artwork")
-            
-            if is_shiny:
-                file_path = os.path.join(base_path, "shiny", f"{p_id}.png")
-                safe_filename = f"{p_id}_shiny.png"
-            else:
-                file_path = os.path.join(base_path, f"{p_id}.png")
-                safe_filename = f"{p_id}.png"
-                
+            # HOME art, falling through to the official artwork - the same chain the
+            # battle scene, the box browser and the wild encounter use. This was the
+            # last hand-built sprite path in the bot: it pinned official-artwork, so a
+            # listing showed a different picture of the same specimen than the one the
+            # seller had been looking at in `!view`, and it had never heard of a female
+            # sprite either.
+            safe_filename = sprite_attachment_name(p_id, is_shiny, gender)
+            file_path = resolve_sprite(p_id, shiny=is_shiny, gender=gender, style=HOME)
+
             # Fallback Check: If the image is somehow missing from your folder, don't crash the bot!
-            if not os.path.exists(file_path):
-                # You can point this to a default "missingno" or placeholder sprite if you have one
-                print(f"⚠️ WARNING: Missing sprite for ID {p_id} at {file_path}")
+            if not file_path:
+                # Twelve species genuinely have no art anywhere. Say so rather than
+                # attaching a broken image.
+                print(f"⚠️ WARNING: no sprite anywhere for ID {p_id}")
                 sprite_file = None
             else:
                 # Package the image as a discord File object
@@ -1779,7 +1787,7 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.is_authorized()
     async def view_market(self, ctx):
         """Displays available field equipment for purchase."""
-        view = MarketView(EQUIPMENT_CATALOG)
+        view = MarketView(SHOP_CATALOG)
         embed = view.generate_embed()
         await ctx.send(embed=embed, view=view)
 
@@ -1787,41 +1795,13 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.has_started()
     @checks.is_authorized()
     async def tm_shop(self, ctx):
-        """Displays the Technical Machines available for research funding."""
-        embed = discord.Embed(
-            title="💿 Genetic Requisition: TM Shop",
-            description="Use `!buy <quantity> <tm name>` to acquire these items with your Eco Tokens.",
-            color=discord.Color.teal()
-        )
-        
-        # A lightweight UI map to add visual flair without cluttering the main economy ledger
-        ui_emojis = {
-            'ice-beam': '🧊',
-            'flamethrower': '🔥',
-            'thunderbolt': '⚡',
-            'toxic': '☣️',
-            'rest': '💤',
-            'swords-dance': '⚔️',
-            'protect': '🛡️'
-        }
-        
-        shop_list = ""
-        # Iterate through the flat dictionary (tm_key = 'ice-beam', price = 2000)
-        for tm_key, price in TM_SHOP.items():
-            
-            # 1. Format the raw string into a beautiful title
-            display_name = f"TM {tm_key.replace('-', ' ').title()}"
-            
-            # 2. Grab the specific elemental emoji, defaulting to a standard TM disc if missing
-            icon = ui_emojis.get(tm_key, '💿')
-            
-            # 3. Assemble the payload!
-            shop_list += f"{icon} **{display_name}** — {price} Tokens\n"
-            
-        embed.add_field(name="Available Inventory", value=shop_list, inline=False)
-        embed.set_footer(text="TMs can be equipped using the !tm command.")
-        
-        await ctx.send(embed=embed)
+        """Opens the market on the TM shelf."""
+        # The TM shop is no longer a second shop with its own layout, its own emoji map
+        # and its own idea of what a listing looks like. It is a category in the market,
+        # and this is the shortcut to it - so the dropdown, the pagination and the
+        # descriptions are the market's, and there is one of everything.
+        view = MarketView(SHOP_CATALOG, category="tm")
+        await ctx.send(embed=view.generate_embed(), view=view)
 
     @commands.command(name="sell")
     @checks.has_started()

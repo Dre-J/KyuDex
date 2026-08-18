@@ -668,6 +668,81 @@ EQUIPMENT_CATALOG.update(build_type_booster_stock())
 
 
 # ==========================================
+# 💿 THE TM SHELF
+# ==========================================
+# TMs used to be their own command with their own hand-written emoji map, which meant a
+# player had to know the shop was in two places and that one of them was called
+# something else. They are a shelf in the market now.
+#
+# They are deliberately NOT merged into EQUIPMENT_CATALOG. A TM is not a backpack item:
+# it lives in `user_tms`, not `user_inventory`, and `!buy` routes on that distinction.
+# Putting them in the item catalogue would have sent every TM purchase to the wrong
+# table - and would have offered them to `!sell` and `!equip`, neither of which can do
+# anything with one. So there are two dictionaries: what ITEMS exist, and what the SHOP
+# displays.
+def build_tm_stock():
+    """
+    The TM shelf, described from `base_moves` rather than from a hand-written map.
+
+    The old shop listed a price and nothing else - no type, no power, no indication of
+    what you were buying beyond the name. Reading the move table means the description
+    cannot come to disagree with what the move actually does in battle, and a TM added
+    to TM_SHOP tomorrow describes itself without anybody writing a line of prose.
+    """
+    stock = {}
+
+    details = {}
+    try:
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(DB_FILE) as _conn:
+            marks = ','.join('?' * len(TM_SHOP))
+            details = {
+                row[0]: row[1:]
+                for row in _conn.execute(
+                    f"SELECT name, type, power, damage_class FROM base_moves "
+                    f"WHERE name IN ({marks})", tuple(TM_SHOP))
+            }
+    except Exception as e:
+        # A shop that lists names and prices with no blurb is a worse shop, not a
+        # broken one. Never let this stop the bot booting.
+        print(f"⚠️ WARNING: could not read move data for the TM shelf ({e}).")
+
+    for move, price in TM_SHOP.items():
+        element, power, damage_class = details.get(move, (None, None, None))
+        pretty = move.replace('-', ' ').title()
+
+        if element and damage_class == 'status':
+            desc = f"Teaches {pretty}. A {element.title()}-type status move."
+        elif element and power:
+            desc = f"Teaches {pretty}. {element.title()}-type, {power} power."
+        elif element:
+            desc = f"Teaches {pretty}. {element.title()}-type."
+        else:
+            desc = f"Teaches {pretty}."
+
+        stock[move] = {
+            "name": f"TM {pretty}",
+            "price": price,
+            "desc": f"{desc} Apply it with `!tm`.",
+            "emoji": TYPE_EMOJI.get(element, '💿'),
+            "category": "tm",
+        }
+
+    return stock
+
+
+TM_CATALOG = build_tm_stock()
+
+# What the SHOP puts on its shelves, as opposed to what items exist. `!sell`, `!equip`
+# and `!backpack` all still read EQUIPMENT_CATALOG, because a TM is not a thing you can
+# hold, sell or carry in a backpack.
+SHOP_CATALOG = {**EQUIPMENT_CATALOG, **TM_CATALOG}
+
+CATEGORY_OPTIONS.append(
+    discord.SelectOption(label="TMs", value="tm", emoji="💿"))
+
+
+# ==========================================
 # 📡 BROADCAST CHANNELS
 # ==========================================
 # These were bare numbers in the middle of a function, with the alternative server's id
