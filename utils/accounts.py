@@ -62,7 +62,9 @@ RETAINED_TABLES = {'banned_personnel'}
 # counting every OTHER table in the schema before and after a wipe.
 
 # What a kept account looks like afterwards: a registered trainer with nothing to their
-# name. join_date is deliberately NOT reset - the account is the same age it always was.
+# name. join_date is deliberately NOT reset - the account is the same age it always was,
+# and neither is levelup_pings: it is a preference about how the bot talks to somebody,
+# not something they earned, so wiping their Pokemon should not start pinging them again.
 FRESH_ACCOUNT = {
     'eco_tokens': 0,
     'active_partner': None,
@@ -248,6 +250,44 @@ async def grant_starter_licence(db, user_id, tokens, items):
     if await _has_column(db, 'users', 'needs_starter'):
         await db.execute("UPDATE users SET needs_starter = 0 WHERE user_id = ?",
                          (user_id,))
+
+
+async def levelup_pings_enabled(db, user_id):
+    """
+    Whether this trainer wants to hear about their partner levelling up.
+
+    Defaults to True in every uncertain case - no column, no row, a NULL. A preference
+    that has never been expressed must behave the way the bot behaved before the
+    preference existed, or a migration that has not been run quietly turns a feature
+    off for the entire server.
+    """
+    if not await _has_column(db, 'users', 'levelup_pings'):
+        return True
+
+    async with db.execute("SELECT levelup_pings FROM users WHERE user_id = ?",
+                          (str(user_id),)) as cursor:
+        row = await cursor.fetchone()
+
+    if not row or row[0] is None:
+        return True
+    return bool(row[0])
+
+
+async def set_levelup_pings(db, user_id, enabled):
+    """
+    Record the preference. Returns False if the database cannot hold it yet.
+
+    Reporting the failure rather than swallowing it is the point: a toggle that says
+    "done" and changes nothing is worse than one that admits the migration is missing.
+
+    Does NOT commit; the caller owns the transaction.
+    """
+    if not await _has_column(db, 'users', 'levelup_pings'):
+        return False
+
+    await db.execute("UPDATE users SET levelup_pings = ? WHERE user_id = ?",
+                     (1 if enabled else 0, str(user_id)))
+    return True
 
 
 async def account_summary(db, user_id):

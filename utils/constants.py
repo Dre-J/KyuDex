@@ -697,6 +697,42 @@ OFFICIAL_BROADCAST_CHANNEL_ID = CHANNELS[ACTIVE_SERVER]['broadcast']
 TRADE_LOG_CHANNEL_ID = CHANNELS[ACTIVE_SERVER]['trade_log']
 
 # ==========================================
+# 🌱 WHAT THE WORLD IS ALLOWED TO PRODUCE
+# ==========================================
+# `base_pokemon_species` is a form table, not a species table. Alongside the 1062
+# ordinary entries it holds megas, Gigantamax forms, totems, Ash-Greninja, Zygarde's
+# power levels and a dozen other things that exist only inside a battle. None of them
+# can be encountered in the wild, and none of them should ever be the answer to
+# "what appeared?" or "what are you being asked to find?".
+#
+# The list lived as a copy-pasted SQL literal in three queries and was simply absent
+# from two more, which is exactly how `!spawn` ended up able to produce a mega and how
+# the Genetic Population Survey ended up asking players to go and tag a Totem Mimikyu.
+# One tuple, one helper, every query.
+SPAWNABLE_FORM_TYPES = ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
+
+
+def spawnable_forms(alias=None):
+    """
+    The SQL fragment restricting a species query to forms that can exist in the wild.
+
+    Interpolated rather than parameterised because the values are this module's own
+    constants and never touch user input, and because the alternative - threading five
+    extra placeholders through queries that already build their own IN lists - is how
+    parameter orders get shuffled.
+    """
+    prefix = f"{alias}." if alias else ""
+    joined = ", ".join(f"'{form}'" for form in SPAWNABLE_FORM_TYPES)
+    return f"{prefix}form_type IN ({joined})"
+
+
+# A field directive names ONE species and asks for 1-3 captures of it. That is a fair
+# ask for a Pidgey and an impossible one for a Mewtwo, which appears at roughly 1% of
+# spawns and then only sometimes. Rare specimens are worth hunting; they are not worth
+# a quest that quietly cannot be finished. Set to False to allow them back.
+SURVEY_EXCLUDES_RARE_SPECIES = True
+
+# ==========================================
 # 🎓 ONBOARDING: THE STARTER KIT
 # ==========================================
 # A starter used to roll its genetics like any wild specimen, 0-31 on all six. That is

@@ -801,14 +801,24 @@ class Social(commands.Cog):
                       AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
                       AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
                 )
-                SELECT name, level, instance_id 
-                FROM NumberedPC 
+                SELECT name, level, instance_id
+                FROM NumberedPC
                 WHERE box_number = ?
             """, (author_id, box_num)) as cursor:
                 pokemon = await cursor.fetchone()
 
-        if not pokemon:
-            return await ctx.send(f"⚠️ Could not find a valid specimen at Box `#{box_num}`. It may be deployed or doesn't exist.")
+            if not pokemon:
+                return await ctx.send(f"⚠️ Could not find a valid specimen at Box `#{box_num}`. It may be deployed or doesn't exist.")
+
+            # Refuse a locked starter HERE, not only at the confirm button. The button
+            # still checks - the proposal is a message that keeps working, and the
+            # count can cross the threshold while it sits there - but a confirmation
+            # dialog for a transfer that cannot happen is a dialog that teaches people
+            # the refusal is a glitch. `!trade add` already refuses at offer time; this
+            # was the one route that did not.
+            refusal = await blocked_from_trading(db, pokemon[2], author_id)
+            if refusal:
+                return await ctx.send(refusal)
 
         specimen_data = {
             "name": pokemon[0],

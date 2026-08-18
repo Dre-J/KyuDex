@@ -5,6 +5,7 @@ import time
 import random
 from utils.constants import DB_FILE
 from utils.formulas import get_xp_requirement
+from utils.accounts import levelup_pings_enabled
 
 
 class EvolutionConfirmView(discord.ui.View):
@@ -178,25 +179,56 @@ class PassiveExperienceCog(commands.Cog):
                                     possible_evolution = {"id": evolved_id, "name": new_species_name, "ability": new_ability}
                                     break # Stop at the first valid evolution found
 
-                    # 8. Announce the Level Up / Evolution
-                    announcement = f"🎉 {message.author.mention}, your **{species_name.capitalize()}** reached **Level {new_level}**!"
-                    
+                    # ==========================================
+                    # 8. ANNOUNCE THE LEVEL UP / EVOLUTION
+                    # ==========================================
+                    # Passive XP fires on ORDINARY CONVERSATION, so this used to reply
+                    # to - and ping - a chatty player every couple of minutes, in the
+                    # middle of whatever they were actually talking about. An embed
+                    # with the trainer's name written in it says the same thing without
+                    # putting a red badge on their client.
+                    #
+                    # allowed_mentions is belt and braces: there is no mention left in
+                    # the text, and this makes sure a future edit cannot reintroduce one
+                    # by accident.
+                    wants_pings = await levelup_pings_enabled(db, user_id)
+
+                    embed = discord.Embed(
+                        title="🎉 Level Up",
+                        description=(f"**{message.author.display_name}**'s "
+                                     f"**{species_name.capitalize()}** reached "
+                                     f"**Level {new_level}**!"),
+                        color=discord.Color.green()
+                    )
+                    silent = discord.AllowedMentions.none()
+
                     if possible_evolution:
                         view = EvolutionConfirmView(
-                            owner_id=message.author.id, 
-                            instance_id=instance_id, 
-                            new_pokedex_id=possible_evolution["id"], 
+                            owner_id=message.author.id,
+                            instance_id=instance_id,
+                            new_pokedex_id=possible_evolution["id"],
                             new_species_name=possible_evolution["name"],
                             new_ability=possible_evolution["ability"],
                             db_file=DB_FILE
                         )
-                        announcement += f"\n\n✨ **What? {species_name.capitalize()} is evolving!** Do you want to initiate the process?"
-                        
-                        # Reply directly to the message that triggered it
-                        reply_msg = await message.reply(content=announcement, view=view)
-                        view.message = reply_msg
-                    else:
-                        await message.reply(content=announcement)
+                        embed.add_field(
+                            name=f"✨ What? {species_name.capitalize()} is evolving!",
+                            value="Do you want to initiate the process?",
+                            inline=False
+                        )
+                        # An evolution prompt is sent whatever the preference says. It
+                        # is not a notification - it is a decision with a 60 second
+                        # window and no other way to reach it, since !evolve only
+                        # handles the item-triggered kind. Silencing announcements must
+                        # not silently cost somebody their evolutions.
+                        #
+                        # It still REPLIES, so the buttons are attached to the message
+                        # that caused them in a busy channel - just without the ping.
+                        view.message = await message.reply(
+                            embed=embed, view=view,
+                            mention_author=False, allowed_mentions=silent)
+                    elif wants_pings:
+                        await message.channel.send(embed=embed, allowed_mentions=silent)
 
         except Exception as e:
             print(f"Critical error in on_message XP handler: {e}")

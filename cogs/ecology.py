@@ -7,7 +7,10 @@ import datetime
 import random
 import math
 import uuid
-from utils.constants import DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS, STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY, STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID
+from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
+                             STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY,
+                             STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
+                             SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
@@ -20,10 +23,31 @@ from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 # had ever heard of a female sprite.
 
 # Memory dictionary to track what is currently spawned in each server
-# Format: { 'guild_id': {'pokedex_id': 1, 'name': 'bulbasaur', 'capture_rate': 45} }
+# Format: { 'guild_id': { spawn_id: {'pokedex_id': 1, 'name': 'bulbasaur',
+#                                    'capture_rate': 45, 'channel_id': 123} } }
 active_spawns = {}
-MESSAGES_REQUIRED_FOR_SPAWN = 10 
+MESSAGES_REQUIRED_FOR_SPAWN = 10
 user_active_spawns = {} # Tracks private expedition encounters (Key: user_id)
+
+
+def spawn_is_here(spawn_data, channel_id):
+    """
+    Whether this specimen may be caught from the channel the command was typed in.
+
+    A spawn is a MESSAGE, with a picture and a masked name, sitting in one channel.
+    Without this it could be caught from anywhere in the server, so anyone watching
+    the habitat channel could read the answer and type `!catch` somewhere quiet -
+    and, worse, a player in an unrelated channel would silently take the specimen out
+    from under the people actually looking at it. The encounter and the catch belong
+    in the same room.
+
+    A spawn carrying no channel at all is catchable anywhere. That is the same guarded
+    degradation used for every new column in this codebase: an encounter created before
+    this existed - one already on screen when the bot was restarted into this build -
+    keeps working rather than becoming permanently uncatchable.
+    """
+    home = spawn_data.get('channel_id')
+    return home is None or home == channel_id
 
 class EvolutionConfirmView(discord.ui.View):
     def __init__(self, owner_id: int, instance_id: str, new_pokedex_id: int, new_species_name: str, new_ability: str, db_file: str):
@@ -865,7 +889,7 @@ class Ecology(commands.Cog):
                     FROM base_pokemon_species s
                     JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                     WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                    AND s.pokedex_id NOT BETWEEN 793 AND 806 AND form_type IN ('base','alolan', 'galarian', 'hisuian', 'paldean')
+                    AND s.pokedex_id NOT BETWEEN 793 AND 806 AND {spawnable_forms('s')}
                     {rarity_filter} ORDER BY RANDOM() LIMIT 1;
                 """
                 async with db.execute(query, allowed_types) as cursor:
@@ -889,9 +913,11 @@ class Ecology(commands.Cog):
         spawn_id = str(uuid.uuid4())[:6]
 
         # 🚨 Store it UNDER the unique spawn_id, not just the guild_id!
+        # The channel is recorded HERE, where the message is about to be sent, so a
+        # spawn and the room it appeared in can never disagree.
         active_spawns[guild_id][spawn_id] = {
             'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate,
-            'is_shiny': is_shiny, 'gender': gender
+            'is_shiny': is_shiny, 'gender': gender, 'channel_id': channel.id
         }
 
     # 1. Generate the Mutation Status
@@ -1088,7 +1114,7 @@ class Ecology(commands.Cog):
         # 2. Check if the user is already on an expedition
         # 🚨 UPDATED CHECK: Looks to see if their personal dictionary exists AND has active spawns in it
         if user_id in user_active_spawns and len(user_active_spawns[user_id]) > 0:
-            return await ctx.send("🛑 You are already tracking a private spawn! Catch, defeat, or run from it first.")
+            return await ctx.send("🛑 You are already tracking a private spawn! Catch it first.")
         
         try:
             async with aiosqlite.connect(DB_FILE) as db:
@@ -1124,8 +1150,8 @@ class Ecology(commands.Cog):
                     FROM base_pokemon_species s
                     JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                     WHERE t.type_name IN {type_tuple} 
-                    AND s.pokedex_id NOT BETWEEN 793 AND 806 
-                    AND s.form_type IN ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
+                    AND s.pokedex_id NOT BETWEEN 793 AND 806
+                    AND {spawnable_forms('s')}
                     {rarity_filter}
                     ORDER BY RANDOM() LIMIT 1
                 """) as cursor:
@@ -1145,13 +1171,16 @@ class Ecology(commands.Cog):
             if user_id not in user_active_spawns:
                 user_active_spawns[user_id] = {}
             
-            # 5. Lock the spawn to this specific user!
+            # 5. Lock the spawn to this specific user - and to this specific channel.
+            #    A private encounter is still a message in a room; catching it from
+            #    three channels away is the same disconnect as with a public spawn.
             user_active_spawns[user_id][spawn_id] = {
                 'pokedex_id': poke_id,
                 'name': poke_name,
                 'is_shiny': is_shiny,
                 'gender': gender,
-                'capture_rate': true_capture_rate # Dynamically assigned!
+                'capture_rate': true_capture_rate, # Dynamically assigned!
+                'channel_id': ctx.channel.id
             }
             
             # 6. UI Output
@@ -1216,16 +1245,34 @@ class Ecology(commands.Cog):
     async def spawn_hint(self, ctx, lang_tag: str = "eng"):
         """Uses field sensors to gather data. (Optionally pass a language code like 'fr' or 'ja')"""
         guild_id = str(ctx.guild.id)
+        user_id = str(ctx.author.id)
         lang = lang_tag.upper()
-        
-        # 1. Check if there are active spawns in the new multi-spawn dictionary
-        if guild_id not in active_spawns or not active_spawns[guild_id]: 
-            return await ctx.send("📡 **Sensors Quiet:** There are no localized biological signals to analyze right now. Keep exploring!")
-            
-        # 🚨 Grab the MOST RECENT spawn added to the dictionary
-        target_spawn_id = list(active_spawns[guild_id].keys())[-1]
-        target = active_spawns[guild_id][target_spawn_id]
-        
+
+        # 1. Read the sensors in THIS channel only.
+        #
+        # A hint is an answer to the masked name on screen, so it has to describe the
+        # specimen on screen. Reading the newest spawn server-wide meant that in a
+        # server with two habitat channels the hint routinely described the OTHER one -
+        # and since the answer is what you then type into `!catch`, the hint was
+        # actively sending people to the wrong room.
+        #
+        # The caller's own expedition encounter is checked first: it is theirs, it is
+        # right here, and it was previously invisible to `!hint` altogether.
+        here = ctx.channel.id
+
+        def signals_here(store):
+            return [data for data in (store or {}).values()
+                    if isinstance(data, dict) and spawn_is_here(data, here)]
+
+        mine = signals_here(user_active_spawns.get(user_id))
+        public = signals_here(active_spawns.get(guild_id))
+
+        if not mine and not public:
+            return await ctx.send("📡 **Sensors Quiet:** There are no localized biological signals to analyze in this channel. Keep exploring!")
+
+        # 🚨 The MOST RECENT signal in this channel, the caller's own encounter first.
+        target = (mine or public)[-1]
+
         english_name = target['name'] 
         poke_id = target['pokedex_id']
         display_name = english_name # Default to English
@@ -1354,6 +1401,7 @@ class Ecology(commands.Cog):
                         JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                         WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
                         AND s.pokedex_id NOT BETWEEN 793 AND 806
+                        AND {spawnable_forms('s')}
                         {rarity_filter} ORDER BY RANDOM() LIMIT 1;
                     """
                     async with db.execute(query, allowed_types) as cursor:
@@ -1389,7 +1437,7 @@ class Ecology(commands.Cog):
         # Update the active spawns memory using the unique ID
         active_spawns[guild_id][spawn_id] = {
             'pokedex_id': poke_id, 'name': name, 'capture_rate': cap_rate,
-            'is_shiny': is_shiny, 'gender': gender
+            'is_shiny': is_shiny, 'gender': gender, 'channel_id': ctx.channel.id
         }
         
         # ==========================================
@@ -2265,7 +2313,13 @@ class Ecology(commands.Cog):
             target_spawn_id = None
             is_private_spawn = False
             origin_lang = "ENG"
-            
+            # A spawn of the right species sitting in a DIFFERENT channel. Remembered
+            # so the refusal can say where it actually is - "there is no Pikachu here"
+            # while a Pikachu is plainly on screen two channels over reads as a bug,
+            # and the player's next move is to retype the command rather than to walk
+            # to the right room.
+            elsewhere_channel_id = None
+
             async with aiosqlite.connect(DB_FILE) as db:
                 async def check_spawn(spawn_data):
                     expected_english = spawn_data.get('name')
@@ -2288,30 +2342,43 @@ class Ecology(commands.Cog):
                         if not isinstance(spawn_data, dict):
                             user_active_spawns.pop(user_id, None)
                             break
-                        
+
                         is_match, matched_lang = await check_spawn(spawn_data)
-                        if is_match:
-                            target = spawn_data
-                            target_spawn_id = sid
-                            is_private_spawn = True
-                            origin_lang = matched_lang
-                            break
+                        if not is_match:
+                            continue
+                        if not spawn_is_here(spawn_data, ctx.channel.id):
+                            elsewhere_channel_id = spawn_data.get('channel_id')
+                            continue
+                        target = spawn_data
+                        target_spawn_id = sid
+                        is_private_spawn = True
+                        origin_lang = matched_lang
+                        break
 
                 if not target and guild_id in active_spawns and isinstance(active_spawns[guild_id], dict):
                     for sid, spawn_data in list(active_spawns[guild_id].items()):
                         if not isinstance(spawn_data, dict):
                             active_spawns.pop(guild_id, None)
                             break
-                            
+
                         is_match, matched_lang = await check_spawn(spawn_data)
-                        if is_match:
-                            target = spawn_data
-                            target_spawn_id = sid
-                            origin_lang = matched_lang
-                            break
+                        if not is_match:
+                            continue
+                        if not spawn_is_here(spawn_data, ctx.channel.id):
+                            elsewhere_channel_id = spawn_data.get('channel_id')
+                            continue
+                        target = spawn_data
+                        target_spawn_id = sid
+                        origin_lang = matched_lang
+                        break
 
                 if not target:
-                    return await ctx.send(f"There is no {typed_name.capitalize().replace('-', ' ')} here right now.")
+                    pretty = typed_name.capitalize().replace('-', ' ')
+                    if elsewhere_channel_id:
+                        return await ctx.send(
+                            f"📍 The **{pretty}** is not in this channel - it appeared in "
+                            f"<#{elsewhere_channel_id}>. Head over there and try again.")
+                    return await ctx.send(f"There is no {pretty} here right now.")
 
                 pokemon_name = target['name'] 
 
@@ -2690,8 +2757,21 @@ class Ecology(commands.Cog):
                     narrative_title = f"Invasive {target_var.capitalize()}-Type Culling"
                     
                 elif chosen_obj == 'survey_species':
-                    # Dynamically query the ecosystem for a random species!
-                    async with db.execute("SELECT name FROM base_pokemon_species ORDER BY RANDOM() LIMIT 1") as cursor:
+                    # A survey names ONE species and asks the player to go and tag it,
+                    # so the target has to be something the world can actually put in
+                    # front of them. Drawn from the same pool the spawner draws from -
+                    # the unfiltered roll this replaces handed out Mega Charizard X,
+                    # Gigantamax Snorlax and Totem Raticate, none of which will ever
+                    # appear in a habitat channel.
+                    rare_filter = ("AND is_legendary = 0 AND is_mythical = 0"
+                                   if SURVEY_EXCLUDES_RARE_SPECIES else "")
+                    async with db.execute(f"""
+                        SELECT name FROM base_pokemon_species
+                        WHERE {spawnable_forms()}
+                        AND pokedex_id NOT BETWEEN 793 AND 806
+                        {rare_filter}
+                        ORDER BY RANDOM() LIMIT 1
+                    """) as cursor:
                         db_species = await cursor.fetchone()
                     target_var = db_species[0] if db_species else 'pidgey'
                     
