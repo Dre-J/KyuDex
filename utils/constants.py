@@ -668,6 +668,127 @@ EQUIPMENT_CATALOG.update(build_type_booster_stock())
 
 
 # ==========================================
+# 💥 ITEM PHASE 2: THE ONE-SHOT POLICIES AND SEEDS
+# ==========================================
+# All fourteen were already named in ONE_USE_ITEMS, which is exactly what made them look
+# finished: that set records that an item is SPENT, not what spending it does. A
+# specimen holding a Weakness Policy fought as though its hands were empty, and then the
+# empty hands were faithfully written back to the database.
+#
+# Every one is the same sentence - "when X happens to me, move a stat stage and consume
+# myself" - which is the shape Block 14's reaction table already has for abilities. So
+# this is the same table, keyed on the item instead, and its stage changes are enqueued
+# rather than written: a Weakness Policy boost meets Block 8's resolver the same way a
+# Swords Dance does, which is what makes it copyable by Opportunist and refusable by
+# nothing (boosts are never screened) without either of those being restated here.
+# Stat names here are the RESOLVER's vocabulary - 'special-attack', not 'sp_atk'.
+# STAT_STAGE_KEYS translates those into the storage keys, and it does so with a .get
+# that silently skips anything it does not recognise: a table written in the storage
+# spelling produces no error, no log line and no boost. Everything else that enqueues a
+# stage - natures, moves, ON_HIT_REACTIONS - speaks the same dialect for the same reason.
+ITEM_HIT_REACTIONS = {
+    'absorb-bulb':     {'types': ['water'],      'self': [('special-attack', 1)]},
+    'cell-battery':    {'types': ['electric'],   'self': [('attack', 1)]},
+    'luminous-moss':   {'types': ['water'],      'self': [('special-defense', 1)]},
+    'snowball':        {'types': ['ice'],        'self': [('attack', 1)]},
+    # The only one that reads effectiveness rather than element, and the only one worth
+    # two stages - it is a deliberate invitation to be hit hard once.
+    'weakness-policy': {'super_effective': True,
+                        'self': [('attack', 2), ('special-attack', 2)]},
+}
+
+# The seeds fire on ARRIVAL into a terrain, and again when a terrain is laid under a
+# specimen already standing there. Both, not either: a Grassy Seed that only worked on
+# switch-in would sit inert through the Grassy Surge it was bought for.
+TERRAIN_SEED_ITEMS = {
+    'electric-seed': ('electric', 'defense'),
+    'grassy-seed':   ('grassy',   'defense'),
+    'misty-seed':    ('misty',    'special-defense'),
+    'psychic-seed':  ('psychic',  'special-defense'),
+}
+
+# The three that answer something other than being hit.
+THROAT_SPRAY_BOOST = ('special-attack', 1)   # after using a sound move
+BLUNDER_POLICY_BOOST = ('speed', 2)     # after missing because of accuracy
+ROOM_SERVICE_DROP = ('speed', -1)       # when Trick Room goes up
+
+# What a Mental Herb frees its holder from. Infatuation is the Gen III effect; the rest
+# arrived in Gen V, and all five are volatiles this engine already tracks by these
+# names, so the herb is a sweep over one tuple rather than five special cases.
+MENTAL_HERB_CURES = ('infatuation', 'taunt', 'encore', 'torment', 'disable')
+
+# ==========================================
+# 💥 THE PHASE 2 SHELF
+# ==========================================
+# Cheaper than the Choice trio and the Life Orb on purpose. Every one of these is a
+# conditional item - it does nothing at all unless the battle goes a particular way -
+# so pricing it beside an item that works every single turn would mean nobody ever
+# buys one, and the point of stocking them is to give team building something to think
+# about rather than to sell tokens' worth of value.
+PHASE2_PRICE = 250
+
+# Read off the same tables the ENGINE reads, so a shop description cannot come to
+# disagree with what the item does - the lesson from the type-booster shelf, where the
+# alternative was fifty-eight hand-typed rows and fifty-eight chances to mistype one.
+PHASE2_DESCRIPTIONS = {
+    'absorb-bulb':     "Raises Sp. Atk one stage when hit by a Water move. Single use.",
+    'cell-battery':    "Raises Attack one stage when hit by an Electric move. Single use.",
+    'luminous-moss':   "Raises Sp. Def one stage when hit by a Water move. Single use.",
+    'snowball':        "Raises Attack one stage when hit by an Ice move. Single use.",
+    'weakness-policy': "Raises Attack AND Sp. Atk two stages each when hit by a super "
+                       "effective move. Single use.",
+    'blunder-policy':  "Raises Speed two stages when a move misses. Single use.",
+    'throat-spray':    "Raises Sp. Atk one stage after a sound-based move. Single use.",
+    'room-service':    "Lowers Speed one stage when Trick Room goes up. Single use.",
+    'white-herb':      "Restores every lowered stat the moment one falls. Single use.",
+    'mental-herb':     "Clears infatuation, Taunt, Encore, Torment or Disable. Single use.",
+    'electric-seed':   "Raises Defense one stage on Electric Terrain. Single use.",
+    'grassy-seed':     "Raises Defense one stage on Grassy Terrain. Single use.",
+    'misty-seed':      "Raises Sp. Def one stage on Misty Terrain. Single use.",
+    'psychic-seed':    "Raises Sp. Def one stage on Psychic Terrain. Single use.",
+}
+
+PHASE2_EMOJI = {
+    'absorb-bulb': '💧', 'cell-battery': '🔋', 'luminous-moss': '🌿',
+    'snowball': '❄️', 'weakness-policy': '🛡️', 'blunder-policy': '💨',
+    'throat-spray': '🎤', 'room-service': '🛎️', 'white-herb': '🌱',
+    'mental-herb': '🍃', 'electric-seed': '⚡', 'grassy-seed': '🌾',
+    'misty-seed': '🌫️', 'psychic-seed': '🔮',
+}
+
+
+def build_phase2_stock():
+    """The Phase 2 shelf, checked against the tables the engine actually reads.
+
+    The assertion is the point: an item described here that no table implements would
+    be an item the shop sells and the engine ignores, which is the exact failure
+    `test_shop_catalog.py` exists to prevent. Better to fail at import than to take
+    somebody's tokens for a rock.
+    """
+    implemented = (set(ITEM_HIT_REACTIONS) | set(TERRAIN_SEED_ITEMS)
+                   | {'throat-spray', 'blunder-policy', 'room-service',
+                      'white-herb', 'mental-herb'})
+    missing = implemented - set(PHASE2_DESCRIPTIONS)
+    assert not missing, f"Phase 2 items with no shop entry: {sorted(missing)}"
+    extra = set(PHASE2_DESCRIPTIONS) - implemented
+    assert not extra, f"Phase 2 shop entries with no implementation: {sorted(extra)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE2_PRICE,
+            "desc": PHASE2_DESCRIPTIONS[item],
+            "emoji": PHASE2_EMOJI.get(item, '💥'),
+            "category": "battleitems",
+        }
+        for item in sorted(implemented)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase2_stock())
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a
@@ -785,6 +906,29 @@ TRADE_LOG_CHANNEL_ID = CHANNELS[ACTIVE_SERVER]['trade_log']
 # the Genetic Population Survey ended up asking players to go and tag a Totem Mimikyu.
 # One tuple, one helper, every query.
 SPAWNABLE_FORM_TYPES = ('base', 'alolan', 'galarian', 'hisuian', 'paldean')
+
+# The Ultra Beasts, written out rather than expressed as a range. `793-806` is the range
+# they LOOK like they occupy, and it was used in seven queries - but three of the
+# fourteen ids inside it are not Ultra Beasts at all:
+#
+#     800  Necrozma   (legendary)
+#     801  Magearna   (mythical)
+#     802  Marshadow  (mythical)
+#
+# That single off-by-three did two separate things. A spatial rift, which is supposed to
+# flood the habitat with invasive Ultra Beasts, could produce Magearna or Marshadow
+# instead; and the matching NOT-BETWEEN in every ordinary spawn query excluded those
+# three from the world entirely, so the only way to see a Necrozma was a dimensional
+# rift. They are ordinary legendaries and mythicals now, appearing at the same rarity as
+# every other one, and the rift produces only the eleven real Ultra Beasts.
+ULTRA_BEAST_IDS = (793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806)
+
+
+def ultra_beasts(alias=None, negate=False):
+    """The SQL fragment selecting - or excluding - the Ultra Beasts."""
+    prefix = f"{alias}." if alias else ""
+    joined = ", ".join(str(dex) for dex in ULTRA_BEAST_IDS)
+    return f"{prefix}pokedex_id {'NOT ' if negate else ''}IN ({joined})"
 
 
 def spawnable_forms(alias=None):
@@ -1462,6 +1606,7 @@ ON_HIT_REACTIONS = {
     'wind-power':       {'trigger': 'damaged',  'wind': True, 'volatile': 'charged'},
     'electromorphosis': {'trigger': 'damaged',  'volatile': 'charged'},
 }
+
 
 # The charge Wind Power and Electromorphosis bank, and what it is worth. Spent by the next
 # Electric move its owner throws.

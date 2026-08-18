@@ -17,6 +17,7 @@ import aiosqlite
 import discord
 from discord.ext import commands
 
+from utils import audit
 from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP
 
 # The two ledgers a grant can land in. A TM is not a backpack item - it lives in
@@ -187,6 +188,13 @@ class Admin(commands.Cog):
         embed.set_footer(text=f"Authorised by {ctx.author.name} · target {user_id}")
         await ctx.send(embed=embed)
 
+        await audit.post_admin_action(
+            self.bot, action="Item grant", actor=ctx.author, target=target,
+            colour=discord.Colour.blurple(),
+            fields=[("Item", f"{display} (`{key}`)"),
+                    ("Change", f"**{quantity:+}** → they now hold **{held}**"),
+                    ("Ledger", "TM case" if ledger == TM_LEDGER else "Field pack")])
+
     @give.command(name="tokens", aliases=["token", "credits", "eco"])
     @commands.is_owner()
     async def give_tokens(self, ctx, target: discord.User, amount: int):
@@ -234,6 +242,14 @@ class Admin(commands.Cog):
                 inline=False)
         embed.set_footer(text=f"Authorised by {ctx.author.name} · target {user_id}")
         await ctx.send(embed=embed)
+
+        await audit.post_admin_action(
+            self.bot, action="Token grant", actor=ctx.author, target=target,
+            colour=discord.Colour.gold(),
+            fields=[("Change", f"**{after - before:+,}** Eco Tokens"),
+                    ("Balance", f"🪙 {before:,} → 🪙 {after:,}")],
+            detail=(f"Requested {amount:+,}, clamped at zero."
+                    if after - before != amount else None))
 
     # ==========================================
     # REWRITE
@@ -332,6 +348,18 @@ class Admin(commands.Cog):
 
         embed.set_footer(text=f"Authorised by {ctx.author.name}")
         await ctx.send(embed=embed)
+
+        # The owner of the specimen is named as the target even though they did not do
+        # this - because the question this record answers is "why did my Pokemon change
+        # species", and their id is what somebody will search for.
+        await audit.post_admin_action(
+            self.bot, action="Species rewrite", actor=ctx.author,
+            colour=discord.Colour.dark_teal(),
+            fields=[("Specimen", f"`{instance_id}`"
+                                 + (f" — *{nickname}*" if nickname else "")),
+                    ("Owner", f"`{owner_id}`"),
+                    ("Species", f"{old_name} (`{old_id}`) → {new_name} (`{new_id}`)"),
+                    ("Ability", f"{old_ability} → {new_ability} ({how})")])
 
 
 async def setup(bot):

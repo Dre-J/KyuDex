@@ -7,8 +7,8 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, spawnable_forms
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, spawnable_forms, ultra_beasts
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -589,7 +589,7 @@ def deploy_weather(state, move_name, attacker, magic_room=False):
     return f"↳ {WEATHER_MESSAGES.get(new_weather, 'The weather changed.')}\n"
 
 
-def lay_terrain(state, new_terrain, attacker, magic_room=False):
+def lay_terrain(state, new_terrain, attacker, magic_room=False, standing=()):
     """
     Put a terrain down. The one place a terrain is ever written.
 
@@ -607,15 +607,97 @@ def lay_terrain(state, new_terrain, attacker, magic_room=False):
 
     duration = 8 if get_active_item(attacker, magic_room) == 'terrain-extender' else 5
     state['terrain'] = {'type': new_terrain, 'duration': duration}
-    return f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+    log = f"↳ {TERRAIN_MESSAGES[new_terrain]}\n"
+
+    # The seeds fire HERE, where the terrain actually lands, rather than at each of the
+    # seven places a terrain can be laid from - a move, a Max move, a surge ability and
+    # Block 11's field payload all arrive through this function. Passing the specimens
+    # standing in it is the caller's job because only the caller knows who they are.
+    #
+    # Safe to include a specimen that already fired: seed_on_arrival spends the item, so
+    # a second call finds empty hands and says nothing.
+    return log + seed_the_field(state, *standing)
 
 
-def deploy_terrain(state, move_name, attacker, magic_room=False, max_move_type=None):
+def deploy_terrain(state, move_name, attacker, magic_room=False, max_move_type=None,
+                   standing=()):
     """Lay a terrain, from a terrain move or from the Max move that carries one."""
     new_terrain = TERRAIN_MOVES.get(str(move_name))
     if not new_terrain and max_move_type:
         new_terrain = (MAX_MOVES.get(max_move_type) or {}).get('terrain')
-    return lay_terrain(state, new_terrain, attacker, magic_room)
+    return lay_terrain(state, new_terrain, attacker, magic_room, standing)
+
+
+def seed_on_arrival(pokemon, state, owner_str="", magic_room=False):
+    """
+    Fire a terrain seed for a specimen that has just arrived, or just been stood on.
+
+    One function for both halves on purpose. A seed that only worked on switch-in would
+    sit inert through the Grassy Surge it was bought for, and one that only worked when
+    the terrain was laid would do nothing for the specimen brought in AFTER it - and
+    those are two different bugs that look identical from the outside.
+
+    Grounded-ness is tested here because it is the same rule for both halves: a Flying
+    type standing in Electric Terrain is not in Electric Terrain.
+    """
+    terrain = (state or {}).get('terrain', {}).get('type', 'none')
+    if terrain == 'none':
+        return ""
+    if not is_grounded(pokemon, (state or {}).get('field', {}).get('gravity', 0) > 0):
+        return ""
+
+    fired = terrain_seed_fires(pokemon, terrain, magic_room)
+    if not fired:
+        return ""
+
+    item, stat, stages = fired
+    spend_item(pokemon, item)
+    log = (f"🌱 **{owner_str.strip()} {pokemon['name'].capitalize()}**'s "
+           f"{item.replace('-', ' ').title()} took root in the "
+           f"{terrain.capitalize()} Terrain!\n")
+    # Through the shared resolver, like every other stage change, so the boost is
+    # visible to Opportunist and reported the same way as any other.
+    return log + resolve_stat_stages([(pokemon, stat, stages, None)])
+
+
+def seed_the_field(state, *combatants):
+    """Every specimen currently standing in a freshly laid terrain gets its seed."""
+    log = ""
+    for pokemon in combatants:
+        if pokemon is not None and pokemon.get('current_hp', 0) > 0:
+            log += seed_on_arrival(pokemon, state)
+    return log
+
+
+def room_service_on_trick_room(state, *combatants):
+    """Room Service, for everyone standing under a Trick Room that has just gone up."""
+    log = ""
+    for pokemon in combatants:
+        if pokemon is None or pokemon.get('current_hp', 0) <= 0:
+            continue
+        fired = room_service_fires(pokemon)
+        if not fired:
+            continue
+        item, (stat, stages) = fired
+        spend_item(pokemon, item)
+        log += (f"🛎️ **{pokemon['name'].capitalize()}**'s Room Service slowed it to "
+                f"suit the twisted dimensions!\n")
+        # Self-inflicted, so nothing screens it - which is correct: Clear Body does not
+        # stop a specimen putting its own item on.
+        log += resolve_stat_stages([(pokemon, stat, stages, None)])
+    return log
+
+
+def blunder_policy_on_miss(attacker):
+    """Blunder Policy, after a move misses because of accuracy."""
+    fired = blunder_policy_fires(attacker)
+    if not fired:
+        return ""
+    item, (stat, stages) = fired
+    spend_item(attacker, item)
+    return (f"💨 **{attacker['name'].capitalize()}**'s Blunder Policy sped it up "
+            f"after the miss!\n"
+            + resolve_stat_stages([(attacker, stat, stages, None)]))
 
 
 def deploy_field_toggle(state, move_name, attacker, defender, user_hazards, team_label=None):
@@ -641,7 +723,11 @@ def deploy_field_toggle(state, move_name, attacker, defender, user_hazards, team
             field['trick_room'] = 0
             return "↳ The twisted dimensions returned to normal!\n"
         field['trick_room'] = 5
-        return f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
+        # Room Service answers the dimensions going up, for BOTH specimens standing in
+        # them - it is not the setter's item alone, and a version that only checked the
+        # setter would be silently useless to the half of the field it is bought for.
+        return (f"↳ **{attacker['name'].capitalize()}** twisted the dimensions!\n"
+                + room_service_on_trick_room(state, attacker, defender))
 
     if move_name == 'wonder-room':
         if field['wonder_room'] > 0:
@@ -745,7 +831,7 @@ def deploy_reaction_field(state, request, setter, prefix=""):
     magic_room = state.get('field', {}).get('magic_room', 0) > 0
 
     if kind == 'terrain':
-        laid = lay_terrain(state, value, setter, magic_room)
+        laid = lay_terrain(state, value, setter, magic_room, standing=(setter,))
         return (prefix + laid.lstrip()) if laid else ""
 
     if kind == 'weather':
@@ -988,6 +1074,15 @@ def end_of_turn_items(state, *sides):
     magic_room = state.get('field', {}).get('magic_room', 0) > 0
     weather = (state.get('weather') or {}).get('type', 'none')
     log = ""
+
+    # Mental Herb, before the berries. Mainline fires it the instant the condition is
+    # applied; this engine applies Taunt, Encore, Torment, Disable and infatuation from
+    # half a dozen places, and a herb wired into each of them is six chances to forget
+    # one. Here it is one line that cannot be missed, at the cost of the holder losing
+    # the turn it was Taunted on - which is the honest trade and is worth saying out
+    # loud rather than pretending the timing is exact.
+    for specimen, _foe, _owner in sides:
+        log += apply_mental_herb(specimen, magic_room)
 
     for specimen, foe, owner in sides:
         log += check_consumables(specimen, owner, magic_room, foe)
@@ -2025,7 +2120,8 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
     # it lays the Electric Terrain that its own Sp. Atk row then feeds on.
     elif ability in TERRAIN_SETTER_ABILITIES:
         laid = lay_terrain(state, TERRAIN_SETTER_ABILITIES[ability], entering_combatant,
-                           state.get('field', {}).get('magic_room', 0) > 0)
+                           state.get('field', {}).get('magic_room', 0) > 0,
+                           standing=(entering_combatant, opponent))
         if laid:
             combat_log += (f"⚡ **{owner_str.strip()} {name}**'s "
                            f"{ability.replace('-', ' ').title()} charged the ground!\n")
@@ -2125,6 +2221,15 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
     # forgotten finds the decision here rather than an absence.
     elif ability in DOUBLES_ONLY_ABILITIES:
         print(f"DEBUG ENTRY: {ability} is doubles-only; singles has no second body")
+
+    # ==========================================
+    # 1z. THE TERRAIN SEEDS (item Phase 2)
+    # ==========================================
+    # Below the whole ability ladder rather than inside it. Every branch above is an
+    # `elif` on the arriving specimen's ABILITY, and a seed is an item - chaining it on
+    # would have made an Electric Seed silently depend on its holder not also having
+    # Intimidate, which is the kind of coupling nobody would ever think to test for.
+    combat_log += seed_on_arrival(entering_combatant, state, owner_str)
 
     # ==========================================
     # 2. ATMOSPHERIC SUPPRESSION
@@ -3477,7 +3582,8 @@ class SwapMenu(discord.ui.View):
                                 magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
                                 move_name_used = chosen_move['name']
                                 combat_log += deploy_weather(state, move_name_used, n_active, magic_room_on)
-                                combat_log += deploy_terrain(state, move_name_used, n_active, magic_room_on)
+                                combat_log += deploy_terrain(state, move_name_used, n_active, magic_room_on,
+                                                             standing=(n_active, new_active))
                                 combat_log += deploy_field_toggle(state, move_name_used, n_active,
                                                                   new_active, state['npc_hazards'])
                 else:
@@ -5202,6 +5308,11 @@ class BattleDashboard(discord.ui.View):
                                 # 🚨 STOMPING TANTRUM MEMORY: a whiff counts as a failure
                                 attacker['last_move_failed'] = True
 
+                                # Blunder Policy answers an ACCURACY miss, which is
+                                # precisely what this branch is - a protect, an immunity
+                                # or a failed status move is not a blunder.
+                                combat_log += blunder_policy_on_miss(attacker)
+
                                 # 🚨 CRASH DAMAGE (Miss)
                                 if raw_move_name in ['jump-kick', 'high-jump-kick']:
                                     crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
@@ -5505,7 +5616,8 @@ class BattleDashboard(discord.ui.View):
                         combat_log += deploy_weather(state, effective_move_name, attacker, magic_room_on)
                         combat_log += deploy_terrain(
                             state, effective_move_name, attacker, magic_room_on,
-                            max_move_type=move_stats['type'] if (is_player and is_max_action) else None)
+                            max_move_type=move_stats['type'] if (is_player and is_max_action) else None,
+                            standing=(attacker, defender))
                         combat_log += deploy_field_toggle(
                             state, raw_move_name, attacker, defender,
                             state['player_hazards'] if is_player else state['npc_hazards'])
@@ -5849,7 +5961,8 @@ class BattleDashboard(discord.ui.View):
 
                         magic_room_on = state.get('field', {}).get('magic_room', 0) > 0
                         combat_log += deploy_weather(state, npc_move_name, n_active, magic_room_on)
-                        combat_log += deploy_terrain(state, npc_move_name, n_active, magic_room_on)
+                        combat_log += deploy_terrain(state, npc_move_name, n_active, magic_room_on,
+                                                     standing=(n_active, p_active))
                         combat_log += deploy_field_toggle(state, npc_move_name, n_active,
                                                           p_active, state['npc_hazards'])
 
@@ -8251,6 +8364,11 @@ class Combat(commands.Cog):
                                 # 🚨 STOMPING TANTRUM MEMORY: a whiff counts as a failure
                                 attacker['last_move_failed'] = True
 
+                                # Blunder Policy answers an ACCURACY miss, which is
+                                # precisely what this branch is - a protect, an immunity
+                                # or a failed status move is not a blunder.
+                                combat_log += blunder_policy_on_miss(attacker)
+
                                 # 🚨 CRASH DAMAGE (Miss)
                                 if raw_move_name in ['jump-kick', 'high-jump-kick']:
                                     crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
@@ -8529,7 +8647,8 @@ class Combat(commands.Cog):
                     # ==========================================
                     combat_log += deploy_terrain(
                         state, effective_move_name, attacker, magic_room_on,
-                        max_move_type=move.get('type') if (adp_state['active'] and is_max_move) else None)
+                        max_move_type=move.get('type') if (adp_state['active'] and is_max_move) else None,
+                        standing=(attacker, defender))
             
                     # ==========================================
                     # 🚨 FIELD STATE DEPLOYMENT
@@ -10284,11 +10403,15 @@ class Combat(commands.Cog):
                     avg_level = max(1, sum(row[0] for row in party_data) // team_size)
 
                     # 2. Generate the Rival Team Roster
-                    # We exclude Legendaries, Mythicals, and Ultra Beasts (793-806) to ensure standard biological encounters
+                    # We exclude Legendaries, Mythicals and Ultra Beasts to ensure standard
+                    # biological encounters. The Ultra Beast list is written out in
+                    # constants rather than expressed as 793-806, because three of the ids
+                    # in that range - Necrozma, Magearna and Marshadow - are not Ultra
+                    # Beasts, and are already excluded here by the legendary/mythical test.
                     async with db.execute(f"""
                     SELECT pokedex_id, name
                     FROM base_pokemon_species
-                    WHERE is_legendary = 0 AND is_mythical = 0 AND pokedex_id NOT BETWEEN 793 AND 806 AND {spawnable_forms()}
+                    WHERE is_legendary = 0 AND is_mythical = 0 AND {ultra_beasts(negate=True)} AND {spawnable_forms()}
                     ORDER BY RANDOM() LIMIT ?
                 """, (team_size,)) as cursor:
                         npc_species = await cursor.fetchall()

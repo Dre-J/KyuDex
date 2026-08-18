@@ -50,6 +50,23 @@ ANONYMISE = {
     'caught_pokemon': 'original_user_id',
 }
 
+# Rows that name TWO trainers, where deleting the row would destroy somebody ELSE's
+# record of something they took part in.
+#
+# `trade_logs` is the case: a row says "A gave B this". Deleting every row naming A also
+# deletes B's only evidence of a trade B made, which is the same failure the
+# original_user_id rule exists to prevent, one table over. So the row survives and the
+# name comes off - the trade remains reconstructable, and the erased trainer is no
+# longer in it.
+#
+# This map exists because the ledger was added in the trade-ledger change and QUIETLY
+# ESCAPED the cascade: the schema guard looks for columns called user_id, seller_id and
+# the like, and `user_a`/`user_b` matched none of them, so nothing asked the question.
+# The guard knows those spellings now.
+ANONYMISE_PAIRED = {
+    'trade_logs': ('user_a', 'user_b'),
+}
+
 # Deliberately survives both doors. A ban that a user could clear by deleting their own
 # account and registering again is not a ban. Retaining it is an abuse-prevention
 # record rather than game data - worth confirming against your privacy policy.
@@ -88,6 +105,13 @@ async def _instance_ids(db, user_id):
 async def _has_column(db, table, column):
     async with db.execute(f"PRAGMA table_info({table})") as cursor:
         return any(row[1] == column for row in await cursor.fetchall())
+
+
+async def _has_table(db, table):
+    async with db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+            (table,)) as cursor:
+        return await cursor.fetchone() is not None
 
 
 async def wipe_user(db, user_id, keep_account=False):
@@ -133,6 +157,19 @@ async def wipe_user(db, user_id, keep_account=False):
             (user_id, user_id))
         if cursor.rowcount:
             removed[f"{table} (origin anonymised)"] = cursor.rowcount
+
+    # 4b. Rows naming two trainers. The row stays so the OTHER party keeps their record;
+    #     only the erased trainer's name comes off it.
+    for table, columns in ANONYMISE_PAIRED.items():
+        if not await _has_table(db, table):
+            continue
+        for column in columns:
+            if not await _has_column(db, table, column):
+                continue
+            cursor = await db.execute(
+                f"UPDATE {table} SET {column} = NULL WHERE {column} = ?", (user_id,))
+            if cursor.rowcount:
+                removed[f"{table}.{column} (anonymised)"] = cursor.rowcount
 
     # 5. The account itself.
     if keep_account:

@@ -10,7 +10,8 @@ import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
-                             SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms)
+                             SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
+                             ultra_beasts)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
@@ -861,7 +862,7 @@ class Ecology(commands.Cog):
             if current_pollution == 'spatial_rift':
                 habitat_condition = "The local environment is being warped by invasive dimensional energy."
                 rarity_name = "🛸 ULTRA BEAST"
-                async with db.execute("SELECT pokedex_id, name, capture_rate, gender_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
+                async with db.execute(f"SELECT pokedex_id, name, capture_rate, gender_rate FROM base_pokemon_species WHERE {ultra_beasts()} ORDER BY RANDOM() LIMIT 1;") as cursor:
                     spawned_data = await cursor.fetchone()
             else:
                 # --- STANDARD BIOME & POLLUTION LOGIC ---
@@ -889,7 +890,7 @@ class Ecology(commands.Cog):
                     FROM base_pokemon_species s
                     JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                     WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                    AND s.pokedex_id NOT BETWEEN 793 AND 806 AND {spawnable_forms('s')}
+                    AND {ultra_beasts('s', negate=True)} AND {spawnable_forms('s')}
                     {rarity_filter} ORDER BY RANDOM() LIMIT 1;
                 """
                 async with db.execute(query, allowed_types) as cursor:
@@ -1150,7 +1151,7 @@ class Ecology(commands.Cog):
                     FROM base_pokemon_species s
                     JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                     WHERE t.type_name IN {type_tuple} 
-                    AND s.pokedex_id NOT BETWEEN 793 AND 806
+                    AND {ultra_beasts('s', negate=True)}
                     AND {spawnable_forms('s')}
                     {rarity_filter}
                     ORDER BY RANDOM() LIMIT 1
@@ -1372,7 +1373,7 @@ class Ecology(commands.Cog):
                 if current_pollution == 'spatial_rift':
                     habitat_condition = "The local environment is being warped by invasive dimensional energy."
                     rarity_name = "🛸 ULTRA BEAST"
-                    async with db.execute("SELECT pokedex_id, name, capture_rate, gender_rate FROM base_pokemon_species WHERE pokedex_id BETWEEN 793 AND 806 ORDER BY RANDOM() LIMIT 1;") as cursor:
+                    async with db.execute(f"SELECT pokedex_id, name, capture_rate, gender_rate FROM base_pokemon_species WHERE {ultra_beasts()} ORDER BY RANDOM() LIMIT 1;") as cursor:
                         spawned_data = await cursor.fetchone()
                 else:
                     # --- STANDARD BIOME & POLLUTION LOGIC ---
@@ -1400,7 +1401,7 @@ class Ecology(commands.Cog):
                         FROM base_pokemon_species s
                         JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                         WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                        AND s.pokedex_id NOT BETWEEN 793 AND 806
+                        AND {ultra_beasts('s', negate=True)}
                         AND {spawnable_forms('s')}
                         {rarity_filter} ORDER BY RANDOM() LIMIT 1;
                     """
@@ -2770,7 +2771,7 @@ class Ecology(commands.Cog):
                     async with db.execute(f"""
                         SELECT name FROM base_pokemon_species
                         WHERE {spawnable_forms()}
-                        AND pokedex_id NOT BETWEEN 793 AND 806
+                        AND {ultra_beasts(negate=True)}
                         {rare_filter}
                         ORDER BY RANDOM() LIMIT 1
                     """) as cursor:

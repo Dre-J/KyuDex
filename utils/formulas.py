@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -3804,6 +3804,9 @@ def resolve_stat_stages(pending, prefix="", foe_of=None):
     copy all resolve here so that every path through both engines gets them for free.
     """
     log = ""
+    # Whoever actually LOST a stage. A White Herb answers a drop that landed, so a drop
+    # that Clear Body refused or that was already pinned at -6 must not spend one.
+    dropped = []
     queue = [(entry + (True, True))[:6] for entry in pending]
     # A hard stop on the queue. Nothing should be able to grow it without bound now that
     # reflections cannot bounce, but a runaway here would hang a battle rather than
@@ -3859,6 +3862,8 @@ def resolve_stat_stages(pending, prefix="", foe_of=None):
             # LASH OUT TRACKER
             # ==========================================
             specimen.setdefault('volatile_statuses', {})['stats_lowered_this_turn'] = True
+            if not any(seen is specimen for seen in dropped):
+                dropped.append(specimen)
 
             # Defiant and Competitive only wake for the OTHER side's doing, and only once
             # the drop has actually landed.
@@ -3884,6 +3889,19 @@ def resolve_stat_stages(pending, prefix="", foe_of=None):
                 log += (f"{prefix}👁️ **{thief['name'].capitalize()}**'s Opportunist "
                         f"helped itself to the {pretty_stat} boost!\n")
                 queue.append((thief, s_name, chg, None, False, False))
+
+    # ==========================================
+    # ITEM PHASE 2: THE WHITE HERB
+    # ==========================================
+    # After the queue drains, not during it. Restoring mid-queue would undo a drop that a
+    # Defiant answer or a Mirror Armor reflection is still reading, and the herb would
+    # then be spent against a stage that a later entry lowered again.
+    #
+    # This is the ONE place in either engine where a stat stage falls, which is what
+    # makes a single line here cover Intimidate, every stat-lowering move, every ability
+    # reaction and every item - none of which had to be taught what a White Herb is.
+    for specimen in dropped:
+        log += apply_white_herb(specimen)
 
     return log
 
@@ -3966,6 +3984,162 @@ def on_hit_reaction(defender, move_name, move, attacker, damage, was_crit):
         return None
 
     return row
+
+
+# ==========================================
+# ITEM PHASE 2: THE ONE-SHOT POLICIES AND SEEDS
+# ==========================================
+# Every one of these ASKS a question and, if the answer is yes, spends the item. They do
+# not write the stat stage: they hand it back so the caller can enqueue it, which is
+# what puts a Weakness Policy boost through the same resolver as a Swords Dance.
+#
+# `spend_item` is separate from each trigger for the same reason `on_hit_reaction` is
+# separate from applying it - the question can then be asked by a test, or by the AI,
+# without an item disappearing as a side effect of asking.
+
+def spend_item(pokemon, item):
+    """Burn a one-shot item out of a specimen's hands and record that it was USED."""
+    if pokemon is None or not item:
+        return
+    pokemon['held_item'] = 'none'
+    mark_item_consumed(pokemon, item)
+
+
+def item_hit_reaction(defender, move, damage, type_multiplier=1.0, magic_room=False):
+    """
+    What the specimen's ITEM does about the hit it just took, or None.
+
+    Returns `(item, [(stat, stages), ...])`. Asked only about damaging hits that
+    actually landed: an Absorb Bulb does not answer a Water-type status move, and a
+    Weakness Policy does not answer a super-effective move that was blocked outright.
+    """
+    if defender is None or damage <= 0:
+        return None
+    if (move or {}).get('class') == 'status':
+        return None
+
+    item = get_active_item(defender, magic_room)
+    row = ITEM_HIT_REACTIONS.get(item)
+    if not row:
+        return None
+
+    if row.get('super_effective'):
+        if type_multiplier <= 1.0:
+            return None
+    elif 'types' in row and (move or {}).get('type') not in row['types']:
+        return None
+
+    return item, list(row['self'])
+
+
+def terrain_seed_fires(pokemon, terrain, magic_room=False):
+    """
+    Whether the holder's seed answers this terrain, as `(item, stat, stages)` or None.
+
+    Grounded-ness is NOT tested here. A terrain only affects grounded specimens in the
+    first place, and every caller already knows whether the terrain is doing anything -
+    duplicating the test would give two places for the answer to differ.
+    """
+    if pokemon is None or pokemon.get('current_hp', 1) <= 0:
+        return None
+
+    item = get_active_item(pokemon, magic_room)
+    row = TERRAIN_SEED_ITEMS.get(item)
+    if not row:
+        return None
+
+    wanted, stat = row
+    if (terrain or 'none') != wanted:
+        return None
+    return item, stat, 1
+
+
+def sound_move_spray(attacker, move_name, magic_room=False):
+    """Throat Spray, which answers the holder's own sound move rather than being hit."""
+    if attacker is None or attacker.get('current_hp', 1) <= 0:
+        return None
+    if get_active_item(attacker, magic_room) != 'throat-spray':
+        return None
+    if not is_sound_move(move_name):
+        return None
+    return 'throat-spray', THROAT_SPRAY_BOOST
+
+
+def blunder_policy_fires(attacker, magic_room=False):
+    """Blunder Policy, after a move misses because of accuracy."""
+    if attacker is None or attacker.get('current_hp', 1) <= 0:
+        return None
+    if get_active_item(attacker, magic_room) != 'blunder-policy':
+        return None
+    return 'blunder-policy', BLUNDER_POLICY_BOOST
+
+
+def room_service_fires(pokemon, magic_room=False):
+    """Room Service, when Trick Room goes up over the holder."""
+    if pokemon is None or pokemon.get('current_hp', 1) <= 0:
+        return None
+    if get_active_item(pokemon, magic_room) != 'room-service':
+        return None
+    return 'room-service', ROOM_SERVICE_DROP
+
+
+def white_herb_restores(pokemon, magic_room=False):
+    """
+    Which stats a White Herb would put back, as a list of names, or None.
+
+    Reads only NEGATIVE stages. A herb does not touch a boost, which is the whole
+    difference between it and Haze, and getting that backwards would make it a
+    downgrade to hold.
+    """
+    if pokemon is None or pokemon.get('current_hp', 1) <= 0:
+        return None
+    if get_active_item(pokemon, magic_room) != 'white-herb':
+        return None
+
+    lowered = [stat for stat, stage in (pokemon.get('stat_stages') or {}).items()
+               if (stage or 0) < 0]
+    return lowered or None
+
+
+def apply_white_herb(pokemon, magic_room=False):
+    """Put the lowered stages back and spend the herb. Returns a log line, or ''."""
+    lowered = white_herb_restores(pokemon, magic_room)
+    if not lowered:
+        return ""
+
+    stages = pokemon.setdefault('stat_stages', {})
+    for stat in lowered:
+        stages[stat] = 0
+    spend_item(pokemon, 'white-herb')
+    return (f"🌿 **{pokemon['name'].capitalize()}**'s White Herb restored its "
+            f"lowered stats!\n")
+
+
+def mental_herb_frees(pokemon, magic_room=False):
+    """Which of the mental conditions a Mental Herb would clear, or None."""
+    if pokemon is None or pokemon.get('current_hp', 1) <= 0:
+        return None
+    if get_active_item(pokemon, magic_room) != 'mental-herb':
+        return None
+
+    volatiles = pokemon.get('volatile_statuses') or {}
+    held = [name for name in MENTAL_HERB_CURES if volatiles.get(name)]
+    return held or None
+
+
+def apply_mental_herb(pokemon, magic_room=False):
+    """Clear what the herb cures and spend it. Returns a log line, or ''."""
+    cured = mental_herb_frees(pokemon, magic_room)
+    if not cured:
+        return ""
+
+    volatiles = pokemon.setdefault('volatile_statuses', {})
+    for name in cured:
+        volatiles.pop(name, None)
+    spend_item(pokemon, 'mental-herb')
+    pretty = ", ".join(name.replace('_', ' ').title() for name in cured)
+    return (f"🌱 **{pokemon['name'].capitalize()}**'s Mental Herb cleared its "
+            f"{pretty}!\n")
 
 
 def charge_multiplier(attacker, move_type):
@@ -7235,6 +7409,35 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             defender.setdefault('volatile_statuses', {})[_reaction['volatile']] = True
             msg += (f" \u26a1 {defender['name'].capitalize()} became charged - its next "
                     f"Electric move will hit twice as hard!")
+
+
+    # ==========================================
+    # HOOK 3c: ITEM PHASE 2 - THE POLICIES THAT ANSWER A HIT
+    # ==========================================
+    # Absorb Bulb, Cell Battery, Luminous Moss, Snowball and Weakness Policy. Deliberately
+    # beside the ability reactions rather than anywhere else: they are the same sentence
+    # with a different subject, and enqueuing the stages here is what sends them through
+    # Block 8's resolver - so an Opportunist copies a Weakness Policy boost without
+    # anybody teaching it what a Weakness Policy is.
+    _item_reaction = item_hit_reaction(defender, move, damage, type_multiplier,
+                                       magic_room)
+    if _item_reaction:
+        _policy, _moves = _item_reaction
+        for _stat, _stages in _moves:
+            stat_changes.append((TARGET_DEFENDER_SELF, _stat, _stages))
+        spend_item(defender, _policy)
+        msg += (f" \U0001f4a5 {defender['name'].capitalize()}'s "
+                f"{_policy.replace('-', ' ').title()} kicked in!")
+
+    # Throat Spray answers the ATTACKER's own sound move rather than being hit, so it is
+    # not gated on damage at all - Disarming Voice and Growl both trigger it.
+    _spray = sound_move_spray(attacker, move_name, magic_room)
+    if _spray:
+        _item, (_stat, _stages) = _spray
+        stat_changes.append((TARGET_ATTACKER, _stat, _stages))
+        spend_item(attacker, _item)
+        msg += (f" \U0001f3a4 {attacker['name'].capitalize()}'s Throat Spray "
+                f"sharpened its voice!")
 
 
     # ==========================================
