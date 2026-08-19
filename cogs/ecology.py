@@ -8,7 +8,8 @@ import random
 import math
 import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
-                             STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY,
+                             STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
+                             STARTER_CAN_BE_SHINY,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
                              ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
@@ -276,7 +277,8 @@ class StarterSelect(discord.ui.Select):
                 # onboarding kit. A handful of Great Balls: Poke Balls are free and
                 # unlimited, so the first catch was never blocked - what a new trainer
                 # lacked was the first upgrade, at zero tokens.
-                await grant_starter_licence(db, user_id, STARTER_TOKENS, STARTER_ITEMS)
+                await grant_starter_licence(db, user_id, STARTER_TOKENS, STARTER_ITEMS,
+                                            STARTER_TMS)
 
                 # ==========================================
                 # 2. GENERATE THE BIOLOGICAL SPECIMEN
@@ -371,12 +373,16 @@ class StarterSelect(discord.ui.Select):
             perfect = sum(1 for value in ivs.values() if value == STARTER_IV_CEILING)
             kit = ", ".join(f"{qty}x {name.replace('-', ' ').title()}"
                             for name, qty in STARTER_ITEMS.items())
+            machines = ", ".join(m.replace('-', ' ').title() for m in STARTER_TMS)
             await interaction.response.edit_message(
                 content=(f"🎉 **Registration Complete!**\n\nYou have secured your field "
                          f"license. Your new symbiotic partner, {shiny_icon}**{species_name}**, "
                          f"has been registered to your roster with **{perfect} perfect "
                          f"genetic markers** — every starter is issued screened stock.\n\n"
-                         f"🎒 **Starter kit:** 🪙 {STARTER_TOKENS:,} Eco Tokens, {kit}\n\n"
+                         f"🎒 **Starter kit:** 🪙 {STARTER_TOKENS:,} Eco Tokens, {kit}\n"
+                         f"💿 **Starter TMs:** {machines}\n"
+                         f"*TMs are permanent — teach one with `!learn protect`, then "
+                         f"teach it again to something else. `!tmshop` has 340 more.*\n\n"
                          f"Use `!profile` to view your clearance or `!expedition canopy` "
                          f"to begin your research!"),
                 view=None

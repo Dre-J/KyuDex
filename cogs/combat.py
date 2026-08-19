@@ -10,6 +10,8 @@ import math
 from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, roll_gender, declared_gender
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.embeds import rebind_image
+from utils.machines import owns_tm, owned_tms, price_of
+from utils.constants import TM_CATALOG, TYPE_EMOJI
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -916,8 +918,8 @@ async def teaching_route(db, user_id, species_name, pokedex_id, level, move):
       capable" is wrong three different ways: too young, tutor-only, and egg-only are
       all things a player can do something about
 
-    A machine route is checked against the TM case but NOT spent here - this only
-    answers what is allowed, and the caller spends it inside its own transaction.
+    A machine route is checked against the TM case and nothing is spent - a TM is
+    permanent, so holding it is the whole of the question.
     """
     pretty = str(move).replace('-', ' ').title()
     name = str(species_name).replace('-', ' ').capitalize()
@@ -938,15 +940,13 @@ async def teaching_route(db, user_id, species_name, pokedex_id, level, move):
         return 'level-up', None
 
     if 'machine' in routes:
-        async with db.execute(
-                "SELECT quantity FROM user_tms WHERE user_id = ? AND tm_name = ?",
-                (user_id, move)) as cursor:
-            held = await cursor.fetchone()
-        if held and held[0] > 0:
+        if await owns_tm(db, user_id, move):
             return 'machine', None
-        return None, (f"💿 `{pretty}` is a **TM move** for {name}, and you do not have "
-                      f"that TM. Buy it from the TM shelf in `!market`, then try again. "
-                      f"`!tech` lists what you already hold.")
+        cost = price_of(move)
+        price = f" It costs 🪙 **{cost:,}**, once, forever." if cost else ""
+        return None, (f"💿 `{pretty}` is a **TM move** for {name}, and you do not own "
+                      f"that TM.{price} Buy it with `!buy {move}`, or look it up with "
+                      f"`!tmshop {move}`. `!tech` lists what you already hold.")
 
     # It DOES learn it by level-up, just not yet - and it has no machine route to skip
     # the wait with.
@@ -3549,8 +3549,7 @@ class MoveReplacementView(discord.ui.View):
         await interaction.response.edit_message(content="🛑 **Operation Aborted:** No resources were consumed and the specimen's genetics remain unaltered.", embed=None, view=None)
 
 class TeachMenu(discord.ui.View):
-    def __init__(self, cog, user_id, instance_id, poke_name, new_move, current_moves,
-                 consumes_tm=True):
+    def __init__(self, cog, user_id, instance_id, poke_name, new_move, current_moves):
         super().__init__(timeout=60)
         self.cog = cog
         self.user_id = user_id
@@ -3558,11 +3557,10 @@ class TeachMenu(discord.ui.View):
         self.poke_name = poke_name
         self.new_move = new_move
         self.current_moves = current_moves
-        # Whether a TM is actually being spent. `!tm` always is; `!learn` only when the
-        # move has no free route, and burning one for a move the specimen would have
-        # grown into anyway is a charge nobody agreed to.
-        self.consumes_tm = consumes_tm
-        
+        # There is no `consumes_tm` flag any more, and there is nothing left for one to
+        # gate: a TM is permanent, so confirming here spends nothing at all. The flag
+        # used to decide whether to decrement `user_tms`, which is no longer a balance.
+
         # Dynamically generate a button for each current move
         for i, move_name in enumerate(self.current_moves):
             btn = discord.ui.Button(
@@ -3591,11 +3589,8 @@ class TeachMenu(discord.ui.View):
         forgotten_move = custom_id.split('_')[2]
         
         async with aiosqlite.connect(DB_FILE) as db:
-            # 1. Consume the TM, if one is what is paying for this
-            if self.consumes_tm:
-                await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (self.user_id, self.new_move))
-
-            # 2. Overwrite the specific move slot
+            # Nothing is consumed. A TM is bought once and keeps working, so the only
+            # thing this confirmation costs is the move being written over.
             col_name = f"move_{slot_num}"
             await db.execute(f"UPDATE caught_pokemon SET {col_name} = ? WHERE instance_id = ?", (self.new_move, self.instance_id))
             
@@ -3627,11 +3622,15 @@ class TeachMenu(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
 class DetailedMovepoolPaginator(discord.ui.View):
-    def __init__(self, ctx, poke_info, move_data):
+    def __init__(self, ctx, poke_info, move_data, owned=()):
         super().__init__(timeout=180)
         self.ctx = ctx
         self.poke_info = poke_info
         self.move_data = move_data # Now an array of rich dictionaries, not just strings!
+        # The TMs this trainer owns. A movepool listing that says nothing about what
+        # you can act on is a wiki page; the useful question is "what can I teach this
+        # thing RIGHT NOW, and what would the rest cost me".
+        self.owned = set(owned)
         self.current_page = 0
         self.items_per_page = 5 # 5 detailed fields per page creates a perfect visual height
         
@@ -3642,13 +3641,48 @@ class DetailedMovepoolPaginator(discord.ui.View):
         self.children[0].disabled = self.current_page == 0
         self.children[1].disabled = self.current_page >= self.max_pages - 1
 
+    def access_label(self, move):
+        """
+        How this specimen gets this move, said in terms of what to do about it.
+
+        The four routes are not equally actionable and were all rendered identically
+        before. A level-up move it has already passed is a FREE relearn and nobody was
+        told so; a machine move is a purchase; a tutor move is a Memory Spore; an egg
+        move cannot be taught at all and no amount of tokens changes that.
+        """
+        name, route = move['name'], move.get('route')
+        level = self.poke_info.get('level') or 0
+
+        if route == 'level-up':
+            learned_at = move.get('level_at') or 0
+            if learned_at <= level:
+                return f"🆓 **Free** — grown into it. `!learn {name}`"
+            return f"📈 Learns it at **Level {learned_at}**."
+
+        if route == 'machine':
+            if name in self.owned:
+                return f"✅ **You own this TM.** `!learn {name}`"
+            cost = price_of(name)
+            return (f"💿 TM — 🪙 **{cost:,}**, permanent. `!buy {name}`" if cost
+                    else "💿 TM.")
+
+        if route == 'egg':
+            return "🥚 **Egg move** — inherited by breeding, never taught."
+
+        return f"🧠 **Tutor move** — `!tutor <tag> {name}`, 500 tokens and a Memory Spore."
+
     def create_embed(self):
         embed = discord.Embed(
-            title=f"📚 Biological Movepool: {self.poke_info['name'].capitalize()}", 
+            title=f"📚 Biological Movepool: {self.poke_info['name'].capitalize()}",
             color=discord.Color.purple()
         )
-        embed.description = f"**Level {self.poke_info['level']}** | Tag ID: `{self.poke_info['tag'][:8]}`\nScroll to analyze all physically possible behaviors."
-        
+        owned_here = sum(1 for m in self.move_data
+                         if m.get('route') == 'machine' and m['name'] in self.owned)
+        embed.description = (
+            f"**Level {self.poke_info['level']}** | Tag ID: `{self.poke_info['tag'][:8]}`\n"
+            f"You already own **{owned_here}** of the TMs listed here — "
+            f"`!tmshop list {self.poke_info.get('box_number', '')}`".rstrip() + " for the rest.")
+
         start = self.current_page * self.items_per_page
         end = start + self.items_per_page
         chunk = self.move_data[start:end]
@@ -3669,10 +3703,16 @@ class DetailedMovepoolPaginator(discord.ui.View):
             
             desc = f"**Type:** {move['type'].capitalize()} | {dmg_icon} **{move['class'].capitalize()}**\n"
             desc += f"**Power:** {pwr_display} | **Accuracy:** {acc_display} | **PP:** {move['pp']}"
-            
+
+            # How to GET it, which is the half the listing never answered. The old
+            # heading read "(Unlocks at Lv. TM)" for every machine move - a label that
+            # is wrong twice over and tells a trainer nothing they can act on.
+            access = self.access_label(move)
+            desc += f"\n{access}"
+
             embed.add_field(
-                name=f"{move['name'].replace('-', ' ').title()} (Unlocks at Lv. {move['lvl']})", 
-                value=desc, 
+                name=move['name'].replace('-', ' ').title(),
+                value=desc,
                 inline=False
             )
 
@@ -7640,11 +7680,11 @@ class Combat(commands.Cog):
                     return await ctx.send(problem)
 
                 # 5. No slot named and no room: ask which move to forget rather than
-                #    picking one. The TM is spent by the menu, on confirmation, so
-                #    backing out here costs nothing.
+                #    picking one. Nothing is spent either way - the only thing at stake
+                #    is the move being written over, which is why it is worth asking.
                 if slot is None and len(known) >= 4:
-                    note = ("\n\n*Your TM is only spent if you confirm.*"
-                            if route == 'machine' else "")
+                    note = ("\n\n*Your TM is permanent - this costs nothing but the "
+                            "move it replaces.*" if route == 'machine' else "")
                     embed = discord.Embed(
                         title="⚠️ Neural Capacity Reached",
                         description=f"**{poke_name.capitalize()}** already knows four "
@@ -7653,8 +7693,7 @@ class Combat(commands.Cog):
                                     + note,
                         color=discord.Color.orange())
                     view = TeachMenu(self, user_id, db_tag_id, poke_name,
-                                     formatted_move, known,
-                                     consumes_tm=(route == 'machine'))
+                                     formatted_move, known)
                     return await ctx.send(embed=embed, view=view)
 
                 if slot is None:
@@ -7671,14 +7710,8 @@ class Combat(commands.Cog):
                     WHERE instance_id = ?
                 """, (formatted_move, db_tag_id))
 
-                # The machine is consumed in the SAME transaction as the move it taught,
-                # so a failure cannot leave somebody holding the move and the TM, or
-                # neither.
-                if route == 'machine':
-                    await db.execute(
-                        "UPDATE user_tms SET quantity = quantity - 1 "
-                        "WHERE user_id = ? AND tm_name = ?", (user_id, formatted_move))
-
+                # Nothing to spend. The machine stays in the notebook and can teach the
+                # same move to the next specimen, and the one after that.
                 await db.commit()
 
                 replaced_move = current_moves[slot - 1]
@@ -7690,7 +7723,8 @@ class Combat(commands.Cog):
                                      f"mastered **{formatted_move.replace('-', ' ').title()}**!"
                                      f"{replaced_text}")
                 if route == 'machine':
-                    embed.description += "\n\n💿 The TM was consumed."
+                    embed.description += ("\n\n💿 The TM stays in your notebook — use it "
+                                          "again on anything else that can learn it.")
                 embed.set_footer(text=f"Tag ID: {str(db_tag_id)[:8]} | Slot {slot} Updated")
 
                 await ctx.send(embed=embed)
@@ -10227,28 +10261,41 @@ class Combat(commands.Cog):
         user_id = str(ctx.author.id)
         
         try:
-            # Fetch TMs from the database
             async with aiosqlite.connect(DB_FILE) as db:
-                async with db.execute("SELECT tm_name FROM user_tms WHERE user_id = ?", (user_id,)) as cursor:
-                    tms = await cursor.fetchall()
-            
-            if not tms:
-                return await ctx.send("🎒 You haven't acquired any Technical Machines yet. Complete more research or visit the market!")
-                
+                held = sorted(await owned_tms(db, user_id))
+
+            if not held:
+                return await ctx.send(
+                    "🎒 You don't own any Technical Machines yet. `!tmshop` sells all "
+                    "340 of them, and each one is a one-off purchase that never runs out.")
+
             embed = discord.Embed(
                 title="💿 Technical Machines (TMs)",
-                description="Specialized training routines available for your specimens:",
+                description=f"**{len(held)}** machines, each usable as many times as you "
+                            f"like on anything that can learn it.\n"
+                            f"Teach one with `!learn <move>`.",
                 color=discord.Color.teal()
             )
-            
-            # Format the list cleanly
-            tm_list = ""
-            for i, (move_name,) in enumerate(tms, 1): # The '1' makes the list start at 1 instead of 0
-                tm_list += f"`{i}.` **{move_name.replace('-', ' ').title()}**\n"
-                
-            embed.add_field(name="Available Training Data", value=tm_list, inline=False)
+
+            # Grouped by element rather than numbered. The numbers were never an index
+            # anybody could type - nothing takes a TM by position - so they cost a line
+            # of width and bought nothing. Type tells you what a machine is FOR.
+            by_type = {}
+            for move in held:
+                element = (TM_CATALOG.get(move, {}).get('type') or 'normal')
+                by_type.setdefault(element, []).append(move)
+
+            # Discord refuses an embed past 25 fields, and there are only 18 elements,
+            # so this cannot overflow however many machines somebody collects.
+            for element in sorted(by_type):
+                names = ", ".join(f"`{m.replace('-', ' ').title()}`"
+                                  for m in by_type[element])
+                embed.add_field(
+                    name=f"{TYPE_EMOJI.get(element, '💿')} {element.title()}",
+                    value=names[:1024], inline=False)
+
             await ctx.send(embed=embed)
-            
+
         except Exception as e:
             print(f"TM Viewer Error: {e}")
             await ctx.send("❌ Error accessing your technical data.")
@@ -10264,7 +10311,14 @@ class Combat(commands.Cog):
             clean_tm_name = tm_name.lower().replace(" ", "-")
 
             if not box_number.isdigit():
-                return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!tm 4 earthquake`).")
+                # `!tm earthquake` is somebody looking for the shop or for their
+                # partner, not somebody who forgot the syntax. Say where both are
+                # rather than repeating the syntax at them.
+                return await ctx.send(
+                    f"⚠️ `!tm` takes a **Box Number** first — `!tm 4 {box_number} "
+                    f"{tm_name}`.\nFor your selected partner use `!learn {box_number} "
+                    f"{tm_name}`, and to look a machine up use `!tmshop "
+                    f"{box_number} {tm_name}`.")
 
             async with aiosqlite.connect(DB_FILE) as db:
                 
@@ -10318,12 +10372,12 @@ class Combat(commands.Cog):
                                 "move_2" if not m2 or m2 == 'none' else \
                                 "move_3" if not m3 or m3 == 'none' else "move_4"
 
-                    if route == 'machine':
-                        await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name))
                     await db.execute(f"UPDATE caught_pokemon SET {empty_col} = ? WHERE instance_id = ?", (clean_tm_name, exact_instance_id))
                     await db.commit()
 
-                    return await ctx.send(f"💿 You booted up the TM!\n✨ **{p_name.capitalize()}** learned `{clean_tm_name.replace('-', ' ').title()}`!")
+                    kept = ("\n💿 The TM is still yours — it works as many times as you "
+                            "like." if route == 'machine' else "")
+                    return await ctx.send(f"💿 You booted up the TM!\n✨ **{p_name.capitalize()}** learned `{clean_tm_name.replace('-', ' ').title()}`!{kept}")
 
             # If they already have 4 moves, spawn the Overwrite UI!
             embed = discord.Embed(
@@ -10333,7 +10387,7 @@ class Combat(commands.Cog):
             )
             
             view = TeachMenu(self, user_id, exact_instance_id, p_name, clean_tm_name,
-                             current_moves, consumes_tm=(route == 'machine'))
+                             current_moves)
             await ctx.send(embed=embed, view=view)
 
         except Exception as e:
@@ -10541,6 +10595,12 @@ class Combat(commands.Cog):
                     move_data_list.append({
                         'name': row[0],
                         'lvl': display_lvl,
+                        # The raw route and level, kept alongside the display string.
+                        # `display_lvl` had already thrown away the difference between
+                        # "learns it at 40" and "learns it from a machine", so nothing
+                        # downstream could tell a trainer what to DO about either.
+                        'route': method,
+                        'level_at': row[2] or 0,
                         'type': row[3] or 'unknown',
                         'power': row[4],
                         'accuracy': row[5],
@@ -10552,7 +10612,8 @@ class Combat(commands.Cog):
                     return await ctx.send(f"⚠️ Biological anomaly: No learnable behaviors found in the database for **{name.capitalize()}**.")
 
                 # 4. Trigger the Paginator
-                view = DetailedMovepoolPaginator(ctx, poke_info, move_data_list)
+                owned = await owned_tms(db, user_id)
+                view = DetailedMovepoolPaginator(ctx, poke_info, move_data_list, owned)
                 await ctx.send(embed=view.create_embed(), view=view)
                 
         except Exception as e:

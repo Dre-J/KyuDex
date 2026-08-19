@@ -4,13 +4,15 @@ import random
 import discord
 from discord.ext import commands
 from utils.constants import (DB_FILE, EQUIPMENT_CATALOG, SHOP_CATALOG, TM_SHOP,
-                             CATEGORY_OPTIONS)
+                             TM_CATALOG, TM_TIER_PRICES, CATEGORY_OPTIONS)
 from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
                            suggest_species)
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
                            snapshot)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.roster import locate_specimen, looks_like_partner
+from utils.machines import (owns_tm, owned_tms, grant_tm, find_tm, search_tms,
+                            filter_tms, species_tms)
 from utils import checks
 import math
 import aiosqlite
@@ -761,6 +763,90 @@ class BackpackPaginator(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
+class TMShelfView(discord.ui.View):
+    """
+    A shelf of 340 TMs that a person can actually use.
+
+    The market's own pager would need thirty-four pages to show them all, and nobody
+    reaches page nineteen looking for Thunder Wave. So browsing is the FALLBACK here
+    and searching is the front door - this view exists to render the result of a
+    narrowing (one species, one type, one category), not to be scrolled from the top.
+
+    Every row says whether it is already owned, because "what can I actually do right
+    now" is the question a shop list is being asked.
+    """
+
+    PER_PAGE = 12
+
+    def __init__(self, ctx, moves, owned, heading, note=""):
+        super().__init__(timeout=180)
+        self.ctx = ctx
+        self.moves = moves
+        self.owned = owned
+        self.heading = heading
+        self.note = note
+        self.page = 0
+        self.update_buttons()
+
+    @property
+    def max_pages(self):
+        return max(1, math.ceil(len(self.moves) / self.PER_PAGE))
+
+    def update_buttons(self):
+        self.prev_page.disabled = self.page <= 0
+        self.next_page.disabled = self.page >= self.max_pages - 1
+
+    def generate_embed(self):
+        embed = discord.Embed(title=self.heading, color=discord.Color.teal())
+
+        held = sum(1 for m in self.moves if m in self.owned)
+        lines = [f"**{len(self.moves)}** machines · you own **{held}** of them."]
+        if self.note:
+            lines.append(self.note)
+        lines.append("Buy with `!buy <move>` — one payment, yours forever.")
+        embed.description = "\n".join(lines)
+
+        start = self.page * self.PER_PAGE
+        body = []
+        for move in self.moves[start:start + self.PER_PAGE]:
+            data = TM_CATALOG.get(move, {})
+            mark = "✅" if move in self.owned else data.get('emoji', '💿')
+            bits = [(data.get('type') or 'normal').title()]
+            if data.get('power'):
+                bits.append(f"{data['power']} power")
+            elif data.get('class') == 'status':
+                bits.append("status")
+            cost = ("owned" if move in self.owned
+                    else f"🪙 {data.get('price', 0):,}")
+            body.append(f"{mark} **{move.replace('-', ' ').title()}** — "
+                        f"{' · '.join(bits)} · {cost}")
+
+        # One field, not one per move: 12 fields of two words each is a wall, and the
+        # 25-field ceiling would be in sight the moment somebody wanted a longer page.
+        embed.add_field(name="​", value="\n".join(body) or "*nothing*", inline=False)
+        embed.set_footer(text=f"Page {self.page + 1} of {self.max_pages}")
+        return embed
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message(
+                "⚠️ This is not your shelf — run `!tmshop` yourself.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def prev_page(self, interaction: discord.Interaction, button):
+        self.page = max(0, self.page - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button):
+        self.page = min(self.max_pages - 1, self.page + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+
+
 class MarketView(discord.ui.View):
     # Discord refuses any embed carrying more than 25 fields, and one field is one
     # item, so the shelf has a hard ceiling no matter how the catalogue grows. Ten
@@ -816,7 +902,12 @@ class MarketView(discord.ui.View):
         embed = discord.Embed(title="🛒 Ecological Supply Market", color=discord.Color.green())
         embed.description = "Use `!buy [quantity] [item_name]` to requisition supplies."
         if self.current_category == "tm":
-            embed.description += "\nTMs are applied to a specimen with `!tm`."
+            # Thirty-four pages of them. This shelf is here for completeness; the
+            # command that actually finds one is the one to point at.
+            embed.description += (
+                "\n💿 All **340** TMs are stocked and every one is permanent. "
+                "Searching beats scrolling: `!tmshop <move>`, or `!tmshop list "
+                "<specimen>` for only what it can learn.")
 
         stock = self.visible_items()
         start = self.current_page * self.ITEMS_PER_PAGE
@@ -1803,14 +1894,167 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @commands.command(name="tmshop", aliases=["tms"])
     @checks.has_started()
     @checks.is_authorized()
-    async def tm_shop(self, ctx):
-        """Opens the market on the TM shelf."""
-        # The TM shop is no longer a second shop with its own layout, its own emoji map
-        # and its own idea of what a listing looks like. It is a category in the market,
-        # and this is the shortcut to it - so the dropdown, the pagination and the
-        # descriptions are the market's, and there is one of everything.
-        view = MarketView(SHOP_CATALOG, category="tm")
-        await ctx.send(embed=view.generate_embed(), view=view)
+    async def tm_shop(self, ctx, *, request: str = None):
+        """
+        The TM shelf. `!tmshop <move>`, `!tmshop list <specimen>`, `!tmshop type:water`.
+
+        A 340-item catalogue cannot be browsed and should not pretend otherwise, so
+        every spelling of this command is a way of NARROWING it. The single most useful
+        one is `!tmshop list <specimen>`: nobody knows off the top of their head that
+        Rotom-Wash learns Will-O-Wisp, and forty options is a decision where 340 is a
+        wall.
+        """
+        user_id = str(ctx.author.id)
+        tokens = (request or "").split()
+
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                owned = await owned_tms(db, user_id)
+
+                # ---------------------------------------------- nothing typed
+                if not tokens:
+                    embed = discord.Embed(
+                        title="💿 Technical Machine Archive",
+                        description=(
+                            f"**{len(TM_CATALOG)}** machines are in stock, and every one "
+                            f"of them is permanent — bought once, usable forever, on "
+                            f"every specimen that can learn it.\n\n"
+                            f"You own **{len(owned)}**."),
+                        color=discord.Color.teal())
+                    embed.add_field(
+                        name="Finding one",
+                        value=("`!tmshop stealth rock` — look up a single machine\n"
+                               "`!tmshop list` — your partner's learnable TMs\n"
+                               "`!tmshop list 4` — box #4's, or name a tag\n"
+                               "`!tmshop type:water` · `!tmshop class:status`"),
+                        inline=False)
+                    embed.add_field(
+                        name="What they cost",
+                        value=(f"🪙 **{TM_TIER_PRICES['basic']:,}** utility · "
+                               f"🪙 **{TM_TIER_PRICES['standard']:,}** coverage · "
+                               f"🪙 **{TM_TIER_PRICES['premium']:,}** premium\n"
+                               f"Buy with `!buy <move>`. Teach with `!learn <move>`."),
+                        inline=False)
+                    return await ctx.send(embed=embed)
+
+                # ---------------------------------------------- type:/class: filters
+                element = damage_class = None
+                leftover = []
+                for token in tokens:
+                    key, _, value = token.partition(':')
+                    if value and key.lower() in ('type', 'element'):
+                        element = value
+                    elif value and key.lower() in ('class', 'category', 'kind'):
+                        damage_class = value
+                    else:
+                        leftover.append(token)
+
+                if element or damage_class:
+                    hits = filter_tms(element, damage_class)
+                    if not hits:
+                        return await ctx.send(
+                            f"❌ No TMs match that filter. Types are the eighteen "
+                            f"elemental ones; categories are `physical`, `special` and "
+                            f"`status`.")
+                    described = " ".join(filter(None, [
+                        (element or '').title(), (damage_class or '').lower()]))
+                    view = TMShelfView(ctx, hits, owned,
+                                       f"💿 TM Archive — {described}")
+                    return await ctx.send(embed=view.generate_embed(), view=view)
+
+                # ---------------------------------------------- list [specimen]
+                if leftover and leftover[0].lower() in ('list', 'all', 'learnable'):
+                    target = " ".join(leftover[1:]) or None
+
+                    if target and target.lower() in ('all', 'everything'):
+                        view = TMShelfView(ctx, sorted(TM_CATALOG), owned,
+                                           "💿 TM Archive — everything in stock")
+                        return await ctx.send(embed=view.generate_embed(), view=view)
+
+                    pokemon, problem = await locate_specimen(
+                        db, user_id, target, "cp.pokedex_id, s.name, cp.level")
+                    if problem:
+                        return await ctx.send(problem)
+
+                    poke_id, species, level = pokemon
+                    hits = await species_tms(db, poke_id)
+                    if not hits:
+                        return await ctx.send(
+                            f"📭 **{species.capitalize()}** cannot learn anything from a "
+                            f"TM. Try `!moveset` for what it grows into instead.")
+
+                    view = TMShelfView(
+                        ctx, hits, owned,
+                        f"💿 TMs for {species.capitalize()}",
+                        note=f"Everything a Lv. {level} {species.capitalize()} can be "
+                             f"taught from a machine.")
+                    return await ctx.send(embed=view.generate_embed(), view=view)
+
+                # ---------------------------------------------- one machine
+                typed = " ".join(leftover)
+                move = find_tm(typed)
+                if not move:
+                    near = search_tms(typed)[:8]
+                    if near:
+                        listed = ", ".join(f"`{m.replace('-', ' ').title()}`"
+                                           for m in near)
+                        return await ctx.send(
+                            f"🔎 No single match for `{typed}`. Did you mean: {listed}?")
+                    return await ctx.send(
+                        f"❌ No TM called `{typed}`. Machines only exist for moves some "
+                        f"species learns by machine — `!moveset` shows which those are "
+                        f"for a given specimen.")
+
+                data = TM_CATALOG[move]
+                pretty = move.replace('-', ' ').title()
+                has = move in owned
+
+                embed = discord.Embed(
+                    title=f"{data['emoji']} TM {pretty}",
+                    description=data['desc'].replace(" Apply it with `!tm`.", ""),
+                    color=discord.Color.green() if has else discord.Color.teal())
+                embed.add_field(name="Price",
+                                value=("✅ Already owned" if has
+                                       else f"🪙 {data['price']:,}"), inline=True)
+                embed.add_field(name="Category",
+                                value=(data.get('class') or 'status').title(),
+                                inline=True)
+                embed.add_field(name="Type",
+                                value=(data.get('type') or 'normal').title(),
+                                inline=True)
+
+                # Which of THEIR specimens can take it. A price is not the useful half
+                # of a shop listing when the question is "is this any use to me".
+                async with db.execute("""
+                    SELECT DISTINCT s.name
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON s.pokedex_id = cp.pokedex_id
+                    JOIN species_movepool sm ON sm.pokedex_id = cp.pokedex_id
+                    WHERE cp.user_id = ? AND sm.move_name = ?
+                      AND sm.learn_method = 'machine'
+                    ORDER BY s.name
+                """, (user_id, move)) as cursor:
+                    eligible = [row[0] for row in await cursor.fetchall()]
+
+                if eligible:
+                    shown = ", ".join(n.replace('-', ' ').title()
+                                      for n in eligible[:20])
+                    more = f" *(+{len(eligible) - 20} more)*" if len(eligible) > 20 else ""
+                    embed.add_field(name=f"Your specimens that can learn it ({len(eligible)})",
+                                    value=f"{shown}{more}"[:1024], inline=False)
+                else:
+                    embed.add_field(
+                        name="Your specimens that can learn it",
+                        value="*None of them, yet.*", inline=False)
+
+                embed.set_footer(
+                    text=(f"Teach it with !learn {move}" if has
+                          else f"Buy it with !buy {move}"))
+                return await ctx.send(embed=embed)
+
+        except Exception as e:
+            print(f"TM shop error: {e}")
+            await ctx.send("❌ A database error occurred while reading the TM archive.")
 
     @commands.command(name="sell")
     @checks.has_started()
@@ -1908,9 +2152,22 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.is_authorized()
     @checks.is_not_in_trade()
     @checks.is_not_in_combat()
-    async def buy_item(self, ctx, quantity: int, *, item_name: str):
+    async def buy_item(self, ctx, *, request: str = None):
         """Securely purchases items using an atomic database transaction."""
         user_id = str(ctx.author.id)
+
+        # The quantity used to be a required first argument, which made `!buy protect`
+        # a parse error rather than a purchase. It reads as optional now - a leading
+        # number is a count, anything else is the start of the name - because the shop
+        # is mostly TMs, and you never want more than one of those.
+        tokens = (request or "").split()
+        if not tokens:
+            return await ctx.send("⚠️ Usage: `!buy <item>` or `!buy <quantity> <item>`.")
+
+        if len(tokens) > 1 and tokens[0].isdigit():
+            quantity, item_name = int(tokens[0]), " ".join(tokens[1:])
+        else:
+            quantity, item_name = 1, " ".join(tokens)
 
         if quantity < 1:
             return await ctx.send("⚠️ You must purchase at least one item.")
@@ -1955,18 +2212,27 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                     emoji = cat_data.get('emoji', '📦')
                     break
 
-        # 3. Check the TM Shop
+        # 3. Check the TM Shop. `find_tm` rather than an exact key, so `!buy stealth
+        #    rock`, `!buy stealthrock` and `!buy TM Stealth Rock` all land - a shelf of
+        #    340 is not a shelf anybody spells perfectly.
         if not db_item_name:
-            formatted_tm = item_name.lower().replace(" ", "-")
-            # Assuming TM_SHOP is accessible here
-            if formatted_tm in TM_SHOP:
+            formatted_tm = find_tm(item_name)
+            if formatted_tm:
                 db_item_name = formatted_tm
                 unit_cost = TM_SHOP[formatted_tm]
                 item_display_name = f"TM {formatted_tm.replace('-', ' ').title()}"
                 emoji = '💿'
                 is_tm = True
+                # A TM is permanent, so a second one is a purchase that buys nothing.
+                # Silently charging for it would be the worst of the three options.
+                quantity = 1
 
         if not db_item_name:
+            near = search_tms(item_name)[:5]
+            if near:
+                suggestions = ", ".join(f"`{m.replace('-', ' ').title()}`" for m in near)
+                return await ctx.send(
+                    f"❌ No item or TM by that name. Did you mean: {suggestions}?")
             return await ctx.send("❌ That item or TM is not available in the supply market.")
             
         # ==========================================
@@ -1981,13 +2247,23 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
 
                 # Nested try-block so we can catch mid-transaction errors and rollback!
                 try:
+                    # A TM already owned is not sold again. Checked INSIDE the
+                    # transaction, before the tokens move, so two `!buy`s racing each
+                    # other cannot both pay for the same permanent item.
+                    if is_tm and await owns_tm(db, user_id, db_item_name):
+                        await db.rollback()
+                        return await ctx.send(
+                            f"💿 You already own **{item_display_name}** — TMs are "
+                            f"permanent and never run out. Teach it with "
+                            f"`!learn {db_item_name}`.")
+
                     # 2. Check User Funds
                     async with db.execute("SELECT eco_tokens FROM users WHERE user_id = ?", (user_id,)) as cursor:
                         user_data = await cursor.fetchone()
-                    
+
                     # If the user doesn't exist in the DB yet, treat their balance as 0
                     current_balance = user_data[0] if user_data else 0
-                    
+
                     if current_balance < total_cost:
                         # We must rollback before returning!
                         await db.rollback()
@@ -2000,14 +2276,11 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                     # 4. DYNAMIC INVENTORY ROUTING
                     # ==========================================
                     if is_tm:
-                        # Route to the TM Ledger!
-                        await db.execute("""
-                            INSERT INTO user_tms (user_id, tm_name, quantity) 
-                            VALUES (?, ?, ?) 
-                            ON CONFLICT(user_id, tm_name) 
-                            DO UPDATE SET quantity = quantity + ?
-                        """, (user_id, db_item_name, quantity, quantity))
-                        print("DEBUG: TM Purchase executed successfully.")
+                        # Route to the TM Ledger. One row, not a running total - the
+                        # count stopped meaning anything the moment TMs became
+                        # permanent, and a growing number would only invite somebody to
+                        # read it as a balance again.
+                        await grant_tm(db, user_id, db_item_name)
                     else:
                         # Route to the Standard Backpack Ledger!
                         await db.execute("""

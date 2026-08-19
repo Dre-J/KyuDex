@@ -261,13 +261,17 @@ async def may_choose_starter(db, user_id):
     return (True, 'reset') if row and row[0] else (False, 'spent')
 
 
-async def grant_starter_licence(db, user_id, tokens, items):
+async def grant_starter_licence(db, user_id, tokens, items, machines=()):
     """
     Register the trainer and hand over the onboarding kit, for a new OR reset account.
 
     An upsert rather than an insert, because a reset trainer already has the row - the
     plain INSERT this replaced raised IntegrityError and told them they were already
     registered, which was true and unhelpful.
+
+    `machines` is a handful of TMs. They cost almost nothing, which is not why they are
+    here: a new trainer does not know TMs EXIST, and six of them in the notebook teaches
+    that in a way no shop listing does.
     """
     user_id = str(user_id)
 
@@ -286,6 +290,15 @@ async def grant_starter_licence(db, user_id, tokens, items):
             ON CONFLICT(user_id, item_name) DO UPDATE SET
                 quantity = quantity + excluded.quantity
         """, (user_id, item_name, quantity))
+
+    # A TM is owned or it is not, so a reset trainer who already holds one is left
+    # exactly as they were rather than handed a second copy of a permanent thing.
+    for move in machines:
+        await db.execute("""
+            INSERT INTO user_tms (user_id, tm_name, quantity)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, tm_name) DO NOTHING
+        """, (user_id, move))
 
     # Entitlement spent. Without this the kit could be claimed again from a stale menu.
     if await _has_column(db, 'users', 'needs_starter'):
