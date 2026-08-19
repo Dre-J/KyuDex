@@ -9,6 +9,7 @@ import asyncio
 import math
 from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, roll_gender, declared_gender
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
+from utils.embeds import rebind_image
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -688,6 +689,95 @@ async def party_filter(db, user_id, alias='up'):
     except Exception:
         pass
     return "", ()
+
+
+async def assign_to_party(db, user_id, name, targets, start_slot=None):
+    """
+    Put several specimens into a roster, and report what happened to each.
+
+    Returns `(placed, skipped)` - `placed` is a list of `(slot, species)` and `skipped`
+    a list of `(what_they_typed, why)`. Reported rather than raised, because a list of
+    six box numbers with one deployed specimen in it should still assign the other five.
+
+    Nothing is committed here; the caller owns the transaction, so a failure halfway
+    through leaves the roster as it was rather than half-built.
+    """
+    taken = {row[0] for row in await party_members(db, user_id, name)}
+    held = {row[1] for row in await party_members(db, user_id, name)}
+    free = [slot for slot in range(1, PARTY_SLOTS + 1) if slot not in taken]
+    if start_slot is not None:
+        free = [start_slot]
+
+    placed, skipped = [], []
+    for typed in targets:
+        if not free:
+            skipped.append((typed, "no free slots left"))
+            continue
+
+        pokemon, problem = await locate_specimen(
+            db, user_id, typed, "cp.instance_id, s.name")
+        if problem:
+            # The resolver's complaint is already written for a player, but it is a
+            # whole sentence and this is a list - so it is summarised here and the
+            # detail is what the single-specimen form still gives.
+            skipped.append((typed, "not found"))
+            continue
+
+        actual_id, poke_name = pokemon
+
+        if actual_id in held:
+            skipped.append((typed, f"{poke_name.capitalize()} is already in this roster"))
+            continue
+
+        async with db.execute(
+                "SELECT start_time FROM active_deployments WHERE instance_id = ?",
+                (actual_id,)) as cursor:
+            if await cursor.fetchone():
+                skipped.append((typed, f"{poke_name.capitalize()} is on a field mission"))
+                continue
+
+        slot = free.pop(0)
+        try:
+            await db.execute("""
+                INSERT INTO user_party (user_id, party_name, slot, instance_id)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, party_name, slot) DO UPDATE SET instance_id = excluded.instance_id;
+            """, (user_id, name, slot, actual_id))
+        except Exception:
+            # Un-migrated database: one party, the old shape.
+            await db.execute("""
+                INSERT INTO user_party (user_id, slot, instance_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, slot) DO UPDATE SET instance_id = excluded.instance_id;
+            """, (user_id, slot, actual_id))
+
+        held.add(actual_id)
+        placed.append((slot, poke_name))
+
+    return placed, skipped
+
+
+def assignment_report(name, placed, skipped):
+    """What a mass add did, as one embed rather than six messages."""
+    colour = (discord.Colour.green() if placed and not skipped
+              else discord.Colour.orange() if placed else discord.Colour.red())
+    embed = discord.Embed(
+        title=f"\U0001f4cb Roster: {name}",
+        description=(f"**{len(placed)}** specimen(s) assigned."
+                     if placed else "Nothing was assigned."),
+        colour=colour)
+    if placed:
+        embed.add_field(
+            name="Assigned",
+            value="\n".join(f"Slot {slot}: **{species.capitalize()}**"
+                             for slot, species in placed)[:1000],
+            inline=False)
+    if skipped:
+        embed.add_field(
+            name="Skipped",
+            value="\n".join(f"`{typed}` \u2014 {why}" for typed, why in skipped)[:1000],
+            inline=False)
+    return embed
 
 
 PARTY_ACTIONS = ('view', 'add', 'set', 'equip', 'remove', 'clear', 'list',
@@ -7915,9 +8005,15 @@ class Combat(commands.Cog):
                 
                 embed = fresh_msg.embeds[0]
                 embed.set_footer(text=f"⏳ Awaiting telemetry from: {', '.join(waiting_for)}...")
-                
-                # Explicitly pass fresh_msg.attachments so Discord doesn't orphan the images!
-                await fresh_msg.edit(embed=embed, attachments=fresh_msg.attachments)
+
+                # Passing the attachments back was half the answer. The other half is
+                # that a FETCHED embed's image url is a signed CDN link, not
+                # `attachment://battle.png` - and editing re-issues the attachment under
+                # a new signature, leaving the embed pointing at a dead one. That is why
+                # the scene vanished the moment the first player locked in a move.
+                # Rebind by NAME, which cannot expire.
+                keep = rebind_image(embed, fresh_msg)
+                await fresh_msg.edit(embed=embed, attachments=keep)
                 
                 # Update our state cache so it stops lagging behind
                 state['message_obj'] = fresh_msg 
@@ -10559,54 +10655,50 @@ class Combat(commands.Cog):
 
                 # --- ACTION: ADD TO PARTY ---
                 if action in ("add", "set", "equip"):
-                    if len(args) < 2 or not args[0].isdigit():
-                        return await ctx.send("\u26a0\ufe0f Usage: `!party add [slot 1-6] [Box Number]`")
+                    if not args:
+                        return await ctx.send(
+                            "\u26a0\ufe0f Usage: `!party add [slot 1-6] [Box Number]`, "
+                            "or `!party add 1 2 3 4 5 6` to fill the free slots at once.")
 
-                    slot = int(args[0])
-                    if slot < 1 or slot > PARTY_SLOTS:
-                        return await ctx.send(f"\u26a0\ufe0f A fieldwork roster can only hold up to {PARTY_SLOTS} specimens.")
+                    # ONE specimen is one sentence, whether or not a slot was named.
+                    # `!party add 4 2` puts box 2 in slot 4, exactly as it always did;
+                    # `!party add 2` puts it wherever there is room. Three or more
+                    # arguments never meant anything before - the old signature read two
+                    # and ignored the rest - so a list of specimens can take that
+                    # spelling without changing what anybody already types.
+                    single = (len(args) == 1
+                              or (len(args) == 2 and args[0].isdigit()))
+                    if single:
+                        slot = int(args[0]) if len(args) == 2 else None
+                        target = args[-1]
+                        if slot is not None and (slot < 1 or slot > PARTY_SLOTS):
+                            return await ctx.send(f"\u26a0\ufe0f A fieldwork roster can only hold up to {PARTY_SLOTS} specimens.")
+                        placed, skipped = await assign_to_party(
+                            db, user_id, current, [target], start_slot=slot)
 
-                    # Through the shared resolver, so a tag works here as well as a box
-                    # number. The old version only handled digits and fell through to an
-                    # undefined variable on anything else - which the outer try then
-                    # reported as an engine crash.
-                    pokemon, problem = await locate_specimen(
-                        db, user_id, " ".join(args[1:]), "cp.instance_id, s.name")
-                    if problem:
-                        return await ctx.send(problem)
+                        # A single add says one sentence rather than drawing a table,
+                        # and gives the resolver's full complaint when it fails.
+                        if not placed:
+                            # `target`, not `args[1]` - the single form takes one
+                            # argument when no slot is named, and there is no args[1].
+                            pokemon, problem = await locate_specimen(
+                                db, user_id, target, "cp.instance_id, s.name")
+                            if problem:
+                                return await ctx.send(problem)
+                            return await ctx.send(
+                                f"\u26a0\ufe0f {skipped[0][1]}." if skipped
+                                else "\u26a0\ufe0f Nothing was assigned.")
 
-                    actual_id, poke_name = pokemon
+                        await db.commit()
+                        return await ctx.send(
+                            f"\u2705 **{placed[0][1].capitalize()}** has been assigned "
+                            f"to slot {placed[0][0]} of **{current}**!")
 
-                    # ==========================================
-                    # DEPLOYMENT LOCKOUT CHECK
-                    # ==========================================
-                    async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (actual_id,)) as cursor:
-                        if await cursor.fetchone():
-                            return await ctx.send(f"\u26a0\ufe0f You cannot assign **{poke_name.capitalize()}** to your roster right now, they are currently on a field mission!")
-
-                    # Already in ANOTHER slot of THIS roster. Being in a different
-                    # roster is fine and is the whole point of having several.
-                    existing = [row for row in await party_members(db, user_id, current)
-                                if row[1] == actual_id]
-                    if existing:
-                        return await ctx.send(f"\u26a0\ufe0f That **{poke_name.capitalize()}** is already in slot {existing[0][0]} of **{current}**!")
-
-                    try:
-                        await db.execute("""
-                            INSERT INTO user_party (user_id, party_name, slot, instance_id)
-                            VALUES (?, ?, ?, ?)
-                            ON CONFLICT(user_id, party_name, slot) DO UPDATE SET instance_id = excluded.instance_id;
-                        """, (user_id, current, slot, actual_id))
-                    except Exception:
-                        # Un-migrated database: one party, the old shape.
-                        await db.execute("""
-                            INSERT INTO user_party (user_id, slot, instance_id)
-                            VALUES (?, ?, ?)
-                            ON CONFLICT(user_id, slot) DO UPDATE SET instance_id = excluded.instance_id;
-                        """, (user_id, slot, actual_id))
-
+                    # The mass form: fill the free slots, in the order given.
+                    placed, skipped = await assign_to_party(db, user_id, current, args)
                     await db.commit()
-                    return await ctx.send(f"\u2705 **{poke_name.capitalize()}** has been assigned to slot {slot} of **{current}**!")
+                    return await ctx.send(
+                        embed=assignment_report(current, placed, skipped))
 
                 # --- ACTION: REMOVE ONE, OR EMPTY THE LOT ---
                 if action in ("remove", "clear"):
