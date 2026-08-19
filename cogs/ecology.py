@@ -212,11 +212,12 @@ class StarterSelect(discord.ui.Select):
                 # FETCH THE SPECIES' ABILITY & GENDER RATE
                 # ==========================================
                 # 🚨 UPDATED: Grabbing gender_rate in the same query!
-                async with db.execute("SELECT standard_abilities, gender_rate FROM base_pokemon_species WHERE pokedex_id = ?", (pokedex_id,)) as cursor:
+                async with db.execute("SELECT standard_abilities, gender_rate, name FROM base_pokemon_species WHERE pokedex_id = ?", (pokedex_id,)) as cursor:
                     ability_row = await cursor.fetchone()
                 
+                species_name = None
                 if ability_row:
-                    raw_ability, raw_gender_rate = ability_row
+                    raw_ability, raw_gender_rate, species_name = ability_row
                     
                     if raw_ability:
                         ability = raw_ability.split(',')[0].strip()
@@ -229,7 +230,7 @@ class StarterSelect(discord.ui.Select):
                     gender_rate = 4 
 
                 # --- GENDER ROLL ---
-                gender = roll_gender(gender_rate)
+                gender = roll_gender(gender_rate, species_name=species_name)
                 
                 # Fetch Level 1-5 starting moves
                 async with db.execute("""
@@ -901,8 +902,9 @@ class Ecology(commands.Cog):
 
         poke_id, name, cap_rate, gender_rate = spawned_data
         # Rolled HERE, not at capture. A spawn that shows a sex has to hand the
-        # same one to the specimen that gets caught.
-        gender = roll_gender(gender_rate)
+        # same one to the specimen that gets caught. The NAME is handed over too,
+        # because a species whose name states a sex must not roll the other one.
+        gender = roll_gender(gender_rate, species_name=name)
         is_shiny = random.randint(1, 4096) == 1 
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
         
@@ -1162,7 +1164,7 @@ class Ecology(commands.Cog):
                 return await ctx.send("📡 Scanner error: Could not locate native wildlife in this sector. Try again.")
                 
             poke_id, poke_name, true_capture_rate, gender_rate = spawn_data
-            gender = roll_gender(gender_rate)
+            gender = roll_gender(gender_rate, species_name=poke_name)
             
             # Roll for shiny (1/4096 standard rate)
             is_shiny = random.randint(1, 4096) == 1
@@ -1417,8 +1419,9 @@ class Ecology(commands.Cog):
 
         poke_id, name, cap_rate, gender_rate = spawned_data
         # Rolled HERE, not at capture. A spawn that shows a sex has to hand the
-        # same one to the specimen that gets caught.
-        gender = roll_gender(gender_rate)
+        # same one to the specimen that gets caught. The NAME is handed over too,
+        # because a species whose name states a sex must not roll the other one.
+        gender = roll_gender(gender_rate, species_name=name)
         
         # Ensure Ultra Beasts get a shiny roll too if it wasn't defined!
         if 'is_shiny' not in locals():
@@ -2471,7 +2474,8 @@ class Ecology(commands.Cog):
                 #
                 # The fallback is for a spawn created before this existed - one already
                 # sitting in a channel when the bot restarted - which carries no sex.
-                gender = target.get('gender') or roll_gender(gender_rate)
+                gender = target.get('gender') or roll_gender(
+                    gender_rate, species_name=pokemon_name)
                 gender_emoji = gender_icon(gender) 
 
                 # ==========================================

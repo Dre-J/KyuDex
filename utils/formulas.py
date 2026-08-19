@@ -5451,20 +5451,39 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
     atk_types = mimicry_types(attacker, terrain)
     def_types = mimicry_types(defender, terrain)
 
-    if move_name in ['jump-kick', 'high-jump-kick']:
-        crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
-        attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
-        return 0, f"{attacker['name'].capitalize()} kept going and crashed!", None, [], 0
-    
+    # There WAS a second copy of the crash here, in the main flow and guarded by
+    # nothing. Jump Kick and High Jump Kick crash when they MISS or when they are
+    # blocked - a connecting one is a 100/130 power Fighting move - so an unguarded copy
+    # meant both of them dealt zero damage every single time and took half the user's
+    # max HP for the privilege. The two legitimate copies are still where they belong:
+    # the Protect branch above, and the accuracy-miss branch in each engine.
+    #
+    # Found by an item scan, of all things: the scan picked jump-kick as its Fighting
+    # probe, and every Fighting-type booster read as doing nothing because the move it
+    # was being measured with could not deal damage at all.
+
     if move.get('class') != 'status':
-        # A specimen held off the ground cannot be reached by Ground moves. Levitate gets
-        # this from the ability table below, but Magnet Rise and Telekinesis are
-        # volatiles, so they need saying here.
+        # A specimen held off the ground cannot be reached by Ground moves.
+        #
+        # This block used to ask `is_grounded` and then THROW THE ANSWER AWAY unless the
+        # cause was Magnet Rise or Telekinesis. The other two causes each had a second
+        # route that happened to save them - a Flying type is 0x on the type chart, and
+        # Levitate is in the immunity table below - so the hole showed up in exactly one
+        # place: the AIR BALLOON, which has neither. It read as implemented everywhere
+        # (it is in `is_grounded`, it is in ONE_USE_ITEMS, it is on sale) and a specimen
+        # holding one took full damage from Earthquake.
+        #
+        # Asked once now, and the cause only decides the wording.
         if move_type == 'ground' and not is_grounded(defender, gravity):
             lifted = (defender.get('volatile_statuses') or {})
             if lifted.get('magnet_rise') or lifted.get('telekinesis'):
                 return 0, (f"🪂 {defender['name'].capitalize()} is airborne - the attack "
                            f"passed harmlessly underneath!"), None, [], 0
+            if get_active_item(defender, magic_room) == 'air-balloon':
+                return 0, (f"🎈 {defender['name'].capitalize()}'s Air Balloon kept it "
+                           f"clear of the attack!"), None, [], 0
+            # Flying types and Levitate fall through deliberately: both are answered
+            # below, by the type chart and the immunity table, with their own wording.
 
         immunity_data = BIOLOGICAL_TRAITS['immunities'].get(def_ability)
         
@@ -8073,13 +8092,54 @@ def get_xp_requirement(level, growth_rate):
         return int(L**3)
 
 
-def roll_gender(gender_rate) -> str:
+# Species that exist as two SEPARATE entries, one per sex, because the sexes differ in
+# more than colour - different stats, different sprites, sometimes different abilities.
+# For these, the name is the answer: a Meowstic Female is female by definition.
+#
+# Written out rather than inferred from the "-male"/"-female" suffix, because three
+# other species carry that suffix WITHOUT being sex-forms - `pyroar-male`,
+# `frillish-male` and `jellicent-male` are the sole entry for their species, where the
+# female is a cosmetic variant. Reading the suffix alone would pin every Pyroar male,
+# and Pyroar is 87.5% female.
+SEX_LOCKED_FAMILIES = ('meowstic', 'indeedee', 'basculegion', 'oinkologne')
+
+
+def declared_gender(species_name):
+    """
+    The sex a species NAME insists on, or None if the name does not decide it.
+
+    Only the genuine sex-forms count. This exists because the gender_rate column and the
+    species name disagreed on every one of them: `meowstic-female` carried a rate of 4,
+    so half of all Meowstic Females were rolled male, and `pyroar-male` carried 7, so
+    seven in eight "Pyroar Male" were rolled female. The database is corrected by
+    migrate_gendered_species.py; this makes the engine right whether or not it has run.
+    """
+    name = str(species_name or '').lower().strip()
+    for family in SEX_LOCKED_FAMILIES:
+        if name == f"{family}-male":
+            return 'M'
+        if name == f"{family}-female":
+            return 'F'
+    return None
+
+
+def roll_gender(gender_rate, species_name=None, rng=None) -> str:
     """
     Decide a specimen's sex from its species' gender_rate.
 
     PokeAPI's `gender_rate` is EIGHTHS FEMALE: 0 is always male, 8 always female, and -1
     means the species has no sex at all. A missing value is treated as an even 4, which
     is what both hand-rolled copies of this already did.
+
+    `species_name` overrides the roll for the species whose NAME states a sex. A
+    specimen called Meowstic Female that comes out male is not a rare variant, it is a
+    contradiction on the same line of the screen.
+
+    `rng` is a seeded generator, for callers that need a STABLE answer rather than a
+    fresh one - the Sector Wardens field a fixed roster and must not flip sex between
+    rematches. The Warden builder was already passing one positionally into a function
+    that took a single argument, so every Warden entry without an explicit `gender` key
+    raised TypeError; supporting it is what that call always meant.
 
     Returns 'M', 'F' or the literal string 'None' - the last because that is what
     `caught_pokemon.gender` stores for the genderless, and every reader in the codebase
@@ -8089,11 +8149,17 @@ def roll_gender(gender_rate) -> str:
     spawn that shows a sex has to hand the same one to the specimen that gets caught,
     and it cannot do that if the roll lives inside the catch.
     """
+    fixed = declared_gender(species_name)
+    if fixed:
+        return fixed
+
     if gender_rate is None:
         gender_rate = 4
     if gender_rate == -1:
         return 'None'
-    return 'F' if random.uniform(0, 100) <= (gender_rate / 8.0) * 100 else 'M'
+
+    source = rng if rng is not None else random
+    return 'F' if source.uniform(0, 100) <= (gender_rate / 8.0) * 100 else 'M'
 
 
 def gender_icon(gender) -> str:
