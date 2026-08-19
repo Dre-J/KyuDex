@@ -8,7 +8,7 @@ import random
 import asyncio
 import math
 from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, roll_gender, declared_gender
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, spawnable_forms, ultra_beasts
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -660,111 +660,154 @@ def seed_on_arrival(pokemon, state, owner_str="", magic_room=False):
     return log + resolve_stat_stages([(pokemon, stat, stages, None)])
 
 
-# The words a trainer uses for "the one I have already chosen". `!partner` is aliased to
-# `!select`, so both nouns are in circulation and both have to work here.
-PARTNER_WORDS = ('partner', 'lead', 'active', 'latest', 'selected', 'select', 'current',
-                 'mine', 'me')
+# The roster helpers moved to utils/roster.py when `!equip`, `!unequip` and `!party`
+# needed the same question answered. Imported under their old names so every call site
+# here reads exactly as it did - the point of the move was to stop a SECOND copy being
+# written in economy.py, not to rename anything.
+from utils.roster import (PARTNER_WORDS, parse_learn_request, locate_specimen,
+                          active_party, party_names, party_counts, set_active_party,
+                          clean_party_name, has_party_column, DEFAULT_PARTY,
+                          PARTY_SLOTS, MAX_PARTIES)
 
-
-def parse_learn_request(request):
+async def party_filter(db, user_id, alias='up'):
     """
-    `!learn [target] <slot> <move>` split into its three parts, or None.
+    The WHERE fragment and parameters restricting a roster query to the active party.
 
-    The target is optional, which is the whole point: a trainer with a selected partner
-    should be able to say `!learn 1 tackle` rather than naming the specimen they already
-    named. That makes the first word ambiguous - `!learn 3 1 tackle` and
-    `!learn 1 tackle` both open with a number - so the SECOND word decides.
+    Returned as a fragment rather than baked into each query because five separate
+    places build a team out of `user_party`, and a sixth would otherwise be written
+    without the scope - which is exactly how a trainer would end up fighting with two
+    rosters' worth of specimens.
 
-    A slot is a SINGLE digit, deliberately. `10-000-000-volt-thunderbolt` is the one move
-    in the database whose name starts with a number, and a player typing it with spaces
-    would otherwise have its `10` read as a slot. Requiring one digit costs nothing - a
-    specimen has four slots - and removes the only collision there is.
-
-    The SLOT is optional too. `!learn earthquake` means "teach my partner this, wherever
-    there is room" - which is what `!tm` always did, and is what somebody with an empty
-    slot means. A slot is only read where one is unambiguously present.
-
-    An out-of-range slot is passed through rather than rejected here, so the command can
-    give its own message about there being four slots.
+    An un-migrated database has one party and gets an empty fragment, so every one of
+    those five keeps working untouched.
     """
-    tokens = (request or "").split()
+    try:
+        if await has_party_column(db):
+            prefix = f"{alias}." if alias else ""
+            return f"AND {prefix}party_name = ?", (await active_party(db, user_id),)
+    except Exception:
+        pass
+    return "", ()
+
+
+PARTY_ACTIONS = ('view', 'add', 'set', 'equip', 'remove', 'clear', 'list',
+                 'new', 'create', 'switch', 'use', 'delete', 'rename')
+
+
+def parse_party_request(request):
+    """
+    `!party [action] [rest]` split into (action, rest).
+
+    The signature used to be `(action, slot: int, tag_id)`, which meant `!party switch
+    alpha` failed to convert `alpha` into a slot number before the body ever ran. Every
+    action that takes a NAME rather than a slot needed the whole line instead.
+    """
+    tokens = " ".join(str(request or "").split()).split()
     if not tokens:
-        return None
-    if len(tokens) >= 3 and len(tokens[1]) == 1 and tokens[1].isdigit():
-        return tokens[0], int(tokens[1]), " ".join(tokens[2:])
-    if len(tokens) >= 2 and tokens[0].isdigit():
-        return None, int(tokens[0]), " ".join(tokens[1:])
-    return None, None, " ".join(tokens)
+        return 'view', []
+    action = tokens[0].lower()
+    if action not in PARTY_ACTIONS:
+        # `!party 3` is a plausible thing to type, and reading it as an unknown action
+        # helps nobody. Anything that is not an action is treated as arguments to view.
+        return 'view', tokens
+    return action, tokens[1:]
 
 
-async def locate_specimen(db, user_id, target, columns):
+async def ensure_party(db, user_id, name):
+    """Record that a party exists, so an empty one still has a name."""
+    try:
+        await db.execute(
+            "INSERT OR IGNORE INTO user_parties (user_id, party_name) VALUES (?, ?)",
+            (user_id, name))
+    except Exception:
+        # No parties table: an un-migrated database has exactly one party and does not
+        # need to be told about it.
+        pass
+
+
+async def party_members(db, user_id, name):
     """
-    One of a trainer's specimens, from a box number, a tag prefix, or nothing at all.
+    The specimens in one party, with their box numbers, ordered by slot.
 
-    `target` of None means "the one they have selected", which is what `!partner` sets.
-    Returns (row, error) - the error is already written for a player to read.
-
-    Box numbering matches every other command in the codebase: deployed specimens and
-    anything sitting on the GTS are excluded, because those are the rows the numbers a
-    player reads in `!party view` are counted over.
+    The gts_deposits exclusion is not optional. Thirty other places in this codebase
+    number the box by "not deployed AND not on the GTS", and the party view was once the
+    one that only said "not deployed" - so the moment a player had anything on the GTS,
+    the number shown here was one higher than the number every other command accepts.
     """
-    if target is not None and target.lower() in PARTNER_WORDS:
-        target = None
+    query = """
+        WITH Roster AS (
+            SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
+            FROM caught_pokemon
+            WHERE user_id = ?
+            AND instance_id NOT IN (SELECT instance_id FROM active_deployments)
+            AND instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+        )
+        SELECT up.slot, cp.instance_id, s.name, cp.level, cp.happiness,
+            cp.move_1, cp.move_2, cp.move_3, cp.move_4, r.box_number
+        FROM user_party up
+        JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+        JOIN Roster r ON cp.instance_id = r.instance_id
+        WHERE up.user_id = ? {scope}
+        ORDER BY up.slot ASC
+    """
+    try:
+        async with db.execute(query.format(scope="AND up.party_name = ?"),
+                              (user_id, user_id, name)) as cursor:
+            return await cursor.fetchall()
+    except Exception:
+        async with db.execute(query.format(scope=""), (user_id, user_id)) as cursor:
+            return await cursor.fetchall()
 
-    if target is None:
-        async with db.execute("SELECT active_partner FROM users WHERE user_id = ?",
-                              (user_id,)) as cursor:
-            row = await cursor.fetchone()
-        if not row or not row[0]:
-            return None, ("🎯 You have not selected a partner yet. Choose one with "
-                          "`!partner <box number>`, or name the specimen directly: "
-                          "`!learn <box number> <slot> <move>`.")
-        async with db.execute(
-                f"SELECT {columns} FROM caught_pokemon cp "
-                f"JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id "
-                f"WHERE cp.instance_id = ? AND cp.user_id = ?",
-                (row[0], user_id)) as cursor:
-            found = await cursor.fetchone()
-        if not found:
-            return None, ("⚠️ Your selected partner is no longer in your roster. "
-                          "Pick another with `!partner <box number>`.")
-        return found, None
 
-    if target.isdigit() and len(target) <= 6:
-        async with db.execute(f"""
-            WITH Roster AS (
-                SELECT {columns}, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.user_id = ?
-                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-            )
-            SELECT * FROM Roster WHERE box_number = ?
-        """, (user_id, int(target))) as cursor:
-            found = await cursor.fetchone()
-        if not found:
-            return None, f"❌ You have nothing in box **{int(target)}**."
-        return found[:-1], None      # drop the box_number the CTE carried along
+async def party_delete_rows(db, user_id, name, slot=None):
+    """Empty a party, or one slot of it. Returns how many specimens were unassigned."""
+    clauses, params = ["user_id = ?"], [user_id]
+    try:
+        if await has_party_column(db):
+            clauses.append("party_name = ?")
+            params.append(name)
+    except Exception:
+        pass
+    if slot is not None:
+        clauses.append("slot = ?")
+        params.append(slot)
 
-    # A tag, or the first few characters of one. Ambiguity is refused rather than
-    # guessed at - six characters of a UUID collide sooner than people expect, and
-    # teaching a move to the wrong specimen is not a mistake anybody would trace.
-    async with db.execute(
-            f"SELECT {columns} FROM caught_pokemon cp "
-            f"JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id "
-            f"WHERE cp.user_id = ? AND cp.instance_id LIKE ? LIMIT 5",
-            (user_id, f"{target}%")) as cursor:
-        rows = await cursor.fetchall()
+    cursor = await db.execute(
+        f"DELETE FROM user_party WHERE {' AND '.join(clauses)}", tuple(params))
+    return cursor.rowcount
 
-    if not rows:
-        return None, (f"❌ Nothing in your roster matches `{target}`. Use a box number, "
-                      f"a tag, or `partner` for your selected specimen.")
-    if len(rows) > 1:
-        return None, (f"🔍 `{target}` matches {len(rows)} of your specimens. "
-                      f"Give me more of the tag.")
-    return rows[0], None
 
+class PartyClearConfirm(discord.ui.View):
+    """Emptying a whole roster asks first. Rebuilding six slots by hand is a chore."""
+
+    def __init__(self, ctx, name, size):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.name = name
+        self.size = size
+
+    async def interaction_check(self, interaction):
+        return str(interaction.user.id) == str(self.ctx.author.id)
+
+    @discord.ui.button(label="Empty it", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        async with aiosqlite.connect(DB_FILE) as db:
+            removed = await party_delete_rows(db, str(self.ctx.author.id), self.name)
+            await db.commit()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content=f"\U0001f9f9 **{self.name}** emptied \u2014 {removed} specimen(s) "
+                    f"returned to your notebook. They are all still yours.",
+            view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction, button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content="Nothing was changed.", view=self)
 
 async def teaching_route(db, user_id, species_name, pokedex_id, level, move):
     """
@@ -1647,8 +1690,49 @@ NO_DYNAMAX_SPECIES = set(PRIMAL_SPECIES) | {'zacian', 'zamazenta', 'eternatus'}
 
 def can_dynamax(pokemon):
     """False for species that are barred from Dynamaxing, whatever form they are in."""
-    base_name = (pokemon.get('name') or '').lower().split('-')[0].strip()
-    return base_name not in NO_DYNAMAX_SPECIES
+    full_name = (pokemon.get('name') or '').lower().strip()
+    base_name = full_name.split('-')[0].strip()
+    # Two questions, not one. The species list bars every form a species has - a Primal
+    # Groudon and an ordinary one are both out. The form list bars ONE form, which is
+    # what Ash-Greninja needs: splitting on the first hyphen would have read it as
+    # `greninja` and locked the perfectly ordinary base species out with it.
+    return (base_name not in NO_DYNAMAX_SPECIES
+            and full_name not in GIMMICK_LOCKED_FORMS)
+
+
+def may_mega_evolve(name, held_item, moves=()):
+    """
+    Whether this specimen may Mega Evolve, ignoring whether the trainer has a Bracelet.
+
+    The ladder was written out twice - once in the PvE dashboard and once in PvP - with
+    the Floette and Raichu exceptions duplicated in both. They had not drifted yet; this
+    is the edit that would have made them, since Ash-Greninja had to be added to each.
+
+    `has_mega_stone` is a substring test for 'ite', which is how the codebase has always
+    identified a stone. It is loose - `Eviolite` is not a mega stone - but tightening it
+    is a different change from this one, and the exceptions below are checked after it.
+    """
+    name = (name or '').lower().strip()
+    base_name = name.split('-')[0].strip()
+    held_item = (held_item or 'none').lower()
+
+    has_stone = 'ite' in held_item
+    has_dragon_ascent = (base_name == 'rayquaza'
+                         and any(m.get('name') == 'dragon-ascent' for m in (moves or [])))
+    is_eternal = name == 'floette-eternal'
+    is_raichu_alola = name == 'raichu-alola'
+
+    # A form that is already a gimmick does not get a second one.
+    if name in GIMMICK_LOCKED_FORMS:
+        return False, False
+    # Ordinary Floettes of every flower colour cannot Mega Evolve; only Eternal can.
+    if base_name.startswith('floette') and not is_eternal:
+        has_stone = False
+    # ...and only Alolan Raichu.
+    if base_name.startswith('raichu') and not is_raichu_alola:
+        has_stone = False
+
+    return (has_stone or has_dragon_ascent or is_eternal), has_stone
 
 
 CHOICE_ITEMS = ['choice-band', 'choice-specs', 'choice-scarf']
@@ -2843,19 +2927,14 @@ class PvPMoveMenu(discord.ui.View):
                         self.add_item(dyna_btn)
                         
                     # 2. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
-                    has_mega_stone = ('ite' in held_item)
-                    has_dragon_ascent = (base_name == 'rayquaza' and any(m['name'] == 'dragon-ascent' for m in self.active_poke['moves']))
-                    is_eternal = base_name == 'floette-eternal'
-                    is_raichu_alola = base_name == 'raichu-alola'
+                    # One ladder, shared with the PvP dashboard below. The Floette,
+                    # Raichu and Ash-Greninja exceptions were written out twice, and
+                    # adding a fourth to both is how the two would have drifted.
+                    may_mega, has_mega_stone = may_mega_evolve(
+                        self.active_poke.get('name'), held_item,
+                        self.active_poke.get('moves'))
 
-                    # Normal Floettes (all flower colors) cannot Mega Evolve!
-                    if base_name.startswith('floette') and not is_eternal:
-                        has_mega_stone = False
-                    # Alolan raichu can't mega evolve
-                    if base_name.startswith('raichu') and not is_raichu_alola:
-                        has_mega_stone = False
-
-                    if mega_forms and (has_mega_stone or has_dragon_ascent or is_eternal) and key_items.get('mega_bracelet'):
+                    if mega_forms and may_mega and key_items.get('mega_bracelet'):
                         mega_style = discord.ButtonStyle.success if self.pending_transformation == 'mega' else discord.ButtonStyle.danger
                         
                         # 🚨 FIX: Dynamic UI styling for Z-Megas!
@@ -4479,19 +4558,13 @@ class BattleDashboard(discord.ui.View):
                 gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
 
                 # 1. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
-                has_mega_stone = ('ite' in held_item)
-                has_dragon_ascent = (base_name == 'rayquaza' and any(m['name'] == 'dragon-ascent' for m in p_active['moves']))
-                is_eternal = base_name == 'floette-eternal'
-                is_raichu_alola = base_name == 'raichu-alola'
+                # The same shared ladder the PvE dashboard uses. The Floette, Raichu
+                # and Ash-Greninja exceptions were written out twice, and adding a
+                # fourth to both copies is how the two would have drifted.
+                may_mega, has_mega_stone = may_mega_evolve(
+                    p_active.get('name'), held_item, p_active.get('moves'))
 
-                # 🚨 FIREWALL: Normal Floettes (all flower colors) cannot Mega Evolve!
-                if base_name.startswith('floette') and not is_eternal:
-                    has_mega_stone = False
-
-                if base_name.startswith('raichu') and not is_raichu_alola:
-                        has_mega_stone = False
-                        
-                if mega_forms and (has_mega_stone or has_dragon_ascent or is_eternal) and key_items.get('mega_bracelet'):
+                if mega_forms and may_mega and key_items.get('mega_bracelet'):
                     form_id, form_name = mega_forms[0]
                     
                     # 🚨 FIX 2: Added routing for the Z-Mega forms!
@@ -7564,11 +7637,17 @@ class Combat(commands.Cog):
             
         # 2. ROSTER CHECK: Do both players have teams?
         async with aiosqlite.connect(DB_FILE) as db:
-            async with db.execute("SELECT COUNT(*) FROM user_party WHERE user_id = ?", (challenger_id,)) as cursor:
+            scope, scope_params = await party_filter(db, challenger_id, alias=None)
+            async with db.execute(
+                    f"SELECT COUNT(*) FROM user_party WHERE user_id = ? {scope}",
+                    (challenger_id, *scope_params)) as cursor:
                 if (await cursor.fetchone())[0] == 0:
                     return await ctx.send("⚠️ You must assign at least one specimen to your roster using `!party add 1 [Box Number]` before initiating a spar.")
 
-            async with db.execute("SELECT COUNT(*) FROM user_party WHERE user_id = ?", (opponent_id,)) as cursor:
+            scope, scope_params = await party_filter(db, opponent_id, alias=None)
+            async with db.execute(
+                    f"SELECT COUNT(*) FROM user_party WHERE user_id = ? {scope}",
+                    (opponent_id, *scope_params)) as cursor:
                 if (await cursor.fetchone())[0] == 0:
                     return await ctx.send(f"⚠️ **{opponent.display_name}** does not have a fieldwork roster assembled yet.")
 
@@ -7599,7 +7678,8 @@ class Combat(commands.Cog):
                         print(f"\n--- DEBUG: Extracting Roster for User {uid} ---")
                         
                         
-                        async with db.execute("""
+                        scope, scope_params = await party_filter(db, uid)
+                        async with db.execute(f"""
                             SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                                 cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                                 cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
@@ -7607,9 +7687,9 @@ class Combat(commands.Cog):
                             FROM user_party up
                             JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                             JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE up.user_id = ?
+                            WHERE up.user_id = ? {scope}
                             ORDER BY up.slot ASC
-                        """, (uid,)) as roster_cursor:
+                        """, (uid, *scope_params)) as roster_cursor:
                             rows = await roster_cursor.fetchall()
                         print(f"DEBUG: Found {len(rows)} assigned specimens in user_party table.")
                         
@@ -9861,7 +9941,8 @@ class Combat(commands.Cog):
 
                     # 3. Load the Player's Team (Identical to npc_encounter)
                     player_team = []
-                    async with db.execute("""
+                    scope, scope_params = await party_filter(db, user_id)
+                    async with db.execute(f"""
                     SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
@@ -9869,9 +9950,9 @@ class Combat(commands.Cog):
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE up.user_id = ?
+                    WHERE up.user_id = ? {scope}
                     ORDER BY up.slot ASC
-                """, (user_id,)) as cursor:
+                """, (user_id, *scope_params)) as cursor:
                         party_rows = await cursor.fetchall()
                     if not party_rows:
                         return await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a Warden!")
@@ -10385,40 +10466,115 @@ class Combat(commands.Cog):
     @commands.command(name="party", aliases=["team", "roster"])
     @checks.has_started()
     @checks.is_authorized()
-    async def manage_party(self, ctx, action: str = "view", slot: int = None, tag_id: str = None):
-        # 🧪 SAFETY NET: Wraps the entire command to catch silent crashes!
+    async def manage_party(self, ctx, *, request: str = None):
+        """Your battle rosters. `!party list`, `!party switch <name>`, `!party clear`."""
+        # \U0001f9ea SAFETY NET: Wraps the entire command to catch silent crashes!
         try:
             user_id = str(ctx.author.id)
-            action = action.lower()
+            action, args = parse_party_request(request)
 
             async with aiosqlite.connect(DB_FILE) as db:
+                current = await active_party(db, user_id)
+                await ensure_party(db, user_id, current)
+
+                # --- ACTION: LIST EVERY PARTY ---
+                if action == 'list':
+                    names = await party_names(db, user_id)
+                    counts = await party_counts(db, user_id)
+                    embed = discord.Embed(
+                        title=f"\U0001f4cb {ctx.author.name}'s Rosters",
+                        description="`!party switch <name>` to work on a different one.",
+                        colour=discord.Colour.blue())
+                    for name in names:
+                        filled = counts.get(name, 0)
+                        marker = " \u2b50 *active*" if name == current else ""
+                        embed.add_field(
+                            name=f"{name}{marker}",
+                            value=f"{filled}/{PARTY_SLOTS} slots filled",
+                            inline=False)
+                    embed.set_footer(text=f"{len(names)}/{MAX_PARTIES} rosters")
+                    return await ctx.send(embed=embed)
+
+                # --- ACTION: MAKE A NEW ONE ---
+                if action in ('new', 'create'):
+                    name = clean_party_name(" ".join(args))
+                    if not name:
+                        return await ctx.send(
+                            "\u26a0\ufe0f Give the roster a short name: "
+                            "`!party new rain team`.")
+                    names = await party_names(db, user_id)
+                    if name in names:
+                        return await ctx.send(f"\u26a0\ufe0f You already have a roster called **{name}**.")
+                    if len(names) >= MAX_PARTIES:
+                        return await ctx.send(
+                            f"\u26a0\ufe0f You already have {MAX_PARTIES} rosters. "
+                            f"Delete one with `!party delete <name>` first.")
+                    await ensure_party(db, user_id, name)
+                    await set_active_party(db, user_id, name)
+                    await db.commit()
+                    return await ctx.send(
+                        f"\U0001f4cb Roster **{name}** created, and you are now working "
+                        f"on it. `!party add 1 <box number>` to fill it.")
+
+                # --- ACTION: SWITCH ---
+                if action in ('switch', 'use'):
+                    name = clean_party_name(" ".join(args))
+                    names = await party_names(db, user_id)
+                    if not name or name not in names:
+                        listed = ", ".join(f"`{n}`" for n in names)
+                        return await ctx.send(
+                            f"\u26a0\ufe0f You have no roster called that. "
+                            f"You have: {listed}. `!party new <name>` makes another.")
+                    if not await set_active_party(db, user_id, name):
+                        return await ctx.send(
+                            "\u26a0\ufe0f Multiple rosters need the database migration "
+                            "run first. Ask an administrator for `migrate_multi_party.py`.")
+                    await db.commit()
+                    return await ctx.send(f"\u2705 Now working on roster **{name}**.")
+
+                # --- ACTION: DELETE A WHOLE ROSTER ---
+                if action == 'delete':
+                    name = clean_party_name(" ".join(args)) or current
+                    if name == DEFAULT_PARTY:
+                        return await ctx.send(
+                            f"\u26a0\ufe0f **{DEFAULT_PARTY}** cannot be deleted \u2014 "
+                            f"it is the one every trainer has. `!party clear` empties it.")
+                    names = await party_names(db, user_id)
+                    if name not in names:
+                        return await ctx.send(f"\u26a0\ufe0f You have no roster called **{name}**.")
+
+                    await party_delete_rows(db, user_id, name)
+                    try:
+                        await db.execute(
+                            "DELETE FROM user_parties WHERE user_id = ? AND party_name = ?",
+                            (user_id, name))
+                    except Exception:
+                        pass
+                    if current == name:
+                        await set_active_party(db, user_id, DEFAULT_PARTY)
+                    await db.commit()
+                    return await ctx.send(
+                        f"\U0001f5d1\ufe0f Roster **{name}** deleted. The specimens in it "
+                        f"are untouched \u2014 only the roster is gone.")
 
                 # --- ACTION: ADD TO PARTY ---
-                if action in ["add", "set", "equip"]:
-                    
-                    if slot is None or tag_id is None:
-                        return await ctx.send("⚠️ Usage: `!party add [slot 1-6] [Box Number]`")
-                        
-                    if int(slot) < 1 or int(slot) > 6:
-                        return await ctx.send("⚠️ A fieldwork roster can only hold up to 6 specimens.")
-                        
-                    # Verify they own the specimen using CTE for Box Number support
-                    if tag_id.isdigit() and len(tag_id) <= 6:
-                        async with db.execute("""
-                            WITH Roster AS (
-                                SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                                FROM caught_pokemon cp
-                                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                                WHERE cp.user_id = ?
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                            ) SELECT instance_id, name FROM Roster WHERE box_number = ?
-                        """, (user_id, int(tag_id))) as cursor:
-                            pokemon = await cursor.fetchone()
-                    
-                    if not pokemon:
-                        return await ctx.send("❌ Could not find that specimen in your survey notebook. Check the Box Number.")
-                        
+                if action in ("add", "set", "equip"):
+                    if len(args) < 2 or not args[0].isdigit():
+                        return await ctx.send("\u26a0\ufe0f Usage: `!party add [slot 1-6] [Box Number]`")
+
+                    slot = int(args[0])
+                    if slot < 1 or slot > PARTY_SLOTS:
+                        return await ctx.send(f"\u26a0\ufe0f A fieldwork roster can only hold up to {PARTY_SLOTS} specimens.")
+
+                    # Through the shared resolver, so a tag works here as well as a box
+                    # number. The old version only handled digits and fell through to an
+                    # undefined variable on anything else - which the outer try then
+                    # reported as an engine crash.
+                    pokemon, problem = await locate_specimen(
+                        db, user_id, " ".join(args[1:]), "cp.instance_id, s.name")
+                    if problem:
+                        return await ctx.send(problem)
+
                     actual_id, poke_name = pokemon
 
                     # ==========================================
@@ -10426,98 +10582,111 @@ class Combat(commands.Cog):
                     # ==========================================
                     async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (actual_id,)) as cursor:
                         if await cursor.fetchone():
-                            return await ctx.send(f"⚠️ You cannot assign **{poke_name.capitalize()}** to your roster right now, they are currently on a field mission!")
-                        
-                    # Check if the specimen is already in another slot
-                    async with db.execute("SELECT slot FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, actual_id)) as cursor:
-                        existing_slot = await cursor.fetchone()
-                    
-                    if existing_slot:
-                        return await ctx.send(f"⚠️ That **{poke_name.capitalize()}** is already assigned to Slot {existing_slot[0]}!")
+                            return await ctx.send(f"\u26a0\ufe0f You cannot assign **{poke_name.capitalize()}** to your roster right now, they are currently on a field mission!")
 
-                    # Upsert the new party member
-                    await db.execute("""
-                        INSERT INTO user_party (user_id, slot, instance_id) 
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(user_id, slot) DO UPDATE SET instance_id = excluded.instance_id;
-                    """, (user_id, slot, actual_id))
-                    
+                    # Already in ANOTHER slot of THIS roster. Being in a different
+                    # roster is fine and is the whole point of having several.
+                    existing = [row for row in await party_members(db, user_id, current)
+                                if row[1] == actual_id]
+                    if existing:
+                        return await ctx.send(f"\u26a0\ufe0f That **{poke_name.capitalize()}** is already in slot {existing[0][0]} of **{current}**!")
+
+                    try:
+                        await db.execute("""
+                            INSERT INTO user_party (user_id, party_name, slot, instance_id)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(user_id, party_name, slot) DO UPDATE SET instance_id = excluded.instance_id;
+                        """, (user_id, current, slot, actual_id))
+                    except Exception:
+                        # Un-migrated database: one party, the old shape.
+                        await db.execute("""
+                            INSERT INTO user_party (user_id, slot, instance_id)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(user_id, slot) DO UPDATE SET instance_id = excluded.instance_id;
+                        """, (user_id, slot, actual_id))
+
                     await db.commit()
-                    await ctx.send(f"✅ **{poke_name.capitalize()}** has been assigned to Roster Slot {slot}!")
+                    return await ctx.send(f"\u2705 **{poke_name.capitalize()}** has been assigned to slot {slot} of **{current}**!")
 
-                # --- ACTION: REMOVE FROM PARTY ---
-                elif action in ["remove", "clear"]:
-                    if not slot:
-                        return await ctx.send("⚠️ Usage: `!party remove [slot 1-6]`")
-                        
-                    await db.execute("DELETE FROM user_party WHERE user_id = ? AND slot = ?", (user_id, slot))
-                    await db.commit()
-                    await ctx.send(f"🧹 Roster Slot {slot} has been cleared.")
+                # --- ACTION: REMOVE ONE, OR EMPTY THE LOT ---
+                if action in ("remove", "clear"):
+                    # `!party clear 3` still clears slot three, because that is what it
+                    # has always done and people have the habit. `!party clear` with no
+                    # slot is the new thing: empty the whole roster.
+                    if args and args[0].isdigit():
+                        slot = int(args[0])
+                        removed = await party_delete_rows(db, user_id, current, slot=slot)
+                        await db.commit()
+                        if not removed:
+                            return await ctx.send(f"\U0001f9f9 Slot {slot} of **{current}** was already empty.")
+                        return await ctx.send(f"\U0001f9f9 Slot {slot} of **{current}** has been cleared.")
 
-                # --- ACTION: VIEW PARTY ---
-                elif action == "view":
-                    # We inject the Roster CTE here too so players can see their Box Numbers in the party view!
-                    #
-                    # The gts_deposits exclusion is not optional. Thirty other places in
-                    # this codebase number the box by "not deployed AND not on the GTS",
-                    # and this was the one that only said "not deployed" - so the moment
-                    # a player had anything on the GTS, the number shown here was one
-                    # higher than the number every other command would accept.
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT instance_id, ROW_NUMBER() OVER(ORDER BY rowid ASC) as box_number
-                            FROM caught_pokemon
-                            WHERE user_id = ?
-                            AND instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                            AND instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        )
-                        SELECT up.slot, cp.instance_id, s.name, cp.level, cp.happiness,
-                            cp.move_1, cp.move_2, cp.move_3, cp.move_4, r.box_number
-                        FROM user_party up
-                        JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        JOIN Roster r ON cp.instance_id = r.instance_id
-                        WHERE up.user_id = ?
-                        ORDER BY up.slot ASC
-                    """, (user_id, user_id)) as cursor:
-                        party_data = await cursor.fetchall()
-                    
+                    name = clean_party_name(" ".join(args)) or current
+                    members = await party_members(db, user_id, name)
+                    if not members:
+                        return await ctx.send(f"\U0001f9f9 **{name}** is already empty.")
+
+                    return await ctx.send(
+                        f"\u267b\ufe0f Empty **{name}** entirely? "
+                        f"{len(members)} specimen(s) would be unassigned. "
+                        f"They stay in your notebook.",
+                        view=PartyClearConfirm(ctx, name, len(members)))
+
+                # --- ACTION: VIEW ---
+                if action == 'view':
+                    name = clean_party_name(" ".join(args)) or current
+                    names = await party_names(db, user_id)
+                    if name not in names:
+                        listed = ", ".join(f"`{n}`" for n in names)
+                        return await ctx.send(
+                            f"\u26a0\ufe0f You have no roster called **{name}**. "
+                            f"You have: {listed}")
+
+                    party_data = await party_members(db, user_id, name)
+
                     if not party_data:
-                        return await ctx.send("Your fieldwork roster is currently empty! Use `!party add 1 [Box Number]` to start assembling your team.")
-                        
-                    embed = discord.Embed(title=f"📋 {ctx.author.name}'s Fieldwork Roster", color=discord.Color.blue())
-                    
+                        return await ctx.send(
+                            f"Roster **{name}** is empty! Use `!party add 1 [Box Number]` "
+                            f"to start assembling your team.")
+
+                    embed = discord.Embed(
+                        title=f"\U0001f4cb {ctx.author.name}'s Roster: {name}",
+                        color=discord.Color.blue())
+
                     # Track active slots to show empty ones
                     filled_slots = {row[0]: row for row in party_data}
-                    
-                    for i in range(1, 7):
+
+                    for i in range(1, PARTY_SLOTS + 1):
                         if i in filled_slots:
-                            slot, tag, name, level, happiness, m1, m2, m3, m4, box_number = filled_slots[i]
+                            slot, tag, name_, level, happiness, m1, m2, m3, m4, box_number = filled_slots[i]
                             moves = [m.replace('-', ' ').title() for m in [m1, m2, m3, m4] if m and m != 'none']
                             move_str = ", ".join(moves) if moves else "*No learned behaviors*"
-                            
+
                             # Visual bond indicator
-                            bond = "❤️❤️❤️" if happiness >= 220 else "❤️❤️🤍" if happiness >= 150 else "❤️🤍🤍" if happiness >= 50 else "🤍🤍🤍"
-                            
+                            bond = "\u2764\ufe0f\u2764\ufe0f\u2764\ufe0f" if happiness >= 220 else "\u2764\ufe0f\u2764\ufe0f\U0001f90d" if happiness >= 150 else "\u2764\ufe0f\U0001f90d\U0001f90d" if happiness >= 50 else "\U0001f90d\U0001f90d\U0001f90d"
+
                             embed.add_field(
-                                name=f"Slot {i}: {name.capitalize()} (Lv. {level})", 
-                                value=f"**Box `#{box_number}`** | **Tag:** `{tag[:8]}` | **Bond:** {bond}\n**Moves:** {move_str}", 
+                                name=f"Slot {i}: {name_.capitalize()} (Lv. {level})",
+                                value=f"**Box `#{box_number}`** | **Tag:** `{tag[:8]}` | **Bond:** {bond}\n**Moves:** {move_str}",
                                 inline=False
                             )
                         else:
                             embed.add_field(name=f"Slot {i}", value="*Empty*", inline=False)
-                            
-                    await ctx.send(embed=embed)
-                    
-                else:
-                    await ctx.send("⚠️ Invalid action. Use `!party view`, `!party add [slot] [box_number]`, or `!party remove [slot]`.")
+
+                    embed.set_footer(text=f"!party list \u00b7 !party switch <name> \u00b7 !party clear")
+                    return await ctx.send(embed=embed)
+
+                await ctx.send(
+                    "\u26a0\ufe0f Invalid action. `!party view`, `!party add <slot> <box>`, "
+                    "`!party remove <slot>`, `!party clear`, `!party list`, "
+                    "`!party new <name>`, `!party switch <name>`, `!party delete <name>`.")
 
         except Exception as e:
-            # 🚨 THIS CATCHES THE SILENT CRASH! 🚨
-            print("\n🚨 CRITICAL EXCEPTION IN !PARTY 🚨")
+            # \U0001f6a8 THIS CATCHES THE SILENT CRASH! \U0001f6a8
+            print("\n\U0001f6a8 CRITICAL EXCEPTION IN !PARTY \U0001f6a8")
             import traceback
             traceback.print_exc()
-            await ctx.send(f"🚨 **Engine Crash Detected!**\n```py\n{e}\n```\nCheck your terminal for the full traceback.")
+            await ctx.send(f"\U0001f6a8 **Engine Crash Detected!**\n```py\n{e}\n```\nCheck your terminal for the full traceback.")
 
     @commands.command(name="movedex", aliases=["move", "attackinfo", "technique"])
     @checks.has_started()
@@ -10606,12 +10775,13 @@ class Combat(commands.Cog):
             async with aiosqlite.connect(DB_FILE) as db:
                 async with db.cursor() as cursor:
                     # 1. Read the Player's Roster and calculate the Ecosystem Scale (Average Level)
-                    async with db.execute("""
+                    scope, scope_params = await party_filter(db, user_id)
+                    async with db.execute(f"""
                     SELECT cp.level
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                    WHERE up.user_id = ?
-                """, (user_id,)) as cursor:
+                    WHERE up.user_id = ? {scope}
+                """, (user_id, *scope_params)) as cursor:
                         party_data = await cursor.fetchall()
                     
                     if not party_data:
@@ -10670,7 +10840,8 @@ class Combat(commands.Cog):
 
                     # 4. Load the Player's Team and Calculate their Exact Stats
                     player_team = []
-                    async with db.execute("""
+                    scope, scope_params = await party_filter(db, user_id)
+                    async with db.execute(f"""
                     SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
@@ -10678,9 +10849,9 @@ class Combat(commands.Cog):
                     FROM user_party up
                     JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE up.user_id = ?
+                    WHERE up.user_id = ? {scope}
                     ORDER BY up.slot ASC
-                """, (user_id,)) as cursor:
+                """, (user_id, *scope_params)) as cursor:
                         for row in await cursor.fetchall():
                             tag, p_id, p_name, p_lvl, p_nature = row[0:5]
                             p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}

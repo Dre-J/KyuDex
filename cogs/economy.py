@@ -10,6 +10,7 @@ from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
                            snapshot)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
+from utils.roster import locate_specimen, looks_like_partner
 from utils import checks
 import math
 import aiosqlite
@@ -903,6 +904,44 @@ class MarketPaginator(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
+async def split_equip_request(db, user_id, request):
+    """
+    `!equip [target] <item>` split into (target, item).
+
+    The target is optional, and unlike `!learn` the ambiguity cannot be settled by
+    counting digits: `!equip air balloon` and `!equip 4 air balloon` differ only in
+    whether the first word names a specimen, and item names are several words long.
+
+    So the ITEM decides, by asking what the trainer is actually carrying. The whole
+    phrase is tried first; only if that is not something they hold is the first word
+    considered a target. A trainer with no Air Balloon therefore gets told they have no
+    Air Balloon, rather than being told there is no specimen called `air`.
+    """
+    tokens = request.split()
+
+    async with db.execute(
+            "SELECT item_name FROM user_inventory WHERE user_id = ? AND quantity > 0",
+            (user_id,)) as cursor:
+        held = {row[0] for row in await cursor.fetchall()}
+    # `none` is the documented way to clear a slot, and is not an inventory row.
+    known = held | {'none', 'unequip'}
+
+    whole = "-".join(tokens).lower()
+    if whole in known:
+        return None, whole
+
+    if len(tokens) >= 2:
+        rest = "-".join(tokens[1:]).lower()
+        if rest in known:
+            return tokens[0], rest
+
+    # Neither reading names something they hold. Fall back to the shape the words have:
+    # a leading box number or partner word is a target, anything else is all item - so
+    # the complaint that follows is about the thing they actually got wrong.
+    if len(tokens) >= 2 and (tokens[0].isdigit() or looks_like_partner(tokens[0])):
+        return tokens[0], "-".join(tokens[1:]).lower()
+    return None, whole
+
 class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1606,43 +1645,31 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.has_started()
     @checks.is_not_in_combat()
     @checks.is_authorized()
-    async def equip_item(self, ctx, instance_id: str, *, item_name: str):
-        """Attaches a symbiotic item or tactical gear to a specific specimen."""
+    async def equip_item(self, ctx, *, request: str = None):
+        """Attaches gear. `!equip leftovers` uses your selected partner."""
         user_id = str(ctx.author.id)
-        formatted_item = item_name.lower().replace(" ", "-") 
+
+        if not request or not request.split():
+            return await ctx.send(
+                "⚠️ Usage: `!equip <item>` for your selected partner, or "
+                "`!equip <box number|tag> <item>` for any specimen.")
 
         try:
             async with aiosqlite.connect(DB_FILE) as db:
+                target, formatted_item = await split_equip_request(db, user_id, request)
+
                 # 1. START ATOMIC TRANSACTION
                 await db.execute("BEGIN TRANSACTION")
 
                 try:
-                    # 2. Verify Specimen Ownership (Box Number or UUID)
-                    if instance_id.isdigit() and len(instance_id) <= 6:
-                        async with db.execute("""
-                            WITH Roster AS (
-                                SELECT cp.instance_id, s.name, cp.held_item, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                                FROM caught_pokemon cp
-                                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                                WHERE cp.user_id = ?
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                            ) SELECT instance_id, name, held_item FROM Roster WHERE box_number = ?
-                        """, (user_id, int(instance_id))) as cursor:
-                            specimen = await cursor.fetchone()
-                    else:
-                        async with db.execute("""
-                            SELECT cp.instance_id, s.name, cp.held_item 
-                            FROM caught_pokemon cp
-                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                        """, (f"{instance_id}%", user_id)) as cursor:
-                            specimen = await cursor.fetchone()
-                    
-                    if not specimen:
+                    # 2. Which specimen - the selected partner unless one is named.
+                    specimen, problem = await locate_specimen(
+                        db, user_id, target,
+                        "cp.instance_id, s.name, cp.held_item")
+                    if problem:
                         await db.rollback()
-                        return await ctx.send("❌ Specimen not found. Ensure you are using the correct Box Number or Tag ID.")
-                        
+                        return await ctx.send(problem)
+
                     full_instance_id, raw_specimen_name, current_held_item = specimen
                     specimen_name = raw_specimen_name.capitalize()
 
@@ -1651,35 +1678,35 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                         if current_held_item == "none" or not current_held_item:
                             await db.rollback()
                             return await ctx.send(f"⚠️ **{specimen_name}** is not currently holding any equipment.")
-                        
+
                         await db.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, ?, 1) 
-                            ON CONFLICT(user_id, item_name) 
+                            INSERT INTO user_inventory (user_id, item_name, quantity)
+                            VALUES (?, ?, 1)
+                            ON CONFLICT(user_id, item_name)
                             DO UPDATE SET quantity = quantity + 1
                         """, (user_id, current_held_item))
-                        
+
                         await db.execute("UPDATE caught_pokemon SET held_item = 'none' WHERE instance_id = ?", (full_instance_id,))
                         await db.commit()
-                        
+
                         return await ctx.send(f"🎒 You detached the `{current_held_item.replace('-', ' ').title()}` from **{specimen_name}** and returned it to your pack.")
 
                     # 4. Verify Inventory Ownership for the New Item
                     async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item)) as cursor:
                         inv_data = await cursor.fetchone()
-                    
+
                     if not inv_data or inv_data[0] < 1:
                         await db.rollback()
                         return await ctx.send(f"⚠️ **Logistics Error:** You do not have any `{formatted_item.replace('-', ' ').title()}` in your field backpack.")
 
                     # 5. EXECUTE THE ATOMIC SWAP
                     await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
-                    
+
                     if current_held_item and current_held_item != 'none':
                         await db.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, ?, 1) 
-                            ON CONFLICT(user_id, item_name) 
+                            INSERT INTO user_inventory (user_id, item_name, quantity)
+                            VALUES (?, ?, 1)
+                            ON CONFLICT(user_id, item_name)
                             DO UPDATE SET quantity = quantity + 1
                         """, (user_id, current_held_item))
                         swap_msg = f"\n*The previously held `{current_held_item.replace('-', ' ').title()}` was returned to your pack.*"
@@ -1688,10 +1715,10 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
 
                     await db.execute("UPDATE caught_pokemon SET held_item = ? WHERE instance_id = ?", (formatted_item, full_instance_id))
                     await db.commit()
-                    
+
                 except Exception as inner_e:
                     # 🚨 CRITICAL RECOVERY: Catch inner transaction failures
-                    if db.in_transaction:  
+                    if db.in_transaction:
                         await db.rollback()
                     raise inner_e # Push the error to the outer block to send the Discord message
 
@@ -1699,7 +1726,7 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             embed = discord.Embed(title="🎒 Tactical Equipment Assigned", color=discord.Color.green())
             embed.description = f"**{ctx.author.name}** equipped `{formatted_item.replace('-', ' ').title()}` to **{specimen_name}**!{swap_msg}"
             embed.set_footer(text=f"Tag ID: {full_instance_id[:8]}")
-            
+
             await ctx.send(embed=embed)
 
         except Exception as e:
@@ -1711,36 +1738,18 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.is_authorized()
     @checks.is_not_in_combat()
     @checks.is_not_in_trade()
-    async def unequip_item(self, ctx, instance_id: str):
-        """Safely removes tactical gear from a specimen and returns it to the backpack."""
+    async def unequip_item(self, ctx, instance_id: str = None):
+        """Takes gear back. With no target it uses your selected partner."""
         user_id = str(ctx.author.id)
-        
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                # 1. RETRIEVE THE SPECIMEN & HELD ITEM (Box Number or UUID)
-                if instance_id.isdigit() and len(instance_id) <= 6:
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, s.name, cp.held_item, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp
-                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        ) SELECT instance_id, name, held_item FROM Roster WHERE box_number = ?
-                    """, (user_id, int(instance_id))) as cursor:
-                        specimen = await cursor.fetchone()
-                else:
-                    async with db.execute("""
-                        SELECT cp.instance_id, s.name, cp.held_item 
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                    """, (f"{instance_id}%", user_id)) as cursor:
-                        specimen = await cursor.fetchone()
-                
-                if not specimen:
-                    return await ctx.send("❌ Specimen not found. Ensure you are using the correct Box Number or Tag ID.")
+                # 1. Which specimen - the selected partner unless one is named.
+                specimen, problem = await locate_specimen(
+                    db, user_id, instance_id,
+                    "cp.instance_id, s.name, cp.held_item")
+                if problem:
+                    return await ctx.send(problem)
 
                 full_instance_id, raw_name, held_item = specimen
                 specimen_name = raw_name.capitalize()
@@ -1754,9 +1763,9 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                 try:
                     # A. Push the item safely back into the user's inventory
                     await db.execute("""
-                        INSERT INTO user_inventory (user_id, item_name, quantity) 
-                        VALUES (?, ?, 1) 
-                        ON CONFLICT(user_id, item_name) 
+                        INSERT INTO user_inventory (user_id, item_name, quantity)
+                        VALUES (?, ?, 1)
+                        ON CONFLICT(user_id, item_name)
                         DO UPDATE SET quantity = quantity + 1
                     """, (user_id, held_item))
 
@@ -1764,7 +1773,7 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                     await db.execute("UPDATE caught_pokemon SET held_item = 'none' WHERE instance_id = ?", (full_instance_id,))
 
                     await db.commit()
-                    
+
                 except Exception as inner_e:
                     # 🚨 CRITICAL RECOVERY
                     if db.in_transaction:
@@ -1775,9 +1784,9 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             embed = discord.Embed(title="🎒 Equipment Recovered", color=discord.Color.green())
             embed.description = f"**{ctx.author.name}** safely detached the `{held_item.replace('-', ' ').title()}` from **{specimen_name}** and stowed it in the field backpack."
             embed.set_footer(text=f"Tag ID: {full_instance_id[:8]}")
-            
+
             await ctx.send(embed=embed)
-            
+
         except Exception as e:
             print(f"Unequip Error: {e}")
             await ctx.send("❌ A critical database error occurred while recovering the equipment. No items were lost.")

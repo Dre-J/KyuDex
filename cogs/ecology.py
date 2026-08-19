@@ -14,7 +14,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
                              RARITY_LABELS, rarity_filter, roll_rarity,
                              pseudo_legendaries, is_pseudo_legendary,
-                             MAX_ACTIVE_DIRECTIVES, MAX_NOTES_PER_ANALYSIS)
+                             MAX_ACTIVE_DIRECTIVES, MAX_NOTES_PER_ANALYSIS,
+                             auto_tag, ALPHA_HEIGHT_THRESHOLD)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
@@ -62,6 +63,48 @@ def event_alert(settings):
     settings = settings or {}
     role = settings.get('ping_role')
     return f"<@&{role}> " if role and settings.get('ping_events') else ""
+
+
+async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=None):
+    """
+    Edit a spawn's own message to say it has been taken, and by whom.
+
+    Until this, a caught spawn left its card in the channel unchanged. The despawn timer
+    is the only thing that ever rewrote one, and it declines to touch a specimen that is
+    no longer in memory - correctly, since it must not overwrite a catch - so the card
+    for a specimen somebody took minutes ago sat there advertising it indefinitely.
+
+    Every failure is swallowed on purpose. The message may have been deleted, the bot may
+    have lost permission to edit in that channel, or the spawn may predate this and carry
+    no message id at all. None of those is a reason for a successful catch to report an
+    error to the person who made it.
+    """
+    channel_id = (spawn or {}).get('channel_id')
+    message_id = (spawn or {}).get('message_id')
+    if not channel_id or not message_id or bot is None:
+        return False
+
+    try:
+        channel = bot.get_channel(int(channel_id))
+        if channel is None:
+            return False
+        message = await channel.fetch_message(int(message_id))
+
+        embed = message.embeds[0] if message.embeds else discord.Embed()
+        clean = str(species_name).replace('-', ' ').title()
+        badge = "🌟 " if is_shiny else ""
+        embed.title = "✅ Specimen Secured"
+        embed.description = (f"The {badge}**{clean}** was tagged and rehomed by "
+                             f"**{catcher}**."
+                             + (f"\n*Filed under* `{tag}`." if tag else ""))
+        embed.colour = discord.Colour.dark_grey()
+        # The sprite stays. The card is a record of what appeared, and stripping the
+        # picture would make the channel history less readable rather than more.
+        await message.edit(embed=embed)
+        return True
+    except Exception as e:
+        print(f"⚠️ Could not mark spawn as caught: {e}")
+        return False
 
 
 def spawn_is_here(spawn_data, channel_id):
@@ -515,10 +558,14 @@ class PokemonPaginator(discord.ui.View):
         actual_height_m = round((base_h / 10.0) * h_mult, 2)
         actual_weight_kg = round((base_w / 10.0) * w_mult, 2)
         
+        # The Alpha cutoff is the shared constant, not a number written out again. It
+        # decides two separate things - the badge shown here, and the `alpha` tag a
+        # capture earns - and the two disagreeing would be invisible until somebody
+        # noticed a specimen labelled ALPHA that had not been tagged as one.
         size_tag = "Average"
         if h_mult <= 0.80: size_tag = "Teeny"
         elif h_mult <= 0.95: size_tag = "Small"
-        elif h_mult >= 1.30: size_tag = "ALPHA"
+        elif h_mult >= ALPHA_HEIGHT_THRESHOLD: size_tag = "ALPHA"
         elif h_mult >= 1.06: size_tag = "Large"
 
         # ==========================================
@@ -716,6 +763,150 @@ class DirectiveSelect(discord.ui.Select):
         await interaction.response.edit_message(
             embed=await self.paginator.generate_embed(), view=self.paginator)
 
+
+def parse_abandon_request(request, held_ids):
+    """
+    What `!abandon` was asked to drop, as (ids, complaint).
+
+    `None` for the ids means "no ids given" - open the picker. `all` is spelled out
+    rather than inferred from an empty command, because emptying a notebook by accident
+    is not a mistake anybody can undo.
+
+    Every id is checked against what the trainer actually holds BEFORE anything is
+    deleted, so `!abandon 4 999` refuses outright rather than dropping 4 and then
+    complaining about 999.
+    """
+    text = " ".join(str(request or "").split())
+    if not text:
+        return None, None
+
+    if text.lower() in ('all', 'everything', '*'):
+        return list(held_ids), None
+
+    tokens = text.replace(',', ' ').split()
+    if not all(t.isdigit() for t in tokens):
+        return None, ("\u26a0\ufe0f Give me directive numbers \u2014 `!abandon 4`, "
+                      "`!abandon 4 7 9`, or `!abandon all`. Run `!abandon` on its own "
+                      "to pick from a list.")
+
+    wanted = [int(t) for t in tokens]
+    unknown = [i for i in wanted if i not in held_ids]
+    if unknown:
+        listed = ", ".join(f"`{i}`" for i in held_ids[:20])
+        return None, (f"\u26a0\ufe0f You have no directive "
+                      f"{', '.join(f'**#{i}**' for i in unknown)}. "
+                      f"You hold: {listed}" + ("\u2026" if len(held_ids) > 20 else ""))
+
+    # Deduplicated, because `!abandon 4 4` should drop one directive and report one.
+    return sorted(set(wanted)), None
+
+
+class AbandonSelect(discord.ui.Select):
+    """Pick several directives to drop, in one go."""
+
+    def __init__(self, panel):
+        self.panel = panel
+        options = []
+        for d_id, obj_type, target, req_amt, curr_prog in panel.directives:
+            emoji, heading, _ = describe_directive(obj_type, target)
+            options.append(discord.SelectOption(
+                label=f"#{d_id} \u00b7 {heading}"[:100],
+                value=str(d_id),
+                emoji=emoji,
+                description=f"{curr_prog}/{req_amt} complete"[:100]))
+        super().__init__(
+            placeholder="Choose the directives to abandon\u2026",
+            options=options, min_values=1, max_values=len(options), row=0)
+
+    async def callback(self, interaction):
+        self.panel.chosen = [int(v) for v in self.values]
+        # Re-rendered rather than acted on: a multi-select fires on every change, and
+        # deleting somebody's quests the instant they tick a box is not a thing to do
+        # without a second press.
+        await interaction.response.edit_message(embed=self.panel.summary(), view=self.panel)
+
+
+class AbandonPanel(discord.ui.View):
+    """The dropdown, plus the button that actually does it."""
+
+    def __init__(self, cog, ctx, directives):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.ctx = ctx
+        self.directives = directives
+        self.chosen = []
+        self.message = None
+        # Discord refuses a select with more than 25 options with a 400 the library does
+        # not raise. The directive cap is 20, so this only bites on a notebook filled
+        # before the cap existed - and those are exactly the notebooks that need this.
+        self.add_item(AbandonSelect(self))
+
+    async def interaction_check(self, interaction):
+        if str(interaction.user.id) != str(self.ctx.author.id):
+            await interaction.response.send_message(
+                "\u274c This is not your field notebook!", ephemeral=True)
+            return False
+        return True
+
+    def summary(self):
+        embed = discord.Embed(
+            title="\U0001f5d1\ufe0f Archive Directives",
+            description="Pick the directives you no longer want, then confirm. "
+                        "Progress on them is lost.",
+            colour=discord.Colour.dark_gray())
+        if self.chosen:
+            picked = [d for d in self.directives if d[0] in self.chosen]
+            embed.add_field(
+                name=f"Selected ({len(picked)})",
+                value="\n".join(
+                    f"`#{d[0]}` {describe_directive(d[1], d[2])[1]}" for d in picked)[:1000],
+                inline=False)
+        else:
+            embed.add_field(name="Selected", value="*nothing yet*", inline=False)
+        return embed
+
+    @discord.ui.button(label="Archive selected", style=discord.ButtonStyle.danger, row=1)
+    async def confirm(self, interaction, button):
+        if not self.chosen:
+            return await interaction.response.send_message(
+                "Pick at least one directive first.", ephemeral=True)
+        dropped = await drop_directives(str(self.ctx.author.id), self.chosen)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=archive_result(dropped), view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel(self, interaction, button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content="Nothing was archived.", embed=None, view=self)
+
+
+async def drop_directives(user_id, ids):
+    """Delete these directives if they belong to this trainer. Returns how many went."""
+    if not ids:
+        return 0
+    marks = ",".join("?" * len(ids))
+    async with aiosqlite.connect(DB_FILE) as db:
+        # Scoped to the owner in the DELETE itself rather than checked first: a check
+        # and a delete are two statements, and only one of them decides what happens.
+        cursor = await db.execute(
+            f"DELETE FROM field_directives WHERE user_id = ? AND is_completed = 0 "
+            f"AND directive_id IN ({marks})", (user_id, *ids))
+        await db.commit()
+        return cursor.rowcount
+
+
+def archive_result(count):
+    return discord.Embed(
+        title="\U0001f5d1\ufe0f Directives Archived",
+        description=(f"**{count}** directive{'s' if count != 1 else ''} cleared from "
+                     f"your field notebook."
+                     if count else "Nothing was archived \u2014 those directives were "
+                                   "already gone."),
+        colour=discord.Colour.dark_gray())
 
 class SurveyPaginator(discord.ui.View):
     def __init__(self, user_id, directives, start_index=0):
@@ -1176,6 +1367,9 @@ class Ecology(commands.Cog):
             msg = await channel.send(content=alert, embed=embed,
                                      allowed_mentions=mentions)
 
+        # Recorded AFTER the send, because the id does not exist until then -
+        # it is what lets a successful catch go back and rewrite this card.
+        active_spawns[guild_id][spawn_id]['message_id'] = msg.id
         asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=name, guild_id=guild_id))
 
     async def execute_biome_shift(self, ctx, target_biome, title, description):
@@ -1442,6 +1636,9 @@ class Ecology(commands.Cog):
             else:
                 msg = await ctx.send(embed=embed)
             
+            # Recorded AFTER the send, because the id does not exist until then -
+            # it is what lets a successful catch go back and rewrite this card.
+            user_active_spawns[user_id][spawn_id]['message_id'] = msg.id
             asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=poke_name, user_id=user_id, config_guild=str(ctx.guild.id)))
         except Exception as e:
             print(f"Expedition Error: {e}")
@@ -1704,6 +1901,9 @@ class Ecology(commands.Cog):
         else:
             msg = await ctx.send(embed=embed)
 
+        # Recorded AFTER the send, because the id does not exist until then -
+        # it is what lets a successful catch go back and rewrite this card.
+        active_spawns[guild_id][spawn_id]['message_id'] = msg.id
         asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=name, guild_id=guild_id))
 
     @commands.command(name="nickname", aliases=["name"])
@@ -2251,46 +2451,42 @@ class Ecology(commands.Cog):
     @commands.command(name="abandon", aliases=["drop", "discard", "archive"])
     @checks.has_started()
     @checks.is_authorized()
-    async def abandon_directive(self, ctx, directive_id: int):
-        """Discards an active ecological directive from your field notebook."""
+    async def abandon_directive(self, ctx, *, request: str = None):
+        """Drops directives. `!abandon` opens a picker; `!abandon 4 7` drops those two."""
         user_id = str(ctx.author.id)
-        
-        async with aiosqlite.connect(DB_FILE) as db:
 
+        async with aiosqlite.connect(DB_FILE) as db:
             try:
-                # 1. Verify the directive exists and belongs to this specific researcher
                 async with db.execute("""
-                    SELECT objective_type, target_variable 
-                    FROM field_directives 
-                    WHERE directive_id = ? AND user_id = ? AND is_completed = 0
-                """, (directive_id, user_id)) as cursor:
-                    target_quest = await cursor.fetchone()
-                
-                if not target_quest:
-                    return await ctx.send(f"⚠️ **Directive #{directive_id}** not found. Ensure you are providing a valid, active ID from your `!survey` ledger.")
-                
-                # 2. Execute the precise deletion
-                await db.execute("DELETE FROM field_directives WHERE directive_id = ? AND user_id = ?", (directive_id, user_id))
-                await db.commit()
-                
-                obj_type, target_var = target_quest
-                formatted_target = target_var.capitalize().replace('-', ' ')
-                
-                embed = discord.Embed(
-                    title="🗑️ Directive Archived",
-                    description=f"You have successfully abandoned **Directive #{directive_id}** ({formatted_target}).\n\nThe unviable tracking data has been cleared from your field notebook.",
-                    color=discord.Color.dark_gray()
-                )
-                await ctx.send(embed=embed)
-                
-            except ValueError:
-                await ctx.send("❌ Please provide a valid numerical ID. Example: `!abandon 4`")
+                    SELECT directive_id, objective_type, target_variable,
+                           required_amount, current_progress
+                    FROM field_directives
+                    WHERE user_id = ? AND is_completed = 0
+                    ORDER BY directive_id ASC
+                """, (user_id,)) as cursor:
+                    directives = await cursor.fetchall()
             except Exception as e:
-                if db.in_transaction:
-                    await db.rollback()
                 print(f"Abandon error: {e}")
-                await ctx.send("❌ A critical database error occurred while trying to drop the directive.")
-                
+                return await ctx.send("\u274c A critical database error occurred while trying to drop the directive.")
+
+        if not directives:
+            return await ctx.send("\U0001f4cb Your field notebook is empty \u2014 there is nothing to abandon.")
+
+        held = [row[0] for row in directives]
+        wanted, problem = parse_abandon_request(request, held)
+        if problem:
+            return await ctx.send(problem)
+
+        # No ids given: open the picker rather than guessing. This is also the only way
+        # to work through a notebook of twenty without typing twenty numbers.
+        if wanted is None:
+            panel = AbandonPanel(self, ctx, directives)
+            panel.message = await ctx.send(embed=panel.summary(), view=panel)
+            return
+
+        dropped = await drop_directives(user_id, wanted)
+        await ctx.send(embed=archive_result(dropped))
+
     @commands.command(name="survey", aliases=["quests", "directives", "tasks"])
     @checks.has_started()
     @checks.is_authorized()
@@ -2709,7 +2905,18 @@ class Ecology(commands.Cog):
                 # BIOMETRICS & ALPHA IV LOGIC
                 # ==========================================
                 h_mult, w_mult, size_class = generate_biometrics()
-                is_alpha = (h_mult >= 1.30)
+                is_alpha = (h_mult >= ALPHA_HEIGHT_THRESHOLD)
+
+                # The tag a specimen earns by being what it is. One tag, because
+                # `custom_tag` is one column and the box browser compares it with `=`;
+                # the order is in constants.AUTO_TAGS. Nothing here ever overwrites a
+                # tag a player chose - a fresh capture has an empty one.
+                earned_tag = auto_tag(
+                    is_shiny=bool(target['is_shiny']),
+                    is_mythical=bool(is_mythical),
+                    is_legendary=bool(is_legendary),
+                    is_pseudo=is_pseudo_legendary(target['pokedex_id']),
+                    is_alpha=is_alpha)
 
                 if is_alpha:
                     ivs = [random.randint(20, 31) for _ in range(6)]
@@ -2738,10 +2945,11 @@ class Ecology(commands.Cog):
                 await db.execute("""
                     INSERT INTO caught_pokemon (
                         instance_id, user_id, pokedex_id, caught_in_guild, gender, level, nature, is_shiny, original_user_id,
-                        iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed, ability, height_multiplier, weight_multiplier, origin_language
+                        iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed, ability, height_multiplier, weight_multiplier, origin_language,
+                        custom_tag
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (instance_id, user_id, target['pokedex_id'], guild_id, gender, level, nature, target['is_shiny'], user_id, *ivs, assigned_ability, h_mult, w_mult, origin_lang))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (instance_id, user_id, target['pokedex_id'], guild_id, gender, level, nature, target['is_shiny'], user_id, *ivs, assigned_ability, h_mult, w_mult, origin_lang, earned_tag))
                 
                 target_species = pokemon_name 
 
@@ -2794,6 +3002,13 @@ class Ecology(commands.Cog):
                     user_active_spawns[user_id].pop(target_spawn_id, None)
                 else:
                     active_spawns[guild_id].pop(target_spawn_id, None)
+
+                # The card that announced this specimen is still sitting in the channel
+                # looking live, and the despawn timer will not touch it now that the
+                # spawn is gone from memory - so anybody scrolling past sees a specimen
+                # to catch that was taken minutes ago. Say what happened to it.
+                await mark_spawn_caught(self.bot, target, ctx.author.display_name,
+                                        pokemon_name, target['is_shiny'], earned_tag)
 
                 # ==========================================
                 # LOCAL SPRITE GENERATOR
