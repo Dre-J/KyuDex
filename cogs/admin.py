@@ -18,7 +18,8 @@ import discord
 from discord.ext import commands
 
 from utils import audit
-from utils.constants import DB_FILE, EQUIPMENT_CATALOG, TM_SHOP
+from utils.constants import DB_FILE, EQUIPMENT_CATALOG
+from utils.machines import grant_tm, find_tm
 
 # The two ledgers a grant can land in. A TM is not a backpack item - it lives in
 # `user_tms`, and `!buy` already routes on that distinction. Giving one out has to make
@@ -47,9 +48,11 @@ def resolve_item(typed):
         if normalise(key) == wanted or normalise(data.get('name')) == wanted:
             return BACKPACK, key, data.get('name', key.replace('-', ' ').title())
 
-    for move in TM_SHOP:
-        if normalise(move) == wanted or normalise(f"tm{move}") == wanted:
-            return TM_LEDGER, move, f"TM {move.replace('-', ' ').title()}"
+    # The same lookup `!buy` uses, so an admin and a shopper cannot disagree about
+    # which of 340 TMs `stealth rock` means.
+    move = find_tm(typed)
+    if move:
+        return TM_LEDGER, move, f"TM {move.replace('-', ' ').title()}"
 
     return None
 
@@ -182,28 +185,39 @@ class Admin(commands.Cog):
                         return await ctx.send(
                             f"⚠️ **{target.name}** is not registered. They need `!start` first.")
 
-                table, column = (('user_inventory', 'item_name') if ledger == BACKPACK
-                                 else ('user_tms', 'tm_name'))
+                if ledger == TM_LEDGER:
+                    # A TM is owned or it is not - there is no quantity to add to. The
+                    # count-based branch below would have clamped a negative grant to
+                    # zero and LEFT THE ROW, so taking a TM away would have looked like
+                    # it worked while the trainer kept it. Revoking has to delete.
+                    if quantity > 0:
+                        await grant_tm(db, user_id, key)
+                    else:
+                        await db.execute(
+                            "DELETE FROM user_tms WHERE user_id = ? AND tm_name = ?",
+                            (user_id, key))
+                    held = "the TM" if quantity > 0 else "nothing"
+                else:
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, item_name) DO UPDATE SET
+                            quantity = quantity + excluded.quantity
+                    """, (user_id, key, quantity))
 
-                await db.execute(f"""
-                    INSERT INTO {table} (user_id, {column}, quantity)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(user_id, {column}) DO UPDATE SET
-                        quantity = quantity + excluded.quantity
-                """, (user_id, key, quantity))
+                    # A negative grant is a correction, and it must not leave somebody
+                    # holding minus two Potions - a quantity below zero reads as a huge
+                    # number in some places and as a broken row in others.
+                    await db.execute(
+                        "UPDATE user_inventory SET quantity = 0 "
+                        "WHERE user_id = ? AND item_name = ? AND quantity < 0",
+                        (user_id, key))
 
-                # A negative grant is a correction, and it must not leave somebody
-                # holding minus two Potions - a quantity below zero reads as a huge
-                # number in some places and as a broken row in others.
-                await db.execute(
-                    f"UPDATE {table} SET quantity = 0 "
-                    f"WHERE user_id = ? AND {column} = ? AND quantity < 0",
-                    (user_id, key))
-
-                async with db.execute(
-                        f"SELECT quantity FROM {table} WHERE user_id = ? AND {column} = ?",
-                        (user_id, key)) as cursor:
-                    held = (await cursor.fetchone())[0]
+                    async with db.execute(
+                            "SELECT quantity FROM user_inventory "
+                            "WHERE user_id = ? AND item_name = ?",
+                            (user_id, key)) as cursor:
+                        held = (await cursor.fetchone())[0]
 
                 await db.commit()
         except Exception as e:

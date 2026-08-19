@@ -500,16 +500,65 @@ CATEGORY_OPTIONS = [
     discord.SelectOption(label="Evolution Items", value="evoitems", emoji="🧬"),
     discord.SelectOption(label="Form Items", value="formitems", emoji="🧬")
 ]
-# The Research Shop Catalog
-TM_SHOP = {
-    'protect': 500,
-    'toxic': 1000,
-    'rest': 800,
-    'ice-beam': 2000,
-    'flamethrower': 2000,
-    'thunderbolt': 2000,
-    'swords-dance': 1500
-}
+# ==========================================
+# 💿 WHAT A TM COSTS
+# ==========================================
+# The shelf used to be a hand-written dictionary of seven moves. `species_movepool`
+# holds 340 distinct `machine` moves, so 333 of them could be READ off a specimen's
+# movepool, refused by `!learn` for want of the TM, and then not found in the shop -
+# unlearnable at any price. A hand-written shelf can only ever be a subset of a table
+# that grows, so the shelf is derived from the table instead.
+#
+# Pricing is a rule rather than a list, for the same reason. Three tiers:
+#
+#   basic     - the utility moves every team wants and no team should have to save for
+#   standard  - coverage; a modest, unremarkable purchase
+#   premium   - the moves that decide a matchup rather than fill a slot
+#
+# The principle behind the numbers: team-building ACCESS should never be the barrier,
+# only team-building skill. A new trainer starts with 500 tokens (STARTER_TOKENS) and
+# the basic six in hand, so nobody's first team is shaped by their wallet.
+TM_TIER_PRICES = {'basic': 300, 'standard': 1200, 'premium': 4000}
+
+# Handed over free with the starting kit as well as sold - see STARTER_TMS. Six moves
+# chosen because they teach what a TM IS: one protects, one heals, one poisons, one
+# switches, one flinches, one blocks status.
+TM_BASIC = frozenset({
+    'protect', 'rest', 'substitute', 'toxic', 'rock-slide', 'u-turn',
+    'facade', 'return', 'frustration', 'rain-dance', 'sunny-day', 'sandstorm',
+    'hail', 'snowscape', 'sleep-talk', 'attract', 'double-team', 'swift',
+})
+
+# The moves that change how a matchup plays rather than what it is played with -
+# hazards, recovery, burn, and the setup sweepers turn on. Priced high enough to be a
+# decision and low enough to be a couple of days of casual play.
+TM_PREMIUM = frozenset({
+    'stealth-rock', 'knock-off', 'will-o-wisp', 'calm-mind', 'roost',
+    'spikes', 'toxic-spikes', 'defog', 'rapid-spin', 'taunt', 'encore',
+    'swords-dance', 'nasty-plot', 'bulk-up', 'iron-defense', 'agility',
+    'thunder-wave', 'trick-room', 'light-screen', 'reflect', 'leech-seed',
+    'recover', 'synthesis', 'moonlight', 'morning-sun', 'wish',
+})
+
+# A nuke is premium whatever its name. 110 sits above the coverage moves (Earthquake,
+# Ice Beam, Flamethrower all land at 90-100) and below nothing worth exempting.
+TM_NUKE_POWER = 110
+
+
+def tm_price(move, power=None, damage_class=None):
+    """
+    What one TM costs, from the move rather than from a table somebody has to maintain.
+
+    Named tiers win over the power rule, so a status move nobody would price by its
+    power - Stealth Rock has none at all - still lands where it belongs.
+    """
+    if move in TM_BASIC:
+        return TM_TIER_PRICES['basic']
+    if move in TM_PREMIUM:
+        return TM_TIER_PRICES['premium']
+    if power and power >= TM_NUKE_POWER:
+        return TM_TIER_PRICES['premium']
+    return TM_TIER_PRICES['standard']
 
 # ==========================================
 # 💎 ITEM PHASE 1: THE TYPE-BOOSTER TABLE
@@ -804,43 +853,49 @@ EQUIPMENT_CATALOG.update(build_phase2_stock())
 # displays.
 def build_tm_stock():
     """
-    The TM shelf, described from `base_moves` rather than from a hand-written map.
+    The TM shelf, read off `species_movepool` rather than written out by hand.
 
-    The old shop listed a price and nothing else - no type, no power, no indication of
-    what you were buying beyond the name. Reading the move table means the description
-    cannot come to disagree with what the move actually does in battle, and a TM added
-    to TM_SHOP tomorrow describes itself without anybody writing a line of prose.
+    Every move some species learns by `machine` is stocked - which is the whole point.
+    A shelf listing seven of 340 meant `!learn` could name a TM move, refuse it for
+    want of the TM, and send the trainer to a shop that had never heard of it. The
+    table is the authority on what a machine move IS, so the table decides the shelf.
+
+    Descriptions come from `base_moves` for the same reason: a blurb derived from the
+    move's real type and power cannot drift away from what the move does in battle.
+
+    Anything that goes wrong here degrades to an empty shelf rather than a failed
+    import. A bot that boots with no TMs on sale is recoverable; one that will not boot
+    is not.
     """
-    stock = {}
+    stock, prices = {}, {}
 
-    details = {}
+    rows = []
     try:
         import sqlite3 as _sqlite3
-        with _sqlite3.connect(DB_FILE) as _conn:
-            marks = ','.join('?' * len(TM_SHOP))
-            details = {
-                row[0]: row[1:]
-                for row in _conn.execute(
-                    f"SELECT name, type, power, damage_class FROM base_moves "
-                    f"WHERE name IN ({marks})", tuple(TM_SHOP))
-            }
+        # Read-only. Building a catalogue must never be able to write to the live
+        # database, and `mode=ro` is the difference between a query and an accident.
+        with _sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as _conn:
+            rows = _conn.execute("""
+                SELECT DISTINCT sm.move_name, bm.type, bm.power, bm.damage_class
+                FROM species_movepool sm
+                JOIN base_moves bm ON bm.name = sm.move_name
+                WHERE sm.learn_method = 'machine'
+                ORDER BY sm.move_name
+            """).fetchall()
     except Exception as e:
-        # A shop that lists names and prices with no blurb is a worse shop, not a
-        # broken one. Never let this stop the bot booting.
-        print(f"⚠️ WARNING: could not read move data for the TM shelf ({e}).")
+        print(f"⚠️ WARNING: could not read the movepool for the TM shelf ({e}).")
 
-    for move, price in TM_SHOP.items():
-        element, power, damage_class = details.get(move, (None, None, None))
+    for move, element, power, damage_class in rows:
         pretty = move.replace('-', ' ').title()
+        price = tm_price(move, power, damage_class)
+        prices[move] = price
 
-        if element and damage_class == 'status':
-            desc = f"Teaches {pretty}. A {element.title()}-type status move."
-        elif element and power:
-            desc = f"Teaches {pretty}. {element.title()}-type, {power} power."
-        elif element:
-            desc = f"Teaches {pretty}. {element.title()}-type."
+        if damage_class == 'status':
+            desc = f"Teaches {pretty}. A {(element or 'normal').title()}-type status move."
+        elif power:
+            desc = f"Teaches {pretty}. {(element or 'normal').title()}-type, {power} power."
         else:
-            desc = f"Teaches {pretty}."
+            desc = f"Teaches {pretty}. {(element or 'normal').title()}-type."
 
         stock[move] = {
             "name": f"TM {pretty}",
@@ -848,12 +903,17 @@ def build_tm_stock():
             "desc": f"{desc} Apply it with `!tm`.",
             "emoji": TYPE_EMOJI.get(element, '💿'),
             "category": "tm",
+            # Kept so the shop can filter on them without going back to the database
+            # on every keystroke of a search.
+            "type": element,
+            "class": damage_class,
+            "power": power,
         }
 
-    return stock
+    return stock, prices
 
 
-TM_CATALOG = build_tm_stock()
+TM_CATALOG, TM_SHOP = build_tm_stock()
 
 # What the SHOP puts on its shelves, as opposed to what items exist. `!sell`, `!equip`
 # and `!backpack` all still read EQUIPMENT_CATALOG, because a TM is not a thing you can
@@ -1146,6 +1206,13 @@ STARTER_CAN_BE_SHINY = False
 # blocked; Great Balls are the first real upgrade and the first thing worth spending on.
 STARTER_TOKENS = 500
 STARTER_ITEMS = {'greatball': 5}
+
+# Six TMs in the starting kit, and not because they are expensive - they are the
+# cheapest tier there is. A new trainer does not know TMs EXIST. A shop listing does not
+# teach that; a Pokemon that already knows Protect and a `!tech` list with six entries
+# in it does. Each one demonstrates a different thing a move can do, so the first team
+# is built out of real decisions rather than out of whatever came up by level-up.
+STARTER_TMS = ('protect', 'rest', 'substitute', 'toxic', 'rock-slide', 'u-turn')
 
 BIOLOGICAL_TRAITS = {
     'weather_setters': {
