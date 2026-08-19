@@ -69,6 +69,29 @@ async def post_admin_action(bot, *, action, actor, target=None, colour=None, fie
     return await post(bot, embed)
 
 
+async def post_config_change(bot, *, guild, actor, label, before, after):
+    """
+    Record a server setting being changed.
+
+    Its own function rather than a call to `post_admin_action` because the actor here is
+    a server administrator rather than the bot owner, and conflating the two would make
+    the admin log unreadable for the question it exists to answer. The guild is named,
+    because unlike a trade or a grant this record is meaningless without it - "somebody
+    turned the market off" is not an answer.
+    """
+    embed = discord.Embed(
+        title="⚙️ Config · " + label,
+        colour=discord.Colour.dark_grey(),
+        timestamp=discord.utils.utcnow())
+    embed.add_field(name="Was", value=str(before)[:1000] or "—", inline=True)
+    embed.add_field(name="Now", value=str(after)[:1000] or "—", inline=True)
+    embed.add_field(name="Server",
+                    value=f"{getattr(guild, 'name', '?')} (`{getattr(guild, 'id', '?')}`)",
+                    inline=False)
+    embed.add_field(name="Changed by", value=_who(actor), inline=False)
+    return await post(bot, embed)
+
+
 def _who(user):
     """A user as both a name and an id, because only one of those is an identifier."""
     if user is None:
