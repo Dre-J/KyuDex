@@ -27,6 +27,10 @@ OWNER_COLUMN = {
     'users':              'user_id',
     'caught_pokemon':     'user_id',
     'user_party':         'user_id',
+    # The roster NAMES, which are a separate table from the roster contents so that an
+    # empty roster still exists. They are text a trainer chose and typed, so they leave
+    # with the trainer - the guard in test_account_lifecycle is what noticed this one.
+    'user_parties':       'user_id',
     'user_inventory':     'user_id',
     'user_tms':           'user_id',
     'user_alerts':        'user_id',

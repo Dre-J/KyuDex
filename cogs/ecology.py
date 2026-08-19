@@ -23,6 +23,7 @@ from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
+from utils.embeds import rebind_image
 # Every sprite path in this cog goes through utils.sprites now - the box browser, the
 # wild spawns, the expedition encounter, the admin spawn and the catch confirmation.
 # They were five hand-built copies of the same two lines, which is how none of them
@@ -98,9 +99,16 @@ async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=Non
                              f"**{catcher}**."
                              + (f"\n*Filed under* `{tag}`." if tag else ""))
         embed.colour = discord.Colour.dark_grey()
+
         # The sprite stays. The card is a record of what appeared, and stripping the
         # picture would make the channel history less readable rather than more.
-        await message.edit(embed=embed)
+        #
+        # It has to be rebound by NAME, though. This embed came back from `fetch_message`
+        # with its image url set to a signed CDN link, and editing re-issues the
+        # attachment under a new signature - so the picture fell out of the embed and
+        # reappeared as a bare file hanging underneath it.
+        keep = rebind_image(embed, message)
+        await message.edit(embed=embed, attachments=keep)
         return True
     except Exception as e:
         print(f"⚠️ Could not mark spawn as caught: {e}")
