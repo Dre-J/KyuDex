@@ -1051,6 +1051,46 @@ def roll_rarity(tiers=HABITAT_RARITY, roll=None):
     return 'wild'
 
 
+# ==========================================
+# 🏷️ TAGS A SPECIMEN EARNS BY EXISTING
+# ==========================================
+# `custom_tag` is a single TEXT column, compared with `=` by the box browser's
+# `tag:shiny` filter. So a specimen gets ONE tag, not a set - and a shiny alpha
+# legendary has to be filed under something.
+#
+# Ordered by what a trainer would go looking for. Shiny first because it is the one
+# people sort by and the one that is visible at a glance; alpha last because it is the
+# commonest of the five at 2% of captures.
+#
+# A tag the player chose is never overwritten. This fills an EMPTY slot, which is what
+# every freshly caught specimen has - `!settag` remains the last word.
+AUTO_TAGS = (
+    ('shiny',     'is_shiny'),
+    ('mythical',  'is_mythical'),
+    ('legendary', 'is_legendary'),
+    ('pseudo',    'is_pseudo'),
+    ('alpha',     'is_alpha'),
+)
+
+# The height multiplier at which `generate_biometrics` calls something an Alpha. Named
+# here so the tagger and the roll agree by construction: the roll produces 1.30-1.60 for
+# an Alpha and at most 1.20 for a Large, so anything at or above this is unambiguous.
+ALPHA_HEIGHT_THRESHOLD = 1.30
+
+
+def auto_tag(**flags):
+    """
+    The tag a freshly caught specimen earns, or None.
+
+    Takes the flags by keyword - `auto_tag(is_shiny=True, is_alpha=True)` - so a caller
+    that forgets one gets the default rather than a silently shifted positional.
+    """
+    for label, flag in AUTO_TAGS:
+        if flags.get(flag):
+            return label
+    return None
+
+
 def is_pseudo_legendary(pokedex_id):
     """Whether a dex id is one of them - for the capture broadcast and the box browser."""
     try:
@@ -2296,6 +2336,22 @@ DOUBLES_ONLY_ABILITIES = {
 # specimen currently IS rather than what it can do.
 BATTLE_BOND_ABILITIES = {'battle-bond'}
 BATTLE_BOND_FORM = 'greninja-ash'
+
+# ==========================================
+# 🚫 FORMS THAT ARE ALREADY A GIMMICK
+# ==========================================
+# Ash-Greninja is what Battle Bond pays out - a mid-battle transformation earned by
+# knocking something out. Letting it then Dynamax or Mega Evolve stacks two gimmicks on
+# one specimen, which no generation has ever allowed.
+#
+# Mega mattered less until base Greninja got a stone: `has_mega_stone` was a substring
+# test for 'ite' in the held item, so an Ash-Greninja holding a Greninjite would have
+# been offered the button.
+#
+# Matched on the FULL form name rather than the base species, because the base species
+# is a perfectly ordinary Greninja that may do either. `can_dynamax` splitting on the
+# first hyphen is exactly why this needed its own table.
+GIMMICK_LOCKED_FORMS = ('greninja-ash', 'greninja-battle-bond')
 BATTLE_BOND_SHURIKEN = 'water-shuriken'
 BATTLE_BOND_SHURIKEN_POWER = 20
 BATTLE_BOND_SHURIKEN_HITS = 3
