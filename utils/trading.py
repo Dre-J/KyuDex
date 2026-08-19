@@ -35,7 +35,19 @@ from utils.constants import TRADE_LOG_CHANNEL_ID
 # it - only actually playing does.
 STARTER_LOCK_CATCHES = 50
 
-TRADE_TYPES = ('gift', 'trade', 'gts', 'gts-swap', 'market')
+TRADE_TYPES = ('gift', 'trade', 'gts', 'gts-swap', 'market', 'tokens')
+
+
+def token_side(amount):
+    """
+    A sum of money, shaped so it can sit in a ledger built for specimens.
+
+    Currency was the one transfer with no record at all. The starter grant makes a fresh
+    account worth 500 tokens to whoever talks somebody out of them, and a guard against
+    that is a losing game - so this records the movement instead, which is the same
+    argument the specimen ledger already makes.
+    """
+    return [{'tokens': int(amount)}]
 
 # How long a trade record is kept. Twelve months, set by the operator rather than
 # guessed at here: the ledger exists to reconstruct incidents, and a duplication bug or
@@ -195,10 +207,20 @@ def describe_side(entries):
     """A logged side, as one line fit for a channel message."""
     if not entries:
         return "*nothing*"
-    return ", ".join(
-        f"{'✨ ' if e.get('shiny') else ''}{str(e.get('species', '?')).replace('-', ' ').title()}"
-        f" (Lv {e.get('level', '?')})"
-        for e in entries)
+
+    parts = []
+    for e in entries:
+        # A money entry has no species and no level, and printing it through the
+        # specimen formatter would read "? (Lv ?)" - which is exactly how a ledger
+        # stops being worth reading.
+        if 'tokens' in e:
+            parts.append(f"🪙 **{int(e['tokens']):,}** Eco Tokens")
+            continue
+        parts.append(
+            f"{'✨ ' if e.get('shiny') else ''}"
+            f"{str(e.get('species', '?')).replace('-', ' ').title()}"
+            f" (Lv {e.get('level', '?')})")
+    return ", ".join(parts)
 
 
 TRADE_HEADINGS = {
@@ -207,6 +229,7 @@ TRADE_HEADINGS = {
     'gts':      ('🌐 GTS Match', discord.Colour.purple()),
     'gts-swap': ('🌐 GTS Swap', discord.Colour.purple()),
     'market':   ('💰 Market Sale', discord.Colour.gold()),
+    'tokens':   ('🪙 Token Transfer', discord.Colour.dark_gold()),
 }
 
 

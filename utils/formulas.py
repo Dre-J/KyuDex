@@ -4005,6 +4005,28 @@ def spend_item(pokemon, item):
     mark_item_consumed(pokemon, item)
 
 
+def balloon_pops(defender, move, damage, magic_room=False):
+    """
+    Whether the hit the defender just took destroys its Air Balloon.
+
+    Any damaging move that CONNECTS pops it. Two exclusions matter and both fall out of
+    `damage > 0` rather than needing a rule of their own:
+
+    - a Ground move is answered further up and returns zero, so the balloon it just
+      bounced does not also burst on the way past
+    - anything else the defender is immune to deals no damage either, and a move that
+      never reached the specimen cannot have reached the balloon
+
+    Status moves are excluded explicitly, because a Toxic that lands deals no damage but
+    is not the kind of nothing the two rules above describe.
+    """
+    if defender is None or damage <= 0:
+        return False
+    if (move or {}).get('class') == 'status':
+        return False
+    return get_active_item(defender, magic_room) == 'air-balloon'
+
+
 def item_hit_reaction(defender, move, damage, type_multiplier=1.0, magic_room=False):
     """
     What the specimen's ITEM does about the hit it just took, or None.
@@ -7447,6 +7469,15 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         spend_item(defender, _policy)
         msg += (f" \U0001f4a5 {defender['name'].capitalize()}'s "
                 f"{_policy.replace('-', ' ').title()} kicked in!")
+
+    # The balloon bursts. Deliberately AFTER the policy above, so a specimen carrying
+    # both is not saved from one by the other, and after the damage is settled, so the
+    # hit that pops it still lands. From the next move onward `is_grounded` reads its
+    # empty hands and Ground moves reach it - which is the whole point of popping it
+    # rather than quietly leaving it there.
+    if balloon_pops(defender, move, damage, magic_room):
+        spend_item(defender, 'air-balloon')
+        msg += (f" \U0001f4a5 {defender['name'].capitalize()}'s Air Balloon popped!")
 
     # Throat Spray answers the ATTACKER's own sound move rather than being hit, so it is
     # not gated on damage at all - Disarming Voice and Growl both trigger it.

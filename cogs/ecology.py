@@ -13,7 +13,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
                              ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
                              RARITY_LABELS, rarity_filter, roll_rarity,
-                             pseudo_legendaries, is_pseudo_legendary)
+                             pseudo_legendaries, is_pseudo_legendary,
+                             MAX_ACTIVE_DIRECTIVES, MAX_NOTES_PER_ANALYSIS)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
@@ -605,45 +606,152 @@ class PokemonPaginator(discord.ui.View):
         else:
             await interaction.response.edit_message(embed=embed, attachments=[], view=self)
 
+def split_note_count(typed):
+    """
+    `notes 10` split into (10, 'notes'), and plain `notes` into (None, 'notes').
+
+    The count is read off the END rather than taken as its own argument, because
+    `!analyze` consumes the rest of the line - `*, target: str` - and a second parameter
+    would have made `!analyze field notes` stop working. Both spellings of the noun
+    survive, which is the point of parsing rather than re-declaring the signature.
+    """
+    parts = str(typed or '').split()
+    if len(parts) >= 2 and parts[-1].isdigit():
+        return int(parts[-1]), " ".join(parts[:-1])
+    return None, " ".join(parts)
+
+
+def analysis_embed(issued, *, wanted, held, room, open_after):
+    """
+    What a batch of analyses produced, and honestly why it produced fewer.
+
+    Running ten and being handed three with no explanation is the kind of silence that
+    reads as a bug. Whichever limit actually bit is named.
+    """
+    runs = len(issued)
+    embed = discord.Embed(
+        title="💻 Data Decryption Successful",
+        description=(f"You fed the raw data into the laboratory mainframe. "
+                     f"**{runs}** new ecological directive{'s' if runs != 1 else ''} "
+                     f"extracted:"),
+        color=discord.Color.teal())
+
+    lines = []
+    for entry in issued:
+        emoji, heading, _ = describe_directive(entry['objective_type'], entry['target'])
+        reward = (f"💰 {entry['reward_payload']} Eco Tokens"
+                  if entry['reward_type'] == 'eco_tokens'
+                  else f"📦 1x {entry['reward_payload'].replace('-', ' ').title()}")
+        lines.append(f"{emoji} `#{entry['directive_id']}` **{heading}** "
+                     f"×{entry['required']} — {reward}")
+
+    # 20 directives at ~90 characters each is comfortably inside the 1024-character
+    # field limit, but the limit is real and silent, so it is enforced rather than
+    # trusted to arithmetic that a future change could invalidate.
+    text = "\n".join(lines) or "*nothing*"
+    if len(text) > 1000:
+        text = text[:1000].rsplit("\n", 1)[0] + "\n…"
+    embed.add_field(name="Issued", value=text, inline=False)
+
+    if runs < wanted:
+        if held <= runs:
+            why = (f"You only had **{held}** Encrypted Field Note"
+                   f"{'s' if held != 1 else ''} to spend.")
+        else:
+            why = (f"Your notebook only had room for **{room}** more. "
+                   f"Finish some with `!claim`, or drop one with `!abandon <id>`.")
+        embed.add_field(name=f"Only {runs} of {wanted}", value=why, inline=False)
+
+    embed.set_footer(
+        text=f"{open_after}/{MAX_ACTIVE_DIRECTIVES} directives active · "
+             f"!survey to view them")
+    return embed
+
+
+# One place that turns a directive row into words, so the page, the menu option and the
+# analysis summary cannot describe the same task three different ways.
+DIRECTIVE_SHAPES = {
+    'cull_type': ("⚠️", "Invasive Species Management",
+                  "Defeat wild **{target}**-type specimens to restore equilibrium."),
+    'survey_species': ("🧬", "Genetic Population Survey",
+                       "Successfully capture and tag wild **{target}**."),
+    'trigger_mutation': ("📈", "Kinetic Maturation Study",
+                         "Trigger a biological evolution for a **{target}**."),
+}
+
+
+def describe_directive(obj_type, target):
+    """A directive as (emoji, heading, instruction), whatever kind it is."""
+    pretty = str(target).replace('-', ' ').title()
+    emoji, heading, instruction = DIRECTIVE_SHAPES.get(
+        obj_type, ("🔬", "Field Research", "Analyze **{target}**."))
+    return emoji, f"{heading}: {pretty}", instruction.format(target=pretty)
+
+
+class DirectiveSelect(discord.ui.Select):
+    """Jump straight to a directive instead of clicking Next eleven times."""
+
+    def __init__(self, paginator):
+        self.paginator = paginator
+        options = []
+        for index, row in enumerate(paginator.directives):
+            d_id, obj_type, target, req_amt, curr_prog = row[0], row[1], row[2], row[3], row[4]
+            emoji, heading, _ = describe_directive(obj_type, target)
+            options.append(discord.SelectOption(
+                # The ID is on the label because it is what `!abandon` and
+                # `!survey <id>` take, and a menu that hides it makes those two
+                # commands guesswork.
+                label=f"#{d_id} · {heading}"[:100],
+                value=str(index),
+                emoji=emoji,
+                description=f"{curr_prog}/{req_amt} complete"[:100]))
+        super().__init__(placeholder="Jump to a directive…", options=options, row=0)
+
+    async def callback(self, interaction):
+        if str(interaction.user.id) != self.paginator.user_id:
+            return await interaction.response.send_message(
+                "❌ This is not your field notebook!", ephemeral=True)
+        self.paginator.current_index = int(self.values[0])
+        self.paginator.update_button_states()
+        await interaction.response.edit_message(
+            embed=await self.paginator.generate_embed(), view=self.paginator)
+
+
 class SurveyPaginator(discord.ui.View):
-    def __init__(self, user_id, directives):
+    def __init__(self, user_id, directives, start_index=0):
         super().__init__(timeout=180) # Disables after 3 minutes
         self.user_id = user_id
         self.directives = directives
-        self.current_index = 0
+        self.current_index = max(0, min(start_index, len(directives) - 1))
         self.total_pages = len(directives)
+        # A select takes 25 options and the cap is 20, so this always fits - but a
+        # notebook filled before the cap existed can hold more, and Discord answers a
+        # 26-option select with a 400 the library does not raise. Trimmed rather than
+        # risked; the buttons still reach everything.
+        if directives and len(directives) <= 25:
+            self.add_item(DirectiveSelect(self))
         self.update_button_states()
 
     def update_button_states(self):
         # Disable Prev if on the first page, disable Next if on the last page
-        self.children[0].disabled = self.current_index == 0
-        self.children[1].disabled = self.current_index == self.total_pages - 1
+        self.prev_button.disabled = self.current_index == 0
+        self.next_button.disabled = self.current_index >= self.total_pages - 1
 
     async def generate_embed(self):
         # Grab the specific directive for the current page
         directive = self.directives[self.current_index]
         d_id, obj_type, target, req_amt, curr_prog, rev_type, rev_payload = directive
-        
+
         embed = discord.Embed(
             title="📋 Ecological Field Directives",
             description="Complete these assigned tasks to balance the ecosystem and earn research funding.",
             color=discord.Color.brand_green()
         )
-        
+
         # --- TRANSLATE THE DATABASE LOGIC INTO NARRATIVE ---
-        if obj_type == 'cull_type':
-            task_title = f"⚠️ Invasive Species Management: {target.capitalize()}-Type (ID: {d_id})"
-            desc = f"Defeat wild **{target.capitalize()}**-type specimens to restore equilibrium."
-        elif obj_type == 'survey_species':
-            task_title = f"🧬 Genetic Population Survey: {target.capitalize().replace('-', ' ')} (ID: {d_id})"
-            desc = f"Successfully capture and tag wild **{target.capitalize().replace('-', ' ')}**."
-        elif obj_type == 'trigger_mutation':
-            task_title = f"📈 Kinetic Maturation Study: {target.capitalize()} (ID: {d_id})"
-            desc = f"Trigger a biological evolution for a **{target.capitalize()}**."
-        else:
-            task_title = f"🔬 Field Research: {target.capitalize()} (ID: {d_id})"
-            desc = f"Analyze **{target.capitalize()}**."
-            
+        emoji, heading, desc = describe_directive(obj_type, target)
+        task_title = f"{emoji} {heading} (ID: {d_id})"
+
         # --- CALCULATE AND DRAW THE PROGRESS BAR ---
         safe_req = max(1, req_amt)
         progress_ratio = min(1.0, curr_prog / safe_req)
@@ -671,7 +779,8 @@ class SurveyPaginator(discord.ui.View):
         
         return embed
 
-    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.secondary, custom_id="prev_quest")
+    # Row 1, because the jump menu takes row 0 and a select fills a row on its own.
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.secondary, custom_id="prev_quest", row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != self.user_id:
             return await interaction.response.send_message("❌ This is not your field notebook!", ephemeral=True)
@@ -680,7 +789,7 @@ class SurveyPaginator(discord.ui.View):
         embed = await self.generate_embed()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.secondary, custom_id="next_quest")
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.secondary, custom_id="next_quest", row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != self.user_id:
             return await interaction.response.send_message("❌ This is not your field notebook!", ephemeral=True)
@@ -2185,31 +2294,47 @@ class Ecology(commands.Cog):
     @commands.command(name="survey", aliases=["quests", "directives", "tasks"])
     @checks.has_started()
     @checks.is_authorized()
-    async def field_survey(self, ctx):
-        """Displays your active ecological field directives and progress."""
+    async def field_survey(self, ctx, directive_id: int = None):
+        """Your active field directives. `!survey 14` opens that one directly."""
         user_id = str(ctx.author.id)
-        
+
         async with aiosqlite.connect(DB_FILE) as db:
-        
+
             try:
-                # Fetch all active directives
+                # Ordered, so the menu, the page numbers and `!analyze`'s summary all
+                # count the same way. Without it SQLite is free to change its mind.
                 async with db.execute("""
-                    SELECT directive_id, objective_type, target_variable, required_amount, 
+                    SELECT directive_id, objective_type, target_variable, required_amount,
                         current_progress, reward_type, reward_payload
                     FROM field_directives
                     WHERE user_id = ? AND is_completed = 0
+                    ORDER BY directive_id ASC
                 """, (user_id,)) as cursor:
                     directives = await cursor.fetchall()
-                
+
                 if not directives:
                     return await ctx.send("📋 **Field Notebook Empty:** You have no active ecological directives at this time. Explore the ecosystem to find encrypted data!")
-                    
+
+                # `!survey 14` names the SAME number `!abandon 14` takes. Deliberately
+                # not a page number: two numberings for one list is how somebody
+                # abandons the wrong directive.
+                start = 0
+                if directive_id is not None:
+                    ids = [row[0] for row in directives]
+                    if directive_id not in ids:
+                        listed = ", ".join(f"`{i}`" for i in ids[:20])
+                        return await ctx.send(
+                            f"⚠️ **Directive #{directive_id}** is not in your notebook. "
+                            f"You have: {listed}"
+                            + ("…" if len(ids) > 20 else ""))
+                    start = ids.index(directive_id)
+
                 # Launch the Paginator!
-                view = SurveyPaginator(user_id, directives)
+                view = SurveyPaginator(user_id, directives, start_index=start)
                 embed = await view.generate_embed()
-                
+
                 await ctx.send(embed=embed, view=view)
-                
+
             except Exception as e:
                 print(f"Survey UI Error: {e}")
                 await ctx.send("❌ Error accessing the laboratory database.")
@@ -2809,7 +2934,14 @@ class Ecology(commands.Cog):
                 for d_id, r_type, r_payload, obj_type in completed_tasks:
                     if r_type == 'eco_tokens':
                         amount = int(r_payload)
-                        cursor.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (amount, user_id))
+                        # `cursor` here was the SELECT's cursor, already closed by its
+                        # own `async with`, and the call was never awaited - so this
+                        # built a coroutine, threw it away, and marked the directive
+                        # claimed anyway. Every Eco Token grant a culling directive ever
+                        # paid out went nowhere, and the player could not claim it twice.
+                        await db.execute(
+                            "UPDATE users SET eco_tokens = eco_tokens + ? "
+                            "WHERE user_id = ?", (amount, user_id))
                         claim_log += f"💰 Received **{amount}** Eco Tokens for completing a {obj_type.replace('_', ' ').title()} directive.\n"
                         
                     elif r_type == 'item':
@@ -2839,92 +2971,134 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def analyze_notes(self, ctx, *, target: str):
-        """Procedurally generates ecological directives from encrypted field data."""
+        """Turns encrypted notes into directives. `!analyze notes 10` does ten at once."""
+        wanted, target = split_note_count(target)
+
         if target.lower() not in ["notes", "field notes", "encrypted-field-notes"]:
             return await ctx.send("⚠️ Please specify what you want to analyze (e.g., `!analyze notes`).")
-            
+
+        if wanted is None:
+            wanted = 1
+        if wanted < 1:
+            return await ctx.send("⚠️ Analyse at least one note.")
+        if wanted > MAX_NOTES_PER_ANALYSIS:
+            return await ctx.send(
+                f"⚠️ The mainframe processes at most **{MAX_NOTES_PER_ANALYSIS}** notes "
+                f"in one pass. Try `!analyze notes {MAX_NOTES_PER_ANALYSIS}`.")
+
         user_id = str(ctx.author.id)
-        
+
         async with aiosqlite.connect(DB_FILE) as db:
-        
+
             try:
                 # 1. Check Inventory
                 async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = 'encrypted-field-notes'", (user_id,)) as cursor:
                     inv_data = await cursor.fetchone()
-                
-                if not inv_data or inv_data[0] < 1:
+
+                held = inv_data[0] if inv_data else 0
+                if held < 1:
                     return await ctx.send("🎒 You do not have any `Encrypted Field Notes` to analyze!")
-                    
-                # 2. Deduct the item
-                await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = 'encrypted-field-notes'", (user_id,))
-                
-                # ==========================================
-                # 3. PROCEDURAL DIRECTIVE GENERATION
-                # ==========================================
-                objective_types = ['cull_type', 'survey_species', 'trigger_mutation']
-                chosen_obj = random.choice(objective_types)
-                
-                if chosen_obj == 'cull_type':
-                    elements = ['normal', 'fire', 'water', 'grass', 'electric', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy']
-                    target_var = random.choice(elements)
-                    req_amt = random.randint(5, 12)
-                    rev_type = 'eco_tokens'
-                    rev_payload = str(req_amt * 250) # Scale payout based on the random difficulty!
-                    narrative_title = f"Invasive {target_var.capitalize()}-Type Culling"
-                    
-                elif chosen_obj == 'survey_species':
-                    # A survey names ONE species and asks the player to go and tag it,
-                    # so the target has to be something the world can actually put in
-                    # front of them. Drawn from the same pool the spawner draws from -
-                    # the unfiltered roll this replaces handed out Mega Charizard X,
-                    # Gigantamax Snorlax and Totem Raticate, none of which will ever
-                    # appear in a habitat channel.
-                    rare_filter = (f"AND is_legendary = 0 AND is_mythical = 0 "
-                                   f"AND {pseudo_legendaries(negate=True)}"
-                                   if SURVEY_EXCLUDES_RARE_SPECIES else "")
-                    async with db.execute(f"""
-                        SELECT name FROM base_pokemon_species
-                        WHERE {spawnable_forms()}
-                        AND {ultra_beasts(negate=True)}
-                        {rare_filter}
-                        ORDER BY RANDOM() LIMIT 1
-                    """) as cursor:
-                        db_species = await cursor.fetchone()
-                    target_var = db_species[0] if db_species else 'pidgey'
-                    
-                    req_amt = random.randint(1, 3)
-                    rev_type = 'item'
-                    rev_payload = random.choice(['greatball', 'ultraball'])
-                    narrative_title = f"Genetic Population Survey: {target_var.capitalize().replace('-', ' ')}"
-                    
-                else: # trigger_mutation
-                    target_var = 'any'
-                    req_amt = 1
-                    rev_type = 'item'
-                    rev_payload = random.choice(['rare-candy', 'raw-keystone', 'wishing-fragment'])
-                    narrative_title = "Kinetic Maturation Study"
-                # ==========================================
-                
-                # 4. Inject the generated directive
-                await db.execute("""
-                    INSERT INTO field_directives (user_id, objective_type, target_variable, required_amount, reward_type, reward_payload)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (user_id, chosen_obj, target_var, req_amt, rev_type, rev_payload))
-                
+
+                # 2. How many can actually be run. A note is only spent for a directive
+                #    that is actually issued - the notebook filling up must not eat one.
+                async with db.execute(
+                        "SELECT COUNT(*) FROM field_directives "
+                        "WHERE user_id = ? AND is_completed = 0", (user_id,)) as cursor:
+                    open_now = (await cursor.fetchone())[0]
+
+                room = max(0, MAX_ACTIVE_DIRECTIVES - open_now)
+                if room == 0:
+                    return await ctx.send(
+                        f"📋 **Notebook Full:** you already have "
+                        f"**{open_now}/{MAX_ACTIVE_DIRECTIVES}** active directives. "
+                        f"Finish some with `!claim`, or drop one with `!abandon <id>`.")
+
+                runs = min(wanted, held, room)
+
+                issued = []
+                for _ in range(runs):
+                    issued.append(await self.issue_directive(db, user_id))
+
+                await db.execute(
+                    "UPDATE user_inventory SET quantity = quantity - ? "
+                    "WHERE user_id = ? AND item_name = 'encrypted-field-notes'",
+                    (runs, user_id))
                 await db.commit()
-                
-                embed = discord.Embed(
-                    title="💻 Data Decryption Successful",
-                    description=f"You fed the raw data into the laboratory mainframe. A new ecological directive has been extracted:\n\n**{narrative_title}**\n\nRun `!survey` to view your updated task parameters.",
-                    color=discord.Color.teal()
-                )
-                await ctx.send(embed=embed)
-                
+
+                return await ctx.send(embed=analysis_embed(
+                    issued, wanted=wanted, held=held, room=room,
+                    open_after=open_now + runs))
+
             except Exception as e:
                 if db.in_transaction:
                     await db.rollback()
                 print(f"Decryption error: {e}")
                 await ctx.send("❌ A critical error occurred in the laboratory mainframe.")
+
+    async def issue_directive(self, db, user_id):
+        """
+        Roll one directive, write it, and report what it was.
+
+        Pulled out of the command so `!analyze notes 10` runs the SAME generator ten
+        times rather than growing a second copy of it - which is exactly how the three
+        rarity ladders in this file drifted apart from each other.
+
+        Does not commit; the caller owns the transaction, so a batch that fails halfway
+        leaves neither the directives nor the spent notes behind.
+        """
+        chosen_obj = random.choice(['cull_type', 'survey_species', 'trigger_mutation'])
+
+        if chosen_obj == 'cull_type':
+            elements = ['normal', 'fire', 'water', 'grass', 'electric', 'ice',
+                        'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug',
+                        'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy']
+            target_var = random.choice(elements)
+            req_amt = random.randint(5, 12)
+            rev_type = 'eco_tokens'
+            rev_payload = str(req_amt * 250)  # Scale payout with the random difficulty
+
+        elif chosen_obj == 'survey_species':
+            # A survey names ONE species and asks the player to go and tag it, so the
+            # target has to be something the world can actually put in front of them.
+            # Drawn from the same pool the spawner draws from - the unfiltered roll this
+            # replaces handed out Mega Charizard X, Gigantamax Snorlax and Totem
+            # Raticate, none of which will ever appear in a habitat channel.
+            rare_filter = (f"AND is_legendary = 0 AND is_mythical = 0 "
+                           f"AND {pseudo_legendaries(negate=True)}"
+                           if SURVEY_EXCLUDES_RARE_SPECIES else "")
+            async with db.execute(f"""
+                SELECT name FROM base_pokemon_species
+                WHERE {spawnable_forms()}
+                AND {ultra_beasts(negate=True)}
+                {rare_filter}
+                ORDER BY RANDOM() LIMIT 1
+            """) as cursor:
+                db_species = await cursor.fetchone()
+            target_var = db_species[0] if db_species else 'pidgey'
+
+            req_amt = random.randint(1, 3)
+            rev_type = 'item'
+            rev_payload = random.choice(['greatball', 'ultraball'])
+
+        else:  # trigger_mutation
+            target_var = 'any'
+            req_amt = 1
+            rev_type = 'item'
+            rev_payload = random.choice(['rare-candy', 'raw-keystone', 'wishing-fragment'])
+
+        cursor = await db.execute("""
+            INSERT INTO field_directives
+                (user_id, objective_type, target_variable, required_amount,
+                 reward_type, reward_payload)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (user_id, chosen_obj, target_var, req_amt, rev_type, rev_payload))
+
+        # The id is handed back so the summary can print the number `!survey` and
+        # `!abandon` both take, rather than telling somebody to go and look it up.
+        return {'directive_id': cursor.lastrowid, 'objective_type': chosen_obj,
+                'target': target_var, 'required': req_amt,
+                'reward_type': rev_type, 'reward_payload': rev_payload}
+
 
     @commands.command(name="view", aliases=["inspect", "i", "I", "info"])
     @checks.has_started()
@@ -3680,8 +3854,18 @@ class Ecology(commands.Cog):
         # Ecosystem Health Bar
         health_bar = "🟩" * (score // 10) + "🟥" * (10 - (score // 10))
         
+        # The server's own clock, from `!config`. Worth showing rather than assuming:
+        # the planetary cycle above decides what is nocturnal, and an admin who set a
+        # timezone has no other way to check the bot agrees with them about what time
+        # it is. Falls back to UTC, which is what an unconfigured server follows.
+        settings = await cfg.get_all(guild_id)
+        zone = settings.get('timezone') or 'UTC'
+        now = cfg.guild_now(settings)
+
         embed.add_field(name="Current Biome", value=f"🌲 {biome.capitalize()}", inline=True)
         embed.add_field(name="Local Time", value=f"{time_icon} {time_desc}", inline=True)
+        embed.add_field(name="Server Clock",
+                        value=f"🕒 {now.strftime('%H:%M')} · `{zone}`", inline=True)
         embed.add_field(name="Active Hazards", value=f"⚠️ {pollution.replace('_', ' ').title()}" if pollution != 'none' else "✅ None", inline=False)
         embed.add_field(name=f"Ecosystem Health: {score}/100", value=health_bar, inline=False)
         

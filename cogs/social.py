@@ -4,7 +4,7 @@ from utils.constants import DB_FILE
 from utils.accounts import wipe_user
 from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
                            log_trade, snapshot)
-from utils import checks
+from utils import checks, trading
 import time
 import aiosqlite
 import re
@@ -165,9 +165,26 @@ class GiftTokensView(discord.ui.View):
                 await db.execute("UPDATE users SET eco_tokens = eco_tokens - ? WHERE user_id = ?", (self.amount, author_id))
                 # Add to Receiver
                 await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (self.amount, target_id))
-                
+
+                # Inside the transaction, like every other transfer: a gift that rolls
+                # back must not leave a record of money that never moved.
+                await trading.log_trade(
+                    db, trade_type='tokens', user_a=author_id, user_b=target_id,
+                    side_a=trading.token_side(self.amount), side_b=[],
+                    guild_id=getattr(getattr(interaction, 'guild', None), 'id', None),
+                    detail=f"{self.amount} Eco Tokens gifted")
+
                 await db.commit()
-                
+
+            # After the commit, and every failure swallowed - the money has moved, and
+            # a Discord outage must not turn that into an error the sender has to
+            # interpret. The authoritative record is the row above.
+            await trading.announce_trade(
+                interaction.client, trade_type='tokens',
+                user_a=self.author, user_b=self.target,
+                side_a=trading.token_side(self.amount), side_b=[],
+                detail="Direct gift")
+
             embed = discord.Embed(
                 title="💳 Funds Transferred!",
                 description=f"Successfully transferred **{self.amount:,} Eco-Tokens** to {self.target.mention}.",

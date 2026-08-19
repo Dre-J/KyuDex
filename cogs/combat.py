@@ -680,17 +680,21 @@ def parse_learn_request(request):
     would otherwise have its `10` read as a slot. Requiring one digit costs nothing - a
     specimen has four slots - and removes the only collision there is.
 
+    The SLOT is optional too. `!learn earthquake` means "teach my partner this, wherever
+    there is room" - which is what `!tm` always did, and is what somebody with an empty
+    slot means. A slot is only read where one is unambiguously present.
+
     An out-of-range slot is passed through rather than rejected here, so the command can
     give its own message about there being four slots.
     """
     tokens = (request or "").split()
-    if len(tokens) < 2:
+    if not tokens:
         return None
     if len(tokens) >= 3 and len(tokens[1]) == 1 and tokens[1].isdigit():
         return tokens[0], int(tokens[1]), " ".join(tokens[2:])
-    if tokens[0].isdigit():
+    if len(tokens) >= 2 and tokens[0].isdigit():
         return None, int(tokens[0]), " ".join(tokens[1:])
-    return None
+    return None, None, " ".join(tokens)
 
 
 async def locate_specimen(db, user_id, target, columns):
@@ -760,6 +764,72 @@ async def locate_specimen(db, user_id, target, columns):
         return None, (f"🔍 `{target}` matches {len(rows)} of your specimens. "
                       f"Give me more of the tag.")
     return rows[0], None
+
+
+async def teaching_route(db, user_id, species_name, pokedex_id, level, move):
+    """
+    How this specimen may learn this move, as (method, complaint).
+
+    `!learn` asked one question - is this move anywhere in the species movepool - and
+    taught it if the answer was yes. `species_movepool` holds every route a species has,
+    including `machine`, so every TM move in the game was free the moment the species
+    could learn it at all. The TM shelf in the market sold what `!learn` gave away.
+
+    The routes are read in the order the games read them:
+
+    - a move it has GROWN INTO is free
+    - otherwise, a move that comes off a MACHINE costs the machine
+    - otherwise the complaint names the actual obstacle, because "not physically
+      capable" is wrong three different ways: too young, tutor-only, and egg-only are
+      all things a player can do something about
+
+    A machine route is checked against the TM case but NOT spent here - this only
+    answers what is allowed, and the caller spends it inside its own transaction.
+    """
+    pretty = str(move).replace('-', ' ').title()
+    name = str(species_name).replace('-', ' ').capitalize()
+
+    async with db.execute("""
+        SELECT learn_method, MIN(level_learned)
+        FROM species_movepool
+        WHERE pokedex_id = ? AND move_name = ?
+        GROUP BY learn_method
+    """, (pokedex_id, move)) as cursor:
+        routes = {row[0]: (row[1] or 0) for row in await cursor.fetchall()}
+
+    if not routes:
+        return None, (f"❌ Biological mismatch: A **{name}** is not physically capable "
+                      f"of learning `{pretty}`.")
+
+    if 'level-up' in routes and level >= routes['level-up']:
+        return 'level-up', None
+
+    if 'machine' in routes:
+        async with db.execute(
+                "SELECT quantity FROM user_tms WHERE user_id = ? AND tm_name = ?",
+                (user_id, move)) as cursor:
+            held = await cursor.fetchone()
+        if held and held[0] > 0:
+            return 'machine', None
+        return None, (f"💿 `{pretty}` is a **TM move** for {name}, and you do not have "
+                      f"that TM. Buy it from the TM shelf in `!market`, then try again. "
+                      f"`!tech` lists what you already hold.")
+
+    # It DOES learn it by level-up, just not yet - and it has no machine route to skip
+    # the wait with.
+    if 'level-up' in routes:
+        return None, (f"📈 Your **{name}** needs to reach **Level "
+                      f"{routes['level-up']}** before it can master `{pretty}`.")
+
+    if 'tutor' in routes:
+        return None, (f"🧠 `{pretty}` is a tutor move. Use `!tutor <tag> {move}` — it "
+                      f"costs 500 Eco Tokens and a Memory Spore.")
+
+    if 'egg' in routes:
+        return None, (f"🥚 `{pretty}` is an egg move for {name}. It is inherited, not "
+                      f"taught.")
+
+    return None, (f"❌ Biological mismatch: A **{name}** cannot learn `{pretty}`.")
 
 
 def floats_on_arrival(pokemon, state, owner_str="", magic_room=False):
@@ -3310,7 +3380,8 @@ class MoveReplacementView(discord.ui.View):
         await interaction.response.edit_message(content="🛑 **Operation Aborted:** No resources were consumed and the specimen's genetics remain unaltered.", embed=None, view=None)
 
 class TeachMenu(discord.ui.View):
-    def __init__(self, cog, user_id, instance_id, poke_name, new_move, current_moves):
+    def __init__(self, cog, user_id, instance_id, poke_name, new_move, current_moves,
+                 consumes_tm=True):
         super().__init__(timeout=60)
         self.cog = cog
         self.user_id = user_id
@@ -3318,6 +3389,10 @@ class TeachMenu(discord.ui.View):
         self.poke_name = poke_name
         self.new_move = new_move
         self.current_moves = current_moves
+        # Whether a TM is actually being spent. `!tm` always is; `!learn` only when the
+        # move has no free route, and burning one for a move the specimen would have
+        # grown into anyway is a charge nobody agreed to.
+        self.consumes_tm = consumes_tm
         
         # Dynamically generate a button for each current move
         for i, move_name in enumerate(self.current_moves):
@@ -3347,8 +3422,9 @@ class TeachMenu(discord.ui.View):
         forgotten_move = custom_id.split('_')[2]
         
         async with aiosqlite.connect(DB_FILE) as db:
-            # 1. Consume the TM
-            await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (self.user_id, self.new_move))
+            # 1. Consume the TM, if one is what is paying for this
+            if self.consumes_tm:
+                await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (self.user_id, self.new_move))
 
             # 2. Overwrite the specific move slot
             col_name = f"move_{slot_num}"
@@ -7351,20 +7427,23 @@ class Combat(commands.Cog):
     @checks.is_not_in_combat()
     @checks.partner_not_deployed()
     async def learn_move(self, ctx, *, request: str = None):
-        """Teaches a move into a slot. `!learn 1 tackle` uses your selected partner."""
+        """Teaches a move. `!learn tackle` uses your selected partner and a free slot."""
         user_id = str(ctx.author.id)
 
-        USAGE = ("⚠️ Usage: `!learn <slot> <move>` for your selected partner, or "
-                 "`!learn <box number|tag> <slot> <move>` for any specimen.\n"
-                 "For example: `!learn 1 tackle`, or `!learn 4 1 tackle`.")
+        USAGE = ("⚠️ Usage: `!learn <move>` teaches your selected partner. Add a "
+                 "slot to choose what it forgets, or a box number or tag to name a "
+                 "different specimen.\n"
+                 "For example: `!learn earthquake`, `!learn 2 earthquake`, or "
+                 "`!learn 4 2 earthquake`.")
 
         parsed = parse_learn_request(request)
         if not parsed:
             return await ctx.send(USAGE)
         target, slot, move_name = parsed
 
-        # 1. Validate the Slot
-        if slot not in [1, 2, 3, 4]:
+        # 1. Validate the Slot. None is allowed now - it means "wherever there is room",
+        #    which is what `!tm` always did and what somebody with an empty slot means.
+        if slot is not None and slot not in [1, 2, 3, 4]:
             return await ctx.send("⚠️ Specimens can only retain 4 active behaviors at a time. Please specify a slot between 1 and 4.")
 
         formatted_move = move_name.lower().replace(" ", "-")
@@ -7383,46 +7462,72 @@ class Combat(commands.Cog):
 
                 db_tag_id, poke_id, level, poke_name, m1, m2, m3, m4 = pokemon_data
                 current_moves = [m1, m2, m3, m4]
+                known = [m for m in current_moves if m and m != 'none']
 
-                # 4. Check for Duplicates
+                # 3. Check for Duplicates
                 if formatted_move in current_moves:
                     return await ctx.send(f"⚠️ Your **{poke_name.capitalize()}** already has `{formatted_move.replace('-', ' ').title()}` equipped in its active behaviors!")
 
-                # 5. Check the Biological Compatibility (Movepool)
-                async with db.execute("""
-                    SELECT level_learned 
-                    FROM species_movepool 
-                    WHERE pokedex_id = ? AND move_name = ?
-                    ORDER BY level_learned ASC
-                """, (poke_id, formatted_move)) as cursor:
-                    movepool_data = await cursor.fetchone()
-                
-                if not movepool_data:
-                    return await ctx.send(f"❌ Biological mismatch: A **{poke_name.capitalize()}** is not physically capable of learning `{formatted_move.replace('-', ' ').title()}`.")
-                    
-                required_level = movepool_data[0]
-                
-                # 6. Check Maturity (Level)
-                if level < required_level:
-                    return await ctx.send(f"📈 Your **{poke_name.capitalize()}** needs to reach **Level {required_level}** before it can master `{formatted_move.replace('-', ' ').title()}`.")
+                # 4. HOW it may learn it, which used to be "is it in the movepool at
+                #    all" - and a TM move is in the movepool, so every one of them was
+                #    free. A machine route now costs the machine.
+                route, problem = await teaching_route(
+                    db, user_id, poke_name, poke_id, level, formatted_move)
+                if problem:
+                    return await ctx.send(problem)
 
-                # 7. Execute the Training (Update the specific slot)
+                # 5. No slot named and no room: ask which move to forget rather than
+                #    picking one. The TM is spent by the menu, on confirmation, so
+                #    backing out here costs nothing.
+                if slot is None and len(known) >= 4:
+                    note = ("\n\n*Your TM is only spent if you confirm.*"
+                            if route == 'machine' else "")
+                    embed = discord.Embed(
+                        title="⚠️ Neural Capacity Reached",
+                        description=f"**{poke_name.capitalize()}** already knows four "
+                                    f"moves. Which should it forget to learn "
+                                    f"`{formatted_move.replace('-', ' ').title()}`?"
+                                    + note,
+                        color=discord.Color.orange())
+                    view = TeachMenu(self, user_id, db_tag_id, poke_name,
+                                     formatted_move, known,
+                                     consumes_tm=(route == 'machine'))
+                    return await ctx.send(embed=embed, view=view)
+
+                if slot is None:
+                    # The first genuinely empty slot.
+                    slot = next(i + 1 for i, m in enumerate(current_moves)
+                                if not m or m == 'none')
+
+                # 6. Execute the Training (Update the specific slot)
                 column_to_update = f"move_{slot}"
-                
+
                 await db.execute(f"""
-                    UPDATE caught_pokemon 
-                    SET {column_to_update} = ? 
+                    UPDATE caught_pokemon
+                    SET {column_to_update} = ?
                     WHERE instance_id = ?
                 """, (formatted_move, db_tag_id))
-                
+
+                # The machine is consumed in the SAME transaction as the move it taught,
+                # so a failure cannot leave somebody holding the move and the TM, or
+                # neither.
+                if route == 'machine':
+                    await db.execute(
+                        "UPDATE user_tms SET quantity = quantity - 1 "
+                        "WHERE user_id = ? AND tm_name = ?", (user_id, formatted_move))
+
                 await db.commit()
-                
-                # 🚨 THE FIX: Build the embed BEFORE sending it!
+
                 replaced_move = current_moves[slot - 1]
                 replaced_text = f" It forgot `{replaced_move.replace('-', ' ').title()}` to make room." if replaced_move and replaced_move != 'none' else ""
-                
+
                 embed = discord.Embed(title="🧠 Behavioral Training Successful!", color=discord.Color.blue())
-                embed.description = f"**{ctx.author.name}** spent time training their **{poke_name.capitalize()}**.\n\nIt successfully mastered **{formatted_move.replace('-', ' ').title()}**!{replaced_text}"
+                embed.description = (f"**{ctx.author.name}** spent time training their "
+                                     f"**{poke_name.capitalize()}**.\n\nIt successfully "
+                                     f"mastered **{formatted_move.replace('-', ' ').title()}**!"
+                                     f"{replaced_text}")
+                if route == 'machine':
+                    embed.description += "\n\n💿 The TM was consumed."
                 embed.set_footer(text=f"Tag ID: {str(db_tag_id)[:8]} | Slot {slot} Updated")
 
                 await ctx.send(embed=embed)
@@ -9991,7 +10096,7 @@ class Combat(commands.Cog):
                 # ==========================================
                 async with db.execute("""
                     WITH Roster AS (
-                        SELECT cp.pokedex_id, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.instance_id,
+                        SELECT cp.pokedex_id, s.name, cp.level, cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.instance_id,
                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
                         FROM caught_pokemon cp
                         JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -9999,7 +10104,7 @@ class Combat(commands.Cog):
                         AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
                         AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
                     )
-                    SELECT pokedex_id, name, move_1, move_2, move_3, move_4, instance_id
+                    SELECT pokedex_id, name, level, move_1, move_2, move_3, move_4, instance_id
                     FROM Roster WHERE box_number = ?
                 """, (user_id, int(box_number))) as cursor:
                     specimen = await cursor.fetchone()
@@ -10007,45 +10112,40 @@ class Combat(commands.Cog):
                 if not specimen:
                     return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`. Are they currently deployed?")
 
-                p_id, p_name, m1, m2, m3, m4, exact_instance_id = specimen
+                p_id, p_name, p_level, m1, m2, m3, m4, exact_instance_id = specimen
                 current_moves = [m for m in [m1, m2, m3, m4] if m and m != 'none']
 
                 # ==========================================
-                # 2. VERIFY TM INVENTORY
-                # ==========================================
-                async with db.execute("SELECT quantity FROM user_tms WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name)) as cursor:
-                    tm_data = await cursor.fetchone()
-
-                if not tm_data or tm_data[0] <= 0:
-                    return await ctx.send(f"⚠️ You do not have the TM for `{clean_tm_name.replace('-', ' ').title()}` in your inventory!")
-
-                # ==========================================
-                # 3. VERIFY DUPLICATION
+                # 2. VERIFY DUPLICATION
                 # ==========================================
                 if clean_tm_name in current_moves:
                     return await ctx.send(f"⚠️ **{p_name.capitalize()}** already knows `{clean_tm_name.replace('-', ' ').title()}`!")
 
                 # ==========================================
-                # 4. VERIFY BIOLOGICAL COMPATIBILITY
+                # 3. THE SAME QUESTION `!learn` ASKS
                 # ==========================================
-                async with db.execute("SELECT 1 FROM species_movepool WHERE pokedex_id = ? AND move_name = ?", (p_id, clean_tm_name)) as cursor:
-                    is_compatible = await cursor.fetchone()
-
-                if not is_compatible:
-                    return await ctx.send(f"🧬 **{p_name.capitalize()}**'s biology is incompatible with `{clean_tm_name.replace('-', ' ').title()}`.")
+                # Ownership, compatibility and maturity were three checks here and a
+                # different three in `!learn`. One function answers all of it now, so
+                # the two front doors cannot disagree about what a move costs - and a
+                # move this specimen would have grown into anyway does not burn a TM.
+                route, problem = await teaching_route(
+                    db, user_id, p_name, p_id, p_level, clean_tm_name)
+                if problem:
+                    return await ctx.send(problem)
 
                 # ==========================================
-                # 5. EXECUTE THE GENETIC OVERWRITE
+                # 4. EXECUTE THE GENETIC OVERWRITE
                 # ==========================================
                 if len(current_moves) < 4:
                     empty_col = "move_1" if not m1 or m1 == 'none' else \
                                 "move_2" if not m2 or m2 == 'none' else \
                                 "move_3" if not m3 or m3 == 'none' else "move_4"
 
-                    await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name))
+                    if route == 'machine':
+                        await db.execute("UPDATE user_tms SET quantity = quantity - 1 WHERE user_id = ? AND tm_name = ?", (user_id, clean_tm_name))
                     await db.execute(f"UPDATE caught_pokemon SET {empty_col} = ? WHERE instance_id = ?", (clean_tm_name, exact_instance_id))
                     await db.commit()
-                    
+
                     return await ctx.send(f"💿 You booted up the TM!\n✨ **{p_name.capitalize()}** learned `{clean_tm_name.replace('-', ' ').title()}`!")
 
             # If they already have 4 moves, spawn the Overwrite UI!
@@ -10055,7 +10155,8 @@ class Combat(commands.Cog):
                 color=discord.Color.orange()
             )
             
-            view = TeachMenu(self, user_id, exact_instance_id, p_name, clean_tm_name, current_moves)
+            view = TeachMenu(self, user_id, exact_instance_id, p_name, clean_tm_name,
+                             current_moves, consumes_tm=(route == 'machine'))
             await ctx.send(embed=embed, view=view)
 
         except Exception as e:
