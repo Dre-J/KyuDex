@@ -1213,14 +1213,14 @@ class Economy(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def global_root(self, ctx):
-        """The Global Trade Station. See `!global market`."""
+        """The global marketplace. See `!global market`."""
         await ctx.send(embed=self.station_embed())
 
     @global_root.group(name="market", invoke_without_command=True)
     @checks.has_started()
     @checks.is_authorized()
     async def global_market(self, ctx):
-        """Base command for the Global Trade Station."""
+        """The cross-server auction house. `!global market sell|view|inspect|buy|cancel`."""
         await ctx.send(embed=self.station_embed())
 
     @global_market.command(name="sell")
@@ -1306,7 +1306,7 @@ class Economy(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def global_market_view(self, ctx):
-        """Browses all active listings on the Global Trade Station."""
+        """Browses all active listings on the global market."""
         try:
             async with aiosqlite.connect(DB_FILE) as db:
                 # 1. GARBAGE COLLECTION: Delete expired listings automatically!

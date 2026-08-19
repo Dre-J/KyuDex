@@ -1059,6 +1059,23 @@ def is_pseudo_legendary(pokedex_id):
         return False
 
 
+# ==========================================
+# 📋 HOW MANY DIRECTIVES A NOTEBOOK HOLDS
+# ==========================================
+# Directives were uncapped, and `!analyze notes` issued one per note with nothing
+# checking how many were already open. Somebody is sitting on twenty-two, which is more
+# than a Discord select menu can even offer and far more than anybody is going to work
+# through - a to-do list nobody can finish is one nobody reads.
+#
+# Twenty is the number because that is what fits: a select takes 25 options and the
+# survey menu spends none of them on anything else, so the cap and the interface agree
+# by construction rather than by somebody remembering.
+MAX_ACTIVE_DIRECTIVES = 20
+
+# How many notes one `!analyze notes 10` may consume. Bounded so a player holding forty
+# notes cannot spend them all on a single command and then find the cap ate most of it.
+MAX_NOTES_PER_ANALYSIS = 10
+
 # A field directive names ONE species and asks for 1-3 captures of it. That is a fair
 # ask for a Pidgey and an impossible one for a Mewtwo, which appears at roughly 1% of
 # spawns and then only sometimes. Rare specimens are worth hunting; they are not worth
