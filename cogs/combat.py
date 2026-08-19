@@ -660,6 +660,133 @@ def seed_on_arrival(pokemon, state, owner_str="", magic_room=False):
     return log + resolve_stat_stages([(pokemon, stat, stages, None)])
 
 
+# The words a trainer uses for "the one I have already chosen". `!partner` is aliased to
+# `!select`, so both nouns are in circulation and both have to work here.
+PARTNER_WORDS = ('partner', 'lead', 'active', 'latest', 'selected', 'select', 'current',
+                 'mine', 'me')
+
+
+def parse_learn_request(request):
+    """
+    `!learn [target] <slot> <move>` split into its three parts, or None.
+
+    The target is optional, which is the whole point: a trainer with a selected partner
+    should be able to say `!learn 1 tackle` rather than naming the specimen they already
+    named. That makes the first word ambiguous - `!learn 3 1 tackle` and
+    `!learn 1 tackle` both open with a number - so the SECOND word decides.
+
+    A slot is a SINGLE digit, deliberately. `10-000-000-volt-thunderbolt` is the one move
+    in the database whose name starts with a number, and a player typing it with spaces
+    would otherwise have its `10` read as a slot. Requiring one digit costs nothing - a
+    specimen has four slots - and removes the only collision there is.
+
+    An out-of-range slot is passed through rather than rejected here, so the command can
+    give its own message about there being four slots.
+    """
+    tokens = (request or "").split()
+    if len(tokens) < 2:
+        return None
+    if len(tokens) >= 3 and len(tokens[1]) == 1 and tokens[1].isdigit():
+        return tokens[0], int(tokens[1]), " ".join(tokens[2:])
+    if tokens[0].isdigit():
+        return None, int(tokens[0]), " ".join(tokens[1:])
+    return None
+
+
+async def locate_specimen(db, user_id, target, columns):
+    """
+    One of a trainer's specimens, from a box number, a tag prefix, or nothing at all.
+
+    `target` of None means "the one they have selected", which is what `!partner` sets.
+    Returns (row, error) - the error is already written for a player to read.
+
+    Box numbering matches every other command in the codebase: deployed specimens and
+    anything sitting on the GTS are excluded, because those are the rows the numbers a
+    player reads in `!party view` are counted over.
+    """
+    if target is not None and target.lower() in PARTNER_WORDS:
+        target = None
+
+    if target is None:
+        async with db.execute("SELECT active_partner FROM users WHERE user_id = ?",
+                              (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row or not row[0]:
+            return None, ("🎯 You have not selected a partner yet. Choose one with "
+                          "`!partner <box number>`, or name the specimen directly: "
+                          "`!learn <box number> <slot> <move>`.")
+        async with db.execute(
+                f"SELECT {columns} FROM caught_pokemon cp "
+                f"JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id "
+                f"WHERE cp.instance_id = ? AND cp.user_id = ?",
+                (row[0], user_id)) as cursor:
+            found = await cursor.fetchone()
+        if not found:
+            return None, ("⚠️ Your selected partner is no longer in your roster. "
+                          "Pick another with `!partner <box number>`.")
+        return found, None
+
+    if target.isdigit() and len(target) <= 6:
+        async with db.execute(f"""
+            WITH Roster AS (
+                SELECT {columns}, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                FROM caught_pokemon cp
+                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                WHERE cp.user_id = ?
+                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+            )
+            SELECT * FROM Roster WHERE box_number = ?
+        """, (user_id, int(target))) as cursor:
+            found = await cursor.fetchone()
+        if not found:
+            return None, f"❌ You have nothing in box **{int(target)}**."
+        return found[:-1], None      # drop the box_number the CTE carried along
+
+    # A tag, or the first few characters of one. Ambiguity is refused rather than
+    # guessed at - six characters of a UUID collide sooner than people expect, and
+    # teaching a move to the wrong specimen is not a mistake anybody would trace.
+    async with db.execute(
+            f"SELECT {columns} FROM caught_pokemon cp "
+            f"JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id "
+            f"WHERE cp.user_id = ? AND cp.instance_id LIKE ? LIMIT 5",
+            (user_id, f"{target}%")) as cursor:
+        rows = await cursor.fetchall()
+
+    if not rows:
+        return None, (f"❌ Nothing in your roster matches `{target}`. Use a box number, "
+                      f"a tag, or `partner` for your selected specimen.")
+    if len(rows) > 1:
+        return None, (f"🔍 `{target}` matches {len(rows)} of your specimens. "
+                      f"Give me more of the tag.")
+    return rows[0], None
+
+
+def floats_on_arrival(pokemon, state, owner_str="", magic_room=False):
+    """
+    Announce the Air Balloon, once, for a specimen that has just arrived.
+
+    Every other reason a specimen is off the ground says so out loud the moment it
+    matters - a Flying type is read off its own type line, Levitate is announced by the
+    ability, Magnet Rise says it as it goes up. The balloon said nothing at all until an
+    opponent wasted a Ground move on it, which is the one thing the item exists to stop
+    the opponent doing.
+
+    Asked the same way the damage branch asks it: the balloon is only announced when it
+    is actually holding the specimen up. Under Gravity it is not, and claiming otherwise
+    would be a message contradicted by the very next Earthquake.
+    """
+    if pokemon is None or pokemon.get('current_hp', 0) <= 0:
+        return ""
+    if get_active_item(pokemon, magic_room) != 'air-balloon':
+        return ""
+    if is_grounded(pokemon, (state or {}).get('field', {}).get('gravity', 0) > 0):
+        return ""
+
+    return (f"🎈 **{owner_str.strip()} {pokemon['name'].capitalize()}** floats in the "
+            f"air with its Air Balloon!\n")
+
+
 def seed_the_field(state, *combatants):
     """Every specimen currently standing in a freshly laid terrain gets its seed."""
     log = ""
@@ -2231,6 +2358,7 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
     # would have made an Electric Seed silently depend on its holder not also having
     # Intimidate, which is the kind of coupling nobody would ever think to test for.
     combat_log += seed_on_arrival(entering_combatant, state, owner_str)
+    combat_log += floats_on_arrival(entering_combatant, state, owner_str)
 
     # ==========================================
     # 2. ATMOSPHERIC SUPPRESSION
@@ -7222,56 +7350,37 @@ class Combat(commands.Cog):
     @checks.is_authorized()
     @checks.is_not_in_combat()
     @checks.partner_not_deployed()
-    async def learn_move(self, ctx, target: str, slot: int, *, move_name: str):
+    async def learn_move(self, ctx, *, request: str = None):
+        """Teaches a move into a slot. `!learn 1 tackle` uses your selected partner."""
         user_id = str(ctx.author.id)
-        
+
+        USAGE = ("⚠️ Usage: `!learn <slot> <move>` for your selected partner, or "
+                 "`!learn <box number|tag> <slot> <move>` for any specimen.\n"
+                 "For example: `!learn 1 tackle`, or `!learn 4 1 tackle`.")
+
+        parsed = parse_learn_request(request)
+        if not parsed:
+            return await ctx.send(USAGE)
+        target, slot, move_name = parsed
+
         # 1. Validate the Slot
         if slot not in [1, 2, 3, 4]:
             return await ctx.send("⚠️ Specimens can only retain 4 active behaviors at a time. Please specify a slot between 1 and 4.")
-            
+
         formatted_move = move_name.lower().replace(" ", "-")
-        
-        try: 
+
+        try:
             async with aiosqlite.connect(DB_FILE) as db:
-                # 2. Determine the Target Specimen (Partner, Box Number, or UUID)
-                if target.lower() in ["partner", "lead", "active", "latest"]:
-                    async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                        partner_data = await cursor.fetchone()
-                    if not partner_data or not partner_data[0]:
-                        return await ctx.send("You don't have an Active Partner equipped! Specify a Box Number or Tag ID instead.")
-                        
-                    async with db.execute("""
-                        SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                            cp.move_1, cp.move_2, cp.move_3, cp.move_4
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.instance_id = ? AND cp.user_id = ?
-                    """, (partner_data[0], user_id)) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                    
-                elif target.isdigit() and len(target) <= 6:
-                    # It's a Box Number! Use the CTE to find it.
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                                cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp
-                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        )
-                        SELECT instance_id, pokedex_id, level, name, move_1, move_2, move_3, move_4
-                        FROM Roster WHERE box_number = ?
-                    """, (user_id, int(target))) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                else:
-                    return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!learn 4 1 tackle`) or `partner`.")
-                
-                if not pokemon_data:
-                    return await ctx.send("❌ Could not locate that specimen. Check your Box Number.")
-                    
+                # 2. Determine the Target Specimen. `target` of None means the one they
+                #    already selected with `!partner`, which is the common case and used
+                #    to be the one spelling this command would not accept.
+                pokemon_data, problem = await locate_specimen(
+                    db, user_id, target,
+                    "cp.instance_id, cp.pokedex_id, cp.level, s.name, "
+                    "cp.move_1, cp.move_2, cp.move_3, cp.move_4")
+                if problem:
+                    return await ctx.send(problem)
+
                 db_tag_id, poke_id, level, poke_name, m1, m2, m3, m4 = pokemon_data
                 current_moves = [m1, m2, m3, m4]
 

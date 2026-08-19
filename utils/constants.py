@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import discord
 # ==========================================
 # THE BOTANICAL DATABASE (Consumables)
@@ -943,6 +944,119 @@ def spawnable_forms(alias=None):
     prefix = f"{alias}." if alias else ""
     joined = ", ".join(f"'{form}'" for form in SPAWNABLE_FORM_TYPES)
     return f"{prefix}form_type IN ({joined})"
+
+
+# ==========================================
+# 🔷 THE PSEUDO-LEGENDARIES
+# ==========================================
+# The ten 600-BST three-stage finals, plus Hisuian Goodra, which is one of them wearing a
+# different coat. They are the strongest things in the game that are not legendary, and
+# until now the world treated them as ordinary wildlife: a Garchomp was drawn from the
+# same 95% pool as a Rattata, so in a ground-typed biome it appeared roughly as often.
+#
+# Only the FINAL stages are listed. "Pseudo-legendary" names those Pokemon specifically,
+# and gating the babies would have made Gible unfindable - the interesting part of the
+# family is that you can raise one, which needs it to be catchable.
+#
+# The megas and Kommo-o's totem form are deliberately absent: they carry their own
+# pokedex ids, cannot be encountered in the wild at all, and are already excluded by
+# `spawnable_forms`. Listing them here would only invite somebody to drop that filter.
+PSEUDO_LEGENDARY_IDS = (
+    149,    # dragonite
+    248,    # tyranitar
+    373,    # salamence
+    376,    # metagross
+    445,    # garchomp
+    635,    # hydreigon
+    706,    # goodra
+    784,    # kommo-o
+    887,    # dragapult
+    998,    # baxcalibur
+    10242,  # goodra-hisui
+)
+
+
+def pseudo_legendaries(alias=None, negate=False):
+    """The SQL fragment selecting - or excluding - the pseudo-legendaries."""
+    prefix = f"{alias}." if alias else ""
+    joined = ", ".join(str(dex) for dex in PSEUDO_LEGENDARY_IDS)
+    return f"{prefix}pokedex_id {'NOT ' if negate else ''}IN ({joined})"
+
+
+# ==========================================
+# 🎲 THE RARITY ROLL
+# ==========================================
+# Three copies of the same if/elif ladder decided what tier a spawn belonged to, and they
+# had already drifted - the expedition's legendary branch forgot `is_mythical = 0`, so a
+# mythical could be drawn twice over. One table, one roll, one filter builder.
+#
+# Each number is that tier's OWN share of spawns, not a cumulative cutoff. The ladder it
+# replaces was written cumulatively, which is why nobody could say at a glance what the
+# legendary rate actually was - it was the difference between two numbers on two lines.
+# Anything not claimed by a tier is ordinary wildlife.
+#
+# The two rare tiers are deliberately severe: a mythical is one spawn in a hundred
+# thousand and a legendary one in a thousand, so seeing either is a server event rather
+# than a Tuesday. They were 1% and 4%, which over a busy week put several Mewtwo in the
+# habitat channel.
+#
+# The pseudo tier looks enormous beside them and per SPECIES it is not so far off:
+# seventy-seven legendaries share their tier and eleven pseudo-legendaries share theirs.
+# It is the one number here meant to be tuned by watching what appears - a pseudo is
+# supposed to be a good day, not a ceremony.
+RARITY_LABELS = {
+    'mythical':  "✨ MYTHICAL",
+    'legendary': "⭐ LEGENDARY",
+    'pseudo':    "🔷 PSEUDO-LEGENDARY",
+    'wild':      "Wild",
+}
+
+HABITAT_RARITY = (('mythical', 0.00001), ('legendary', 0.001), ('pseudo', 0.02))
+EXPEDITION_RARITY = (('mythical', 0.00001), ('legendary', 0.001), ('pseudo', 0.03))
+
+
+def rarity_filter(tier, alias='s'):
+    """
+    The WHERE fragment that selects exactly one rarity tier.
+
+    Every tier excludes the others, including the ordinary one. That last part is the
+    half that makes the tier mean anything: a pseudo-legendary that is still reachable
+    through the 93% wild draw has not been made rare, it has been given a second door.
+    """
+    prefix = f"{alias}." if alias else ""
+    if tier == 'mythical':
+        return f"AND {prefix}is_mythical = 1"
+    if tier == 'legendary':
+        return f"AND {prefix}is_legendary = 1 AND {prefix}is_mythical = 0"
+    if tier == 'pseudo':
+        return f"AND {pseudo_legendaries(alias)}"
+    return (f"AND {prefix}is_legendary = 0 AND {prefix}is_mythical = 0 "
+            f"AND {pseudo_legendaries(alias, negate=True)}")
+
+
+def roll_rarity(tiers=HABITAT_RARITY, roll=None):
+    """
+    Which tier this spawn belongs to. `roll` is injectable so a test can pin it.
+
+    The shares are accumulated HERE rather than written out cumulatively in the table,
+    so changing one tier's rate cannot silently move another's.
+    """
+    if roll is None:
+        roll = random.random()
+    ceiling = 0.0
+    for tier, share in tiers:
+        ceiling += share
+        if roll < ceiling:
+            return tier
+    return 'wild'
+
+
+def is_pseudo_legendary(pokedex_id):
+    """Whether a dex id is one of them - for the capture broadcast and the box browser."""
+    try:
+        return int(pokedex_id) in PSEUDO_LEGENDARY_IDS
+    except (TypeError, ValueError):
+        return False
 
 
 # A field directive names ONE species and asks for 1-3 captures of it. That is a fair

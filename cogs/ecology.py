@@ -11,13 +11,16 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_CAN_BE_SHINY,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
-                             ultra_beasts)
+                             ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
+                             RARITY_LABELS, rarity_filter, roll_rarity,
+                             pseudo_legendaries, is_pseudo_legendary)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
+from utils import guild_config as cfg
 # Every sprite path in this cog goes through utils.sprites now - the box browser, the
 # wild spawns, the expedition encounter, the admin spawn and the catch confirmation.
 # They were five hand-built copies of the same two lines, which is how none of them
@@ -29,6 +32,35 @@ from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 active_spawns = {}
 MESSAGES_REQUIRED_FOR_SPAWN = 10
 user_active_spawns = {} # Tracks private expedition encounters (Key: user_id)
+
+
+# The tiers a server would want pulling out of a conversation for. A Wild Rattata is
+# not one of them, and pinging a role for every spawn is the fastest way to be removed
+# from a server - see suggestions.md, which is where this whole config layer came from.
+NOTABLE_TIERS = ('MYTHICAL', 'LEGENDARY', 'PSEUDO', 'ULTRA BEAST')
+
+
+def rare_spawn_alert(settings, rarity_name, is_shiny):
+    """
+    The role mention to put above a spawn card, or an empty string.
+
+    Empty is the default and the failure mode: no role configured, the toggle off, or an
+    ordinary specimen all produce nothing. Nothing here can ping @everyone, and the
+    caller sets `allowed_mentions` regardless, so the silence is enforced twice.
+    """
+    settings = settings or {}
+    role = settings.get('ping_role')
+    if not role or not settings.get('ping_rare'):
+        return ""
+    notable = is_shiny or any(tier in str(rarity_name).upper() for tier in NOTABLE_TIERS)
+    return f"<@&{role}> " if notable else ""
+
+
+def event_alert(settings):
+    """The role mention for a rift or a disaster, or an empty string."""
+    settings = settings or {}
+    role = settings.get('ping_role')
+    return f"<@&{role}> " if role and settings.get('ping_events') else ""
 
 
 def spawn_is_here(spawn_data, channel_id):
@@ -775,9 +807,19 @@ class Ecology(commands.Cog):
         self.habitat_activity = {}
         self.xp_cooldowns = {}
     
-    async def spawn_timer(self, message: discord.Message, spawn_id: str, pokemon_name: str, guild_id: str = None, user_id: str = None, timeout: int = 300):
-        """Background task that waits `timeout` seconds, then despawns the specimen."""
-        # 1. Wait for 5 minutes (300 seconds) in the background
+    async def spawn_timer(self, message: discord.Message, spawn_id: str, pokemon_name: str, guild_id: str = None, user_id: str = None, timeout: int = None,
+                          config_guild: str = None):
+        """Background task that waits, then despawns the specimen.
+
+        `config_guild` is separate from `guild_id` on purpose. `guild_id` decides
+        WHICH store the spawn lives in - setting it on an expedition encounter
+        would send the despawn looking in the public one - but an expedition still
+        happens in a server whose settings apply.
+        """
+        settings = await cfg.get_all(config_guild or guild_id) if (config_guild or guild_id) else {}
+        if timeout is None:
+            timeout = settings.get('despawn_seconds') or 300
+
         await asyncio.sleep(timeout)
 
         expired = False
@@ -794,9 +836,14 @@ class Ecology(commands.Cog):
                 active_spawns[guild_id].pop(spawn_id, None)
                 expired = True
 
-        # 3. If it expired naturally, edit the Discord message!
+        # 3. If it expired naturally, edit the Discord message - or remove it, if
+        #    the server would rather its habitat channel did not fill with cards
+        #    for specimens that are no longer there.
         if expired:
             try:
+                if settings.get('auto_delete_spawns'):
+                    return await message.delete()
+
                 # Fetch the original embed from the message
                 embed = message.embeds[0]
                 
@@ -819,7 +866,12 @@ class Ecology(commands.Cog):
     # --- The Spawning Logic Extracted into a Helper Function ---
     async def trigger_activity_spawn(self, guild):
         guild_id = str(guild.id)
-        
+
+        # Read once, at the top. Every one of these is a cached dictionary lookup after
+        # the first spawn, and reading them together means the card, the ping and the
+        # despawn all describe the same configuration rather than three snapshots of it.
+        settings = await cfg.get_all(guild_id)
+
         async with aiosqlite.connect(DB_FILE) as db:
 
             # Check if a habitat channel is actually set up
@@ -856,7 +908,18 @@ class Ecology(commands.Cog):
                 await db.execute("UPDATE servers SET ecosystem_score = ?, pollution_type = ? WHERE guild_id = ?", (new_score, disaster_type, guild_id))
                 await db.commit()
 
-                await channel.send(f"{disasters[disaster_type]['msg']}\n*Biodiversity is dropping rapidly. Use `!intervene` or a `Purifier` to stabilize the area!*")
+                # A rift is an announcement, not a spawn, and the two want different
+                # rooms - a habitat channel people watch for specimens should not be
+                # where server-wide events land. Falls back to the habitat channel, so
+                # a server that has set nothing behaves exactly as it did before.
+                stage = self.bot.get_channel(settings.get('announce_channel') or 0) or channel
+                alert = event_alert(settings)
+                await stage.send(
+                    f"{alert}{disasters[disaster_type]['msg']}\n"
+                    f"*Biodiversity is dropping rapidly. Use `!intervene` or a "
+                    f"`Purifier` to stabilize the area!*",
+                    allowed_mentions=discord.AllowedMentions(
+                        roles=bool(alert), users=False, everyone=False))
                 return # Skip spawning to simulate wildlife fleeing the disaster!
 
             # --- INVASIVE RIFT OVERRIDE ---
@@ -880,22 +943,33 @@ class Ecology(commands.Cog):
                 else:
                     habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
 
-                # Rarity Roll
-                roll = random.random()
-                if roll < 0.01: rarity_filter, rarity_name = "AND s.is_mythical = 1", "✨ MYTHICAL"
-                elif roll < 0.05: rarity_filter, rarity_name = "AND s.is_legendary = 1 AND s.is_mythical = 0", "⭐ LEGENDARY"
-                else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
+                # Rarity Roll. One shared table, so this, `!spawn` and the
+                # expedition cannot drift apart again - and so the pseudo-legendaries
+                # leave the ordinary pool by the same edit that gives them a tier.
+                tier = roll_rarity(HABITAT_RARITY)
+                rarity_name = RARITY_LABELS[tier]
 
-                query = f"""
-                    SELECT s.pokedex_id, s.name, s.capture_rate, s.gender_rate
-                    FROM base_pokemon_species s
-                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                    WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                    AND {ultra_beasts('s', negate=True)} AND {spawnable_forms('s')}
-                    {rarity_filter} ORDER BY RANDOM() LIMIT 1;
-                """
-                async with db.execute(query, allowed_types) as cursor:
+                def rarity_query(chosen):
+                    return f"""
+                        SELECT s.pokedex_id, s.name, s.capture_rate, s.gender_rate
+                        FROM base_pokemon_species s
+                        JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                        WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
+                        AND {ultra_beasts('s', negate=True)} AND {spawnable_forms('s')}
+                        {rarity_filter(chosen, 's')} ORDER BY RANDOM() LIMIT 1;
+                    """
+
+                async with db.execute(rarity_query(tier), allowed_types) as cursor:
                     spawned_data = await cursor.fetchone()
+
+                # A rare tier can come up empty: a degraded biome allows three types and
+                # there may be no mythical among them. That abandoned the spawn outright
+                # - the habitat simply went quiet, as often as the rare tiers came up,
+                # and nothing said why. Fall back to ordinary wildlife instead.
+                if not spawned_data and tier != 'wild':
+                    tier, rarity_name = 'wild', RARITY_LABELS['wild']
+                    async with db.execute(rarity_query('wild'), allowed_types) as cursor:
+                        spawned_data = await cursor.fetchone()
 
         if not spawned_data:
             return
@@ -923,9 +997,11 @@ class Ecology(commands.Cog):
             'is_shiny': is_shiny, 'gender': gender, 'channel_id': channel.id
         }
 
-    # 1. Generate the Mutation Status
-        is_shiny = random.randint(1, 4096) == 1 
-        shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
+        # The mutation was rolled ABOVE, and rolling it again here is what this
+        # used to do: the stored value went to whoever caught it and this second,
+        # independent roll decided what the card SAID. One spawn in four thousand
+        # announced a shiny that was not one, and another was quietly shiny with
+        # nothing to say so.
 
         # ==========================================
         # 4. LOCAL ASSET LOADING
@@ -967,17 +1043,30 @@ class Ecology(commands.Cog):
             color=embed_color
         )
 
-        # Mount the local image to the embed
+        # A full-width image is a lot of screen for a channel that also has people
+        # talking in it, so a server can ask for the small version instead.
         if sprite_file:
-            embed.set_image(url=f"attachment://{safe_filename}")
-            
+            if settings.get('compact_spawns'):
+                embed.set_thumbnail(url=f"attachment://{safe_filename}")
+            else:
+                embed.set_image(url=f"attachment://{safe_filename}")
+
         embed.set_footer(text="Automated Field Camera Trap")
-        # Send the message, passing BOTH the embed and the file object!
+
+        # The alert role, and only for something worth being pulled away from a
+        # conversation for. `allowed_mentions` is set explicitly either way, so a
+        # server that has not asked for pings cannot be pinged by accident.
+        alert = rare_spawn_alert(settings, rarity_name, is_shiny)
+        mentions = discord.AllowedMentions(roles=bool(alert), users=False,
+                                          everyone=False)
+
         if sprite_file:
-            msg = await channel.send(embed=embed, file=sprite_file)
+            msg = await channel.send(content=alert, embed=embed, file=sprite_file,
+                                     allowed_mentions=mentions)
         else:
-            msg = await channel.send(embed=embed)
-        
+            msg = await channel.send(content=alert, embed=embed,
+                                     allowed_mentions=mentions)
+
         asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=name, guild_id=guild_id))
 
     async def execute_biome_shift(self, ctx, target_biome, title, description):
@@ -1051,9 +1140,13 @@ class Ecology(commands.Cog):
             self.habitat_activity[guild_id] = 0
         
         self.habitat_activity[guild_id] += 1
-        
-        # 4. If the threshold is reached, trigger the spawn sequence!
-        if self.habitat_activity[guild_id] >= MESSAGES_REQUIRED_FOR_SPAWN:
+
+        # 4. If the threshold is reached, trigger the spawn sequence. How much
+        #    conversation that takes is the server's own business - twenty people
+        #    and two thousand people need very different numbers, and the cached
+        #    read costs nothing after the first message.
+        threshold = await cfg.get(guild_id, 'spawn_rate') or MESSAGES_REQUIRED_FOR_SPAWN
+        if self.habitat_activity[guild_id] >= threshold:
             self.habitat_activity[guild_id] = 0 # Reset the counter immediately
 
             print(f"🌿 DEBUG: Spawn threshold reached in {message.guild.name}! Triggering spawn...")
@@ -1135,30 +1228,33 @@ class Ecology(commands.Cog):
                 # 4. Generate the Biome-Specific Encounter (With Rarity Filter)
                 type_tuple = biome_data[biome]['types']
                 
-                # Default to standard wildlife
-                rarity_filter = "AND s.is_legendary = 0 AND s.is_mythical = 0"
-                
-                # Roll the ecological dice!
-                rarity_roll = random.random()
-                if rarity_roll <= 0.005: 
-                    # 0.5% chance for a Mythical anomaly
-                    rarity_filter = "AND s.is_mythical = 1"
-                elif rarity_roll <= 0.015: 
-                    # 1% chance for a Legendary predator (up to 0.015 total)
-                    rarity_filter = "AND s.is_legendary = 1"
+                # Roll the ecological dice. An expedition is a deliberate trip
+                # rather than an accident of conversation, so its rare tiers are a
+                # little kinder than the habitat's - but they come from the same table,
+                # and its legendary branch no longer forgets to exclude the mythicals.
+                tier = roll_rarity(EXPEDITION_RARITY)
 
-                # We inject the rarity_filter dynamically into the query
-                async with db.execute(f"""
-                    SELECT DISTINCT s.pokedex_id, s.name, s.capture_rate, s.gender_rate 
-                    FROM base_pokemon_species s
-                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                    WHERE t.type_name IN {type_tuple} 
-                    AND {ultra_beasts('s', negate=True)}
-                    AND {spawnable_forms('s')}
-                    {rarity_filter}
-                    ORDER BY RANDOM() LIMIT 1
-                """) as cursor:
+                def rarity_query(chosen):
+                    return f"""
+                        SELECT DISTINCT s.pokedex_id, s.name, s.capture_rate, s.gender_rate
+                        FROM base_pokemon_species s
+                        JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                        WHERE t.type_name IN {type_tuple}
+                        AND {ultra_beasts('s', negate=True)}
+                        AND {spawnable_forms('s')}
+                        {rarity_filter(chosen, 's')}
+                        ORDER BY RANDOM() LIMIT 1
+                    """
+
+                async with db.execute(rarity_query(tier)) as cursor:
                     spawn_data = await cursor.fetchone()
+
+                # A biome whose type pool holds nothing of the rolled tier - the Apex is
+                # dragon-only - would otherwise answer "scanner error" and eat the trip.
+                if not spawn_data and tier != 'wild':
+                    tier = 'wild'
+                    async with db.execute(rarity_query('wild')) as cursor:
+                        spawn_data = await cursor.fetchone()
             
             if not spawn_data:
                 return await ctx.send("📡 Scanner error: Could not locate native wildlife in this sector. Try again.")
@@ -1237,7 +1333,7 @@ class Ecology(commands.Cog):
             else:
                 msg = await ctx.send(embed=embed)
             
-            asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=poke_name, user_id=user_id))
+            asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=poke_name, user_id=user_id, config_guild=str(ctx.guild.id)))
         except Exception as e:
             print(f"Expedition Error: {e}")
             await ctx.send("❌ A critical error occurred during field deployment.")
@@ -1392,23 +1488,29 @@ class Ecology(commands.Cog):
                     else:
                         habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
 
-                    # Rarity Roll
-                    roll = random.random()
-                    if roll < 0.01: rarity_filter, rarity_name = "AND s.is_mythical = 1", "✨ MYTHICAL"
-                    elif roll < 0.05: rarity_filter, rarity_name = "AND s.is_legendary = 1 AND s.is_mythical = 0", "⭐ LEGENDARY"
-                    else: rarity_filter, rarity_name = "AND s.is_legendary = 0 AND s.is_mythical = 0", "Wild"
+                    # Rarity Roll - the same shared table the habitat spawner uses.
+                    tier = roll_rarity(HABITAT_RARITY)
+                    rarity_name = RARITY_LABELS[tier]
 
-                    query = f"""
-                        SELECT s.pokedex_id, s.name, s.capture_rate, s.gender_rate 
-                        FROM base_pokemon_species s
-                        JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                        WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                        AND {ultra_beasts('s', negate=True)}
-                        AND {spawnable_forms('s')}
-                        {rarity_filter} ORDER BY RANDOM() LIMIT 1;
-                    """
-                    async with db.execute(query, allowed_types) as cursor:
+                    def rarity_query(chosen):
+                        return f"""
+                            SELECT s.pokedex_id, s.name, s.capture_rate, s.gender_rate
+                            FROM base_pokemon_species s
+                            JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                            WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
+                            AND {ultra_beasts('s', negate=True)}
+                            AND {spawnable_forms('s')}
+                            {rarity_filter(chosen, 's')} ORDER BY RANDOM() LIMIT 1;
+                        """
+
+                    async with db.execute(rarity_query(tier), allowed_types) as cursor:
                         spawned_data = await cursor.fetchone()
+
+                    if not spawned_data and tier != 'wild':
+                        tier, rarity_name = 'wild', RARITY_LABELS['wild']
+                        async with db.execute(rarity_query('wild'),
+                                              allowed_types) as cursor:
+                            spawned_data = await cursor.fetchone()
                 
                 # The Genetic Mutation (Shiny) Roll 
                 is_shiny = random.randint(1, 4096) == 1 
@@ -2636,7 +2738,12 @@ class Ecology(commands.Cog):
                 # ==========================================
                 # 🌐 GLOBAL BROADCAST MECHANIC
                 # ==========================================
-                if is_legendary or is_mythical or is_shiny:
+                # Read off the id rather than a column, because that is where the
+                # pseudo-legendary list lives - one tuple in constants, which the
+                # migration copies into the database rather than the other way round.
+                is_pseudo = is_pseudo_legendary(target['pokedex_id'])
+
+                if is_legendary or is_mythical or is_pseudo or is_shiny:
                     # The id and its beta counterpart live in constants.CHANNELS now,
                     # switched by ACTIVE_SERVER, rather than here with the other
                     # server's id surviving in a trailing comment.
@@ -2651,6 +2758,8 @@ class Ecology(commands.Cog):
                             rarity_parts.append("Mythical")
                         elif is_legendary:
                             rarity_parts.append("Legendary")
+                        elif is_pseudo:
+                            rarity_parts.append("Pseudo-Legendary")
                             
                         rarity_title = " ".join(rarity_parts) if rarity_parts else "Rare"
                         
@@ -2770,7 +2879,8 @@ class Ecology(commands.Cog):
                     # the unfiltered roll this replaces handed out Mega Charizard X,
                     # Gigantamax Snorlax and Totem Raticate, none of which will ever
                     # appear in a habitat channel.
-                    rare_filter = ("AND is_legendary = 0 AND is_mythical = 0"
+                    rare_filter = (f"AND is_legendary = 0 AND is_mythical = 0 "
+                                   f"AND {pseudo_legendaries(negate=True)}"
                                    if SURVEY_EXCLUDES_RARE_SPECIES else "")
                     async with db.execute(f"""
                         SELECT name FROM base_pokemon_species

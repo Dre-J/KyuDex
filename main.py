@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import traceback
 from dotenv import load_dotenv
 
 # Basic Setup
@@ -47,6 +48,33 @@ async def warm_battle_scenes():
     except Exception as e:
         # A cold cache is slower, never broken, so this must not stop the bot booting.
         print(f"⚠️ WARNING: Could not pre-warm battle scenes ({e}). They will build on demand.")
+
+@bot.event
+async def on_command_error(ctx, error):
+    """
+    Keep the console for things that are actually broken.
+
+    The default handler prints a full traceback for every mistyped command and every
+    refused check - and the channel restriction in `cogs/config.py` refuses by design,
+    so a server that switched it on would otherwise fill its log with tracebacks for
+    working correctly. Those two are swallowed; everything else still prints exactly as
+    it did, because a swallowed real error is far worse than a noisy one.
+    """
+    if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        # Best effort: an error handler that itself raises - because the bot cannot
+        # speak in that channel - loses the original error as well as its own.
+        try:
+            return await ctx.send(f"⚠️ Missing `{error.param.name}`. "
+                                  f"Usage: `!{ctx.command.qualified_name} "
+                                  f"{ctx.command.signature}`")
+        except Exception:
+            return
+
+    print(f"Command error in {ctx.command}: {error!r}")
+    traceback.print_exception(type(error), error, error.__traceback__)
+
 
 async def load_extensions():
     """Iterates through the 'cogs' folder and loads every Python file."""

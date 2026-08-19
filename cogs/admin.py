@@ -54,6 +54,43 @@ def resolve_item(typed):
     return None
 
 
+def pretty_moves(moves):
+    """A move list as a reader sees it, with empty slots left visible rather than hidden."""
+    named = [m.replace('-', ' ').title() for m in moves if m and m != 'none']
+    return ", ".join(named) if named else "*nothing*"
+
+
+async def natural_moveset(db, pokedex_id, level):
+    """
+    The four moves a specimen of this species and level would naturally know.
+
+    The most recent four level-up moves at or below its level - the same rule the NPC
+    roster builder uses, and the level-aware version of what a capture does. Padded to
+    four with 'none', which is what an empty slot looks like everywhere else; a species
+    with a thin early movepool genuinely has fewer than four.
+    """
+    async with db.execute("""
+        SELECT move_name FROM species_movepool
+        WHERE pokedex_id = ? AND learn_method = 'level-up'
+          AND level_learned <= ? AND level_learned > 0
+        GROUP BY move_name ORDER BY MIN(level_learned) DESC LIMIT 4
+    """, (pokedex_id, level)) as cursor:
+        moves = [row[0] for row in await cursor.fetchall()]
+
+    # A species whose whole level-up pool starts above this level - or one recorded with
+    # level_learned 0 throughout - would otherwise come out of here with four empty
+    # slots and no way to act in a battle. Fall back to the earliest thing it can learn.
+    if not moves:
+        async with db.execute("""
+            SELECT move_name FROM species_movepool
+            WHERE pokedex_id = ? AND learn_method = 'level-up'
+            GROUP BY move_name ORDER BY MIN(level_learned) ASC LIMIT 4
+        """, (pokedex_id,)) as cursor:
+            moves = [row[0] for row in await cursor.fetchall()]
+
+    return (moves + ['none'] * 4)[:4]
+
+
 async def resolve_specimen(db, tag):
     """
     One specimen from a tag or a tag prefix, as (row, error).
@@ -263,7 +300,7 @@ class Admin(commands.Cog):
     @rewrite.command(name="id", aliases=["species", "dex"])
     @commands.is_owner()
     async def rewrite_id(self, ctx, tag: str, new_id: int, *, ability: str = None):
-        """[ADMIN] Changes a specimen's species, and its ability with it. `!rewrite id a1b2c3 26`"""
+        """[ADMIN] Changes a specimen's species, ability and moves. `!rewrite id a1b2c3 26`"""
         try:
             async with aiosqlite.connect(DB_FILE) as db:
                 specimen, problem = await resolve_specimen(db, tag)
@@ -309,9 +346,22 @@ class Admin(commands.Cog):
                                                     new_standards, new_hidden)
                     how = "carried over by slot"
 
+                # The moves go with the species. A Pidgey rewritten into a Gengar kept
+                # Gust and Sand Attack, which the new body cannot learn and `!moves`
+                # will not list - a specimen holding moves outside its own movepool is
+                # exactly the state every other command assumes cannot happen.
+                async with db.execute(
+                        "SELECT move_1, move_2, move_3, move_4 FROM caught_pokemon "
+                        "WHERE instance_id = ?", (instance_id,)) as cursor:
+                    old_moves = list(await cursor.fetchone())
+
+                new_moves = await natural_moveset(db, new_id, level)
+
                 await db.execute(
-                    "UPDATE caught_pokemon SET pokedex_id = ?, ability = ? "
-                    "WHERE instance_id = ?", (new_id, new_ability, instance_id))
+                    "UPDATE caught_pokemon SET pokedex_id = ?, ability = ?, "
+                    "move_1 = ?, move_2 = ?, move_3 = ?, move_4 = ? "
+                    "WHERE instance_id = ?",
+                    (new_id, new_ability, *new_moves, instance_id))
                 await db.commit()
         except Exception as e:
             print(f"Admin rewrite id error: {e}")
@@ -333,11 +383,12 @@ class Admin(commands.Cog):
                         value=f"{(old_ability or 'unknown').replace('-', ' ').title()} → "
                               f"**{new_ability.replace('-', ' ').title()}** *({how})*",
                         inline=False)
+        embed.add_field(name="Moves",
+                        value=f"{pretty_moves(old_moves)}\n→ **{pretty_moves(new_moves)}**",
+                        inline=False)
         embed.add_field(name="Unchanged", value=f"Level {level}, IVs, nature, held item",
                         inline=False)
 
-        # Said rather than fixed, because "fixing" it means deleting moves somebody may
-        # have spent a TM on, and that is the admin's call rather than mine.
         if form_type and form_type not in ('base', 'alolan', 'galarian', 'hisuian',
                                            'paldean'):
             embed.add_field(
@@ -359,7 +410,11 @@ class Admin(commands.Cog):
                                  + (f" — *{nickname}*" if nickname else "")),
                     ("Owner", f"`{owner_id}`"),
                     ("Species", f"{old_name} (`{old_id}`) → {new_name} (`{new_id}`)"),
-                    ("Ability", f"{old_ability} → {new_ability} ({how})")])
+                    ("Ability", f"{old_ability} → {new_ability} ({how})"),
+                    # The moves it USED to have, in full. This is where a TM somebody
+                    # paid for goes, so the record has to be enough to put them back by
+                    # hand - an admin who rewrote the wrong tag has no other copy.
+                    ("Moves", f"{pretty_moves(old_moves)} → {pretty_moves(new_moves)}")])
 
 
 async def setup(bot):
