@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from utils.constants import DB_FILE
 from utils import checks
+from utils.directives import credit_evolution
 import aiosqlite
 
 class Evolution(commands.Cog):
@@ -127,23 +128,12 @@ class Evolution(commands.Cog):
                     # 🚨 UPDATE THE SPECIMEN'S GENETICS AND ABILITY
                     await db.execute("UPDATE caught_pokemon SET pokedex_id = ?, ability = ? WHERE instance_id = ?", (new_pokedex_id, new_ability, db_tag_id))
                     
-                    # ==========================================
                     # DIRECTIVE TRACKER: KINETIC MATURATION (EVOLUTION)
-                    # ==========================================
-                    await db.execute("""
-                        UPDATE field_directives
-                        SET current_progress = current_progress + 1
-                        WHERE user_id = ? AND objective_type = 'trigger_mutation' 
-                        AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
-                    """, (user_id, current_name.lower()))
-
-                    async with db.execute("""
-                        SELECT required_amount, current_progress 
-                        FROM field_directives
-                        WHERE user_id = ? AND objective_type = 'trigger_mutation' 
-                        AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
-                    """, (user_id, current_name.lower())) as cursor:
-                        mut_row = await cursor.fetchone()
+                    # Shared with the two confirmation buttons, which are the other
+                    # doors an evolution comes through - one of them used to have no
+                    # tracker at all.
+                    _, mutation_finished = await credit_evolution(
+                        db, user_id, current_name)
 
                     await db.commit()
                 except Exception as e:
@@ -160,7 +150,7 @@ class Evolution(commands.Cog):
             if current_ability != new_ability:
                 base_desc += f"\n\n✨ Through mutation, its ability changed from **{current_ability.replace('-', ' ').title()}** to **{new_ability.replace('-', ' ').title()}**!"
             
-            if mut_row and mut_row[1] == mut_row[0]:
+            if mutation_finished:
                 base_desc += "\n\n📡 **Directive Complete:** Kinetic Maturation Study concluded! Run `!claim` to receive your funding."
                 
             embed.description = base_desc

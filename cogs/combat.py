@@ -12,6 +12,7 @@ from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
 from utils.constants import TM_CATALOG, type_badges, type_icon
+from utils.directives import credit_evolution
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -2730,25 +2731,14 @@ class EvolutionConfirmView(discord.ui.View):
                         (self.target_id, self.pokemon['instance_id'])
                     )
                 
-                # ==========================================
                 # DIRECTIVE TRACKER: KINETIC MATURATION
-                # ==========================================
-                await db.execute("""
-                    UPDATE field_directives
-                    SET current_progress = current_progress + 1
-                    WHERE user_id = ? AND objective_type = 'trigger_mutation' 
-                    AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
-                """, (self.user_id, base_name))
+                # One helper, shared with `!evolve` and the field-mission button. The
+                # three copies this replaced were each correct alone, which is exactly
+                # why the missing fourth went unnoticed.
+                _, mutation_finished = await credit_evolution(
+                    db, self.user_id, base_name)
 
-                async with db.execute("""
-                    SELECT required_amount, current_progress 
-                    FROM field_directives
-                    WHERE user_id = ? AND objective_type = 'trigger_mutation' 
-                    AND (target_variable = 'any' OR target_variable = ?) AND is_completed = 0
-                """, (self.user_id, base_name)) as cursor:
-                    mut_row = await cursor.fetchone()
-                
-                if mut_row and mut_row[1] == mut_row[0]:
+                if mutation_finished:
                     response_msg += "\n\n📡 **Directive Complete:** Kinetic Maturation Study concluded! Run `!claim` to receive your funding."
 
                 await db.commit()
