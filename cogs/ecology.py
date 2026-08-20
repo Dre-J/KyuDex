@@ -14,7 +14,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              SHINY_SCORE_CEILING, RARITY_SCORE_CEILING,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
-                             ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
+                             ultra_beasts, paradox_species,
+                             HABITAT_RARITY, EXPEDITION_RARITY,
                              RARITY_LABELS, rarity_filter, roll_rarity,
                              pseudo_legendaries, is_pseudo_legendary,
                              MAX_ACTIVE_DIRECTIVES, MAX_NOTES_PER_ANALYSIS,
@@ -27,6 +28,7 @@ from utils.trading import mark_as_starter
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
+from utils.directives import credit_evolution
 # Every sprite path in this cog goes through utils.sprites now - the box browser, the
 # wild spawns, the expedition encounter, the admin spawn and the catch confirmation.
 # They were five hand-built copies of the same two lines, which is how none of them
@@ -233,20 +235,36 @@ class EncounterButton(
             await self._refresh(interaction)
 
     async def _retire(self, interaction, note):
-        """Disable the panel, and optionally say why."""
+        """
+        Take the panel down, and say why ONLY when nothing else has.
+
+        `interaction.message` is a snapshot taken when the click arrived. A catch
+        rewrites the card to "Specimen Secured" while this handler is still running, so
+        writing that snapshot's embed back afterwards restored the old spawn card -
+        picture and all - directly over the result. The card was edited twice and the
+        second edit won.
+
+        So a note is written only when this is the one thing rewriting the card, and
+        `note=None` means "somebody else already did, just take the buttons off".
+        """
         try:
             message = interaction.message
             if message is None:
                 return
+
+            if note is None:
+                # Touches the components and nothing else, so it cannot overwrite an
+                # edit made from under us.
+                return await message.edit(view=None)
+
             embed = message.embeds[0] if message.embeds else None
-            if embed is not None and note:
-                embed.description = note
-                embed.colour = discord.Colour.dark_grey()
-            keep = rebind_image(embed, message) if embed is not None else []
-            if embed is not None:
-                await message.edit(embed=embed, attachments=keep, view=None)
-            else:
-                await message.edit(view=None)
+            if embed is None:
+                return await message.edit(view=None)
+
+            embed.description = note
+            embed.colour = discord.Colour.dark_grey()
+            keep = rebind_image(embed, message)
+            await message.edit(embed=embed, attachments=keep, view=None)
         except Exception as e:
             print(f"⚠️ Could not retire the encounter panel: {e}")
 
@@ -301,19 +319,18 @@ async def build_encounter_view(owner_id, spawn_id, timeout=None):
     return view
 
 
-async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=None):
+async def rewrite_spawn_card(bot, spawn, title, description, colour=None):
     """
-    Edit a spawn's own message to say it has been taken, and by whom.
+    Rewrite a spawn's own message in place, and take any buttons off it.
 
-    Until this, a caught spawn left its card in the channel unchanged. The despawn timer
-    is the only thing that ever rewrote one, and it declines to touch a specimen that is
-    no longer in memory - correctly, since it must not overwrite a catch - so the card
-    for a specimen somebody took minutes ago sat there advertising it indefinitely.
+    The shared half of "this specimen is no longer available". Both the catch and the
+    escape need it, and both used to be free to forget - a card for a specimen taken or
+    lost minutes ago sat in the channel advertising it indefinitely.
 
-    Every failure is swallowed on purpose. The message may have been deleted, the bot may
-    have lost permission to edit in that channel, or the spawn may predate this and carry
-    no message id at all. None of those is a reason for a successful catch to report an
-    error to the person who made it.
+    Every failure is swallowed on purpose. The message may have been deleted, the bot
+    may have lost permission to edit in that channel, or the spawn may predate this and
+    carry no message id at all. None of those is a reason for a successful catch to
+    report an error to the person who made it.
     """
     channel_id = (spawn or {}).get('channel_id')
     message_id = (spawn or {}).get('message_id')
@@ -327,30 +344,55 @@ async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=Non
         message = await channel.fetch_message(int(message_id))
 
         embed = message.embeds[0] if message.embeds else discord.Embed()
-        clean = str(species_name).replace('-', ' ').title()
-        badge = "🌟 " if is_shiny else ""
-        embed.title = "✅ Specimen Secured"
-        embed.description = (f"The {badge}**{clean}** was tagged and rehomed by "
-                             f"**{catcher}**."
-                             + (f"\n*Filed under* `{tag}`." if tag else ""))
-        embed.colour = discord.Colour.dark_grey()
+        embed.title = title
+        embed.description = description
+        embed.colour = colour or discord.Colour.dark_grey()
 
         # The sprite stays. The card is a record of what appeared, and stripping the
         # picture would make the channel history less readable rather than more.
         #
-        # It has to be rebound by NAME, though. This embed came back from `fetch_message`
-        # with its image url set to a signed CDN link, and editing re-issues the
-        # attachment under a new signature - so the picture fell out of the embed and
-        # reappeared as a bare file hanging underneath it.
+        # It has to be rebound by NAME, though. This embed came back from
+        # `fetch_message` with its image url set to a signed CDN link, and editing
+        # re-issues the attachment under a new signature - so the picture fell out of
+        # the embed and reappeared as a bare file hanging underneath it.
+        #
         # `view=None` strips the buttons. An expedition card carries a catch panel, and
-        # leaving it live on a specimen somebody already took means the next click gets
+        # leaving it live on a specimen nobody can have means the next click gets
         # "there is no Charmander here" from a card that plainly shows one.
         keep = rebind_image(embed, message)
         await message.edit(embed=embed, attachments=keep, view=None)
         return True
     except Exception as e:
-        print(f"⚠️ Could not mark spawn as caught: {e}")
+        print(f"⚠️ Could not rewrite spawn card: {e}")
         return False
+
+
+async def mark_spawn_fled(bot, spawn, species_name):
+    """The card for a specimen that broke free and ran."""
+    clean = str(species_name).replace('-', ' ').title()
+    return await rewrite_spawn_card(
+        bot, spawn, "💨 Specimen Escaped",
+        f"The **{clean}** broke free and disappeared into the undergrowth.")
+
+
+async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=None):
+    """
+    Edit a spawn's own message to say it has been taken, and by whom.
+
+    Until this, a caught spawn left its card in the channel unchanged. The despawn timer
+    is the only thing that ever rewrote one, and it declines to touch a specimen that is
+    no longer in memory - correctly, since it must not overwrite a catch - so the card
+    for a specimen somebody took minutes ago sat there advertising it indefinitely.
+
+    The rewriting itself is `rewrite_spawn_card`, shared with the escape - the two used
+    to be one function and a gap where the other should have been.
+    """
+    clean = str(species_name).replace('-', ' ').title()
+    badge = "🌟 " if is_shiny else ""
+    return await rewrite_spawn_card(
+        bot, spawn, "✅ Specimen Secured",
+        f"The {badge}**{clean}** was tagged and rehomed by **{catcher}**."
+        + (f"\n*Filed under* `{tag}`." if tag else ""))
 
 
 def spawn_is_here(spawn_data, channel_id):
@@ -394,16 +436,35 @@ class EvolutionConfirmView(discord.ui.View):
             return await interaction.response.send_message("⚠️ You cannot evolve another researcher's specimen.", ephemeral=True)
 
         async with aiosqlite.connect(self.db_file) as db:
+            # The species it is evolving FROM, read before the update overwrites it. A
+            # Kinetic Maturation Study names the species you had to go and find, not
+            # the one you ended up with.
+            async with db.execute(
+                    "SELECT s.name FROM caught_pokemon cp "
+                    "JOIN base_pokemon_species s ON s.pokedex_id = cp.pokedex_id "
+                    "WHERE cp.instance_id = ?", (self.instance_id,)) as cursor:
+                row = await cursor.fetchone()
+            old_name = row[0] if row else ''
+
             # 🚨 UPDATE: Apply both the new species ID and the inherited ability
-            await db.execute("UPDATE caught_pokemon SET pokedex_id = ?, ability = ? WHERE instance_id = ?", 
+            await db.execute("UPDATE caught_pokemon SET pokedex_id = ?, ability = ? WHERE instance_id = ?",
                              (self.new_pokedex_id, self.new_ability, self.instance_id))
+
+            # THE GAP: this button is the third door an evolution can come through, and
+            # the only one that never credited the directive. A trainer who evolved a
+            # specimen off the back of a field mission watched their Kinetic Maturation
+            # Study sit at 0/1 while the same evolution through `!evolve` counted.
+            _, finished = await credit_evolution(db, self.owner_id, old_name)
+
             await db.commit()
 
         for child in self.children:
             child.disabled = True
-            
+
+        note = ("\n\n📡 **Directive Complete:** Kinetic Maturation Study concluded! "
+                "Run `!claim` to receive your funding." if finished else "")
         await interaction.response.edit_message(
-            content=f"🎉 **Success!** The specimen successfully evolved into **{self.new_species_name}** with the ability **{self.new_ability.title()}**!", 
+            content=f"🎉 **Success!** The specimen successfully evolved into **{self.new_species_name}** with the ability **{self.new_ability.title()}**!{note}",
             view=self
         )
 
@@ -1515,7 +1576,7 @@ class Ecology(commands.Cog):
                         FROM base_pokemon_species s
                         JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                         WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                        AND {ultra_beasts('s', negate=True)} AND {spawnable_forms('s')}
+                        AND {spawnable_forms('s')}
                         {rarity_filter(chosen, 's')} ORDER BY RANDOM() LIMIT 1;
                     """
 
@@ -1818,7 +1879,6 @@ class Ecology(commands.Cog):
                         FROM base_pokemon_species s
                         JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                         WHERE t.type_name IN {type_tuple}
-                        AND {ultra_beasts('s', negate=True)}
                         AND {spawnable_forms('s')}
                         {rarity_filter(chosen, 's')}
                         ORDER BY RANDOM() LIMIT 1
@@ -2087,7 +2147,6 @@ class Ecology(commands.Cog):
                             FROM base_pokemon_species s
                             JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
                             WHERE t.type_name IN ({','.join(['?']*len(allowed_types))})
-                            AND {ultra_beasts('s', negate=True)}
                             AND {spawnable_forms('s')}
                             {rarity_filter(chosen, 's')} ORDER BY RANDOM() LIMIT 1;
                         """
@@ -3148,7 +3207,13 @@ class Ecology(commands.Cog):
                             user_active_spawns[user_id].pop(target_spawn_id, None)
                         else:
                             active_spawns[guild_id].pop(target_spawn_id, None)
-                                    
+
+                        # The card is now advertising a specimen that is gone, and the
+                        # despawn timer will not touch it - correctly, since it declines
+                        # to overwrite anything no longer in memory. A catch has said so
+                        # since the spawn-card work; an escape never did.
+                        await mark_spawn_fled(self.bot, target, pokemon_name)
+
                         return await ctx.send(f"💥 Oh no! The **{typed_name.capitalize().replace('-', ' ')}** broke free and fled into the wild! *(Catch chance was {final_chance:.1%})*")
                     else:
                         return await ctx.send(f"💨 The **{typed_name.capitalize().replace('-', ' ')}** broke free from the {ball_type.capitalize()}, but it's still watching you! Try again! *(Catch chance was {final_chance:.1%})*")
@@ -3561,8 +3626,13 @@ class Ecology(commands.Cog):
             # Drawn from the same pool the spawner draws from - the unfiltered roll this
             # replaces handed out Mega Charizard X, Gigantamax Snorlax and Totem
             # Raticate, none of which will ever appear in a habitat channel.
+            # Paradox species join the exclusion for the same reason the pseudos are
+            # here: a directive asking for three Flutter Mane is not a research task,
+            # it is a wall. They only became rare this change, so without this line the
+            # generator would have kept handing them out at ordinary-wildlife odds.
             rare_filter = (f"AND is_legendary = 0 AND is_mythical = 0 "
-                           f"AND {pseudo_legendaries(negate=True)}"
+                           f"AND {pseudo_legendaries(negate=True)} "
+                           f"AND {paradox_species(negate=True)}"
                            if SURVEY_EXCLUDES_RARE_SPECIES else "")
             async with db.execute(f"""
                 SELECT name FROM base_pokemon_species

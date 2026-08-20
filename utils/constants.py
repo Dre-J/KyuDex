@@ -1174,14 +1174,52 @@ def pseudo_legendaries(alias=None, negate=False):
 # It is the one number here meant to be tuned by watching what appears - a pseudo is
 # supposed to be a good day, not a ceremony.
 RARITY_LABELS = {
-    'mythical':  "✨ MYTHICAL",
-    'legendary': "⭐ LEGENDARY",
-    'pseudo':    "🔷 PSEUDO-LEGENDARY",
-    'wild':      "Wild",
+    'mythical':   "✨ MYTHICAL",
+    'legendary':  "⭐ LEGENDARY",
+    'ultrabeast': "👁️ ULTRA BEAST",
+    'paradox':    "🌀 PARADOX",
+    'pseudo':     "🔷 PSEUDO-LEGENDARY",
+    'wild':       "Wild",
 }
 
-HABITAT_RARITY = (('mythical', 0.00001), ('legendary', 0.001), ('pseudo', 0.02))
-EXPEDITION_RARITY = (('mythical', 0.00001), ('legendary', 0.001), ('pseudo', 0.03))
+# The twenty Paradox species. Not flagged legendary or mythical in the database - they
+# genuinely are not - so until they were named here they sat in the ORDINARY wild pool
+# and turned up at the same rate as a Bidoof. Iron Valiant and Roaring Moon appearing as
+# routine wildlife is the same failure the pseudo tier was created to fix, one
+# generation later.
+PARADOX_IDS = (984, 985, 986, 987, 988, 989, 990, 991, 992, 993, 994, 995,
+               1005, 1006, 1009, 1010, 1020, 1021, 1022, 1023)
+
+
+def paradox_species(alias=None, negate=False):
+    """The SQL fragment selecting - or excluding - the Paradox species."""
+    prefix = f"{alias}." if alias else ""
+    joined = ", ".join(str(dex) for dex in PARADOX_IDS)
+    return f"{prefix}pokedex_id {'NOT ' if negate else ''}IN ({joined})"
+
+
+# Ultra Beasts had the opposite problem: excluded from every ordinary spawn query, so
+# the ONLY way to meet one was a dimensional rift. A tier gives them a front door
+# without making them common.
+#
+# The rates are per TIER, not per species, which is why the two new ones sit below the
+# pseudo share despite being scarcer per head: 20 Paradox species and 11 Ultra Beasts
+# share their tiers against 11 pseudo-legendary lines.
+#
+# The expedition table used to give pseudos 3% against the habitat's 2%. That extra
+# point was not the problem on its own - the problem is that the apex biome is
+# dragon-only and NINE of the eleven pseudo lines are dragons, so a pseudo roll there is
+# a near-guaranteed Garchomp or Dragapult rather than a draw from the whole pool. An
+# expedition is a deliberate trip and should be worth taking, but not by aiming the
+# rarest tier at the narrowest biome. Both tables are the same now.
+_RARITY_TIERS = (('mythical',   0.00001),
+                 ('legendary',  0.001),
+                 ('ultrabeast', 0.002),
+                 ('paradox',    0.003),
+                 ('pseudo',     0.02))
+
+HABITAT_RARITY = _RARITY_TIERS
+EXPEDITION_RARITY = _RARITY_TIERS
 
 
 def rarity_filter(tier, alias='s'):
@@ -1196,11 +1234,24 @@ def rarity_filter(tier, alias='s'):
     if tier == 'mythical':
         return f"AND {prefix}is_mythical = 1"
     if tier == 'legendary':
-        return f"AND {prefix}is_legendary = 1 AND {prefix}is_mythical = 0"
+        # Ultra Beasts carry `is_legendary = 1` in the database, so without this the
+        # legendary tier would draw them as well and the ultrabeast tier would be a
+        # second door onto the same species rather than the only one.
+        return (f"AND {prefix}is_legendary = 1 AND {prefix}is_mythical = 0 "
+                f"AND {ultra_beasts(alias, negate=True)}")
+    if tier == 'ultrabeast':
+        return f"AND {ultra_beasts(alias)}"
+    if tier == 'paradox':
+        return f"AND {paradox_species(alias)}"
     if tier == 'pseudo':
         return f"AND {pseudo_legendaries(alias)}"
+    # Every tier excludes the others INCLUDING this one, which is the half that makes a
+    # tier mean anything. A Paradox species still reachable through the 97% ordinary
+    # draw has not been made rare, it has been given a second door.
     return (f"AND {prefix}is_legendary = 0 AND {prefix}is_mythical = 0 "
-            f"AND {pseudo_legendaries(alias, negate=True)}")
+            f"AND {pseudo_legendaries(alias, negate=True)} "
+            f"AND {paradox_species(alias, negate=True)} "
+            f"AND {ultra_beasts(alias, negate=True)}")
 
 
 def roll_rarity(tiers=HABITAT_RARITY, roll=None):
