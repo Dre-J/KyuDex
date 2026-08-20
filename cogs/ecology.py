@@ -9,7 +9,7 @@ import math
 import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
-                             STARTER_CAN_BE_SHINY,
+                             STARTER_CAN_BE_SHINY, type_badges,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
                              ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
@@ -525,8 +525,7 @@ class PokemonPaginator(discord.ui.View):
             # Fetch Typings!
             async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
                 type_rows = await cursor.fetchall()
-                type_list = [row[0].title() for row in type_rows]
-                type_str = " / ".join(type_list) if type_list else "Unknown"
+                type_str = type_badges([row[0] for row in type_rows])
 
         # --- CALCULATIONS ---
         # Format the Gender Icon
@@ -614,7 +613,7 @@ class PokemonPaginator(discord.ui.View):
         desc_prefix = "❤️ **Active Partner**\n" if actual_tag_id == self.active_partner_id else ""
         
         # 🚨 Added Original Trainer and Typings to the main description block!
-        embed.description = f"{desc_prefix}**Level {level}** | **Nature:** {nature}\n🔮 **Type:** {type_str}\n🧬 **Ability:** {display_ability}\n🎒 **Held Item:** `{item_display}`\n📏 **Dimensions:** {size_tag} ({actual_height_m}m, {actual_weight_kg}kg)\n🤝 **Bond:** {bond_icon}\n✨ **XP:** {current_xp} / {xp_for_next_level}\n👤 **Original Trainer:** {ot_display}"
+        embed.description = f"{desc_prefix}**Level {level}** | **Nature:** {nature}\n**Type:** {type_str}\n🧬 **Ability:** {display_ability}\n🎒 **Held Item:** `{item_display}`\n📏 **Dimensions:** {size_tag} ({actual_height_m}m, {actual_weight_kg}kg)\n🤝 **Bond:** {bond_icon}\n✨ **XP:** {current_xp} / {xp_for_next_level}\n👤 **Original Trainer:** {ot_display}"
 
         # ==========================================
         # GENETICS & STAT FORMATTING
@@ -1717,12 +1716,8 @@ class Ecology(commands.Cog):
             db_data = [] 
             
         # Format the Types
-        if db_data:
-            types_list = [row[0].title() for row in db_data]
-            type_str = " / ".join(types_list)
-        else:
-            type_str = "Unknown"
-            
+        type_str = type_badges([row[0] for row in db_data])
+
         # 4. MASK THE DISPLAY NAME
         masked_name = ""
         for i, char in enumerate(display_name):
@@ -1740,7 +1735,9 @@ class Ecology(commands.Cog):
             color=discord.Color.blue()
         )
         
-        embed.add_field(name="Elemental Signature", value=f"`{type_str}`", inline=False)
+        # No longer wrapped in backticks: a custom emoji inside a code span renders as
+        # its raw `<:fire:123…>` text, which is the one place these badges CANNOT go.
+        embed.add_field(name="Elemental Signature", value=type_str, inline=False)
         embed.add_field(name="Acoustic Syllable Profile", value=f"`{masked_name.strip()}`", inline=False)
         
         if target.get('is_shiny'):
