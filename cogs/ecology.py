@@ -10,6 +10,8 @@ import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
                              STARTER_CAN_BE_SHINY, type_badges,
+                             scaled_rarity, roll_shiny, ecosystem_multiplier,
+                             SHINY_SCORE_CEILING, RARITY_SCORE_CEILING,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
                              ultra_beasts, HABITAT_RARITY, EXPEDITION_RARITY,
@@ -67,6 +69,238 @@ def event_alert(settings):
     return f"<@&{role}> " if role and settings.get('ping_events') else ""
 
 
+# ==========================================
+# 🎯 THE EXPEDITION CATCH PANEL
+# ==========================================
+# Buttons for expeditions ONLY. A public spawn keeps its name-guess, and the difference
+# is not squeamishness about change - the two encounters are different situations:
+#
+# An expedition is private and deliberate. You ran a command, the encounter is assigned
+# to you, nobody is competing for it. Making you then TYPE the name of something already
+# yours is a toll booth on a road with nobody else on it.
+#
+# A channel spawn is contested, and the guess is doing three jobs at once. It is a race
+# that rewards recognising the species rather than having Discord open. It paces a busy
+# channel without any explicit cooldown, because typing is slower than clicking. And it
+# is the small skill expression that makes a Pokemon bot feel like one - it is why
+# anybody learns species names at all. Buttons on a public card would turn all of that
+# into a click race that the person on the fastest connection wins.
+#
+# Fleeing is likewise expedition-only, and for a plainer reason: a public spawn belongs
+# to the channel, so one person dismissing it would be taking it from everyone.
+
+BALL_BUTTONS = (
+    # key, label, emoji, whether it must be held in the pack
+    ('pokeball',   'Poké Ball',   '⚪', False),
+    ('greatball',  'Great Ball',  '🔵', True),
+    ('ultraball',  'Ultra Ball',  '🟡', True),
+    ('masterball', 'Master Ball', '🟣', True),
+)
+
+# A Poke Ball is free and unlimited everywhere else in the bot, so its button is never
+# disabled and never carries a count.
+FREE_BALL = 'pokeball'
+
+
+class _ButtonContext:
+    """
+    Enough of a `commands.Context` for `!catch` to run from a button press.
+
+    The alternative was a second copy of the capture logic - four hundred lines with
+    the genetics roll, the biometrics, the directive progress, the loot table and the
+    global broadcast in it - which would have drifted from the typed command by the end
+    of the week. The button is a shortcut for typing the command, so it types it.
+    """
+
+    def __init__(self, interaction, bot):
+        self.author = interaction.user
+        self.guild = interaction.guild
+        self.channel = interaction.channel
+        self.bot = bot
+        self.interaction = interaction
+        self.sent = []
+
+    async def send(self, content=None, **kwargs):
+        # `reference` and `mention_author` are Message-only; a followup rejects them.
+        for unsupported in ('reference', 'mention_author', 'delete_after', 'nonce'):
+            kwargs.pop(unsupported, None)
+        self.sent.append((content, kwargs))
+        return await self.interaction.followup.send(content=content, **kwargs)
+
+
+class EncounterButton(
+        discord.ui.DynamicItem[discord.ui.Button],
+        template=r'kyuexp:(?P<owner>\d+):(?P<spawn>[0-9a-fA-F-]+):(?P<action>[a-z]+)'):
+    """
+    One button on an expedition card, rebuildable from its own custom_id.
+
+    A plain View dies with the process. The spawn it refers to dies with the process
+    too - it lives in `user_active_spawns`, in memory - so after a restart the card is
+    stale either way. The difference is what the player SEES when they click it: a
+    dead View gets no handler at all and Discord shows "This interaction failed", which
+    reads as a broken bot. Rebuilt from the custom_id, the click gets a handler that
+    can look, find nothing, and say the encounter is over.
+    """
+
+    def __init__(self, owner_id, spawn_id, action, *, label=None, emoji=None,
+                 style=discord.ButtonStyle.secondary, disabled=False, count=None):
+        self.owner_id = str(owner_id)
+        self.spawn_id = str(spawn_id)
+        self.action = action
+
+        if label is None:
+            label = self._default_label(action, count)
+
+        super().__init__(discord.ui.Button(
+            label=label,
+            emoji=emoji or self._default_emoji(action),
+            style=style,
+            disabled=disabled,
+            custom_id=f"kyuexp:{owner_id}:{spawn_id}:{action}",
+        ))
+
+    @staticmethod
+    def _default_emoji(action):
+        if action == 'flee':
+            return '🏃'
+        return next((e for key, _, e, _ in BALL_BUTTONS if key == action), '⚪')
+
+    @staticmethod
+    def _default_label(action, count):
+        if action == 'flee':
+            return 'Leave it'
+        name = next((n for key, n, _, _ in BALL_BUTTONS if key == action), action.title())
+        # The count is on the button because the alternative is opening `!backpack`
+        # mid-encounter to find out whether you can afford the throw you are about to
+        # make. A free ball has no count to show.
+        return name if count is None else f"{name} ({count})"
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match['owner'], match['spawn'], match['action'])
+
+    async def interaction_check(self, interaction):
+        # A private encounter in a public channel. Without this, anybody scrolling past
+        # can catch somebody else's expedition.
+        if str(interaction.user.id) != self.owner_id:
+            await interaction.response.send_message(
+                "🔒 This is not your encounter — run `!expedition` for one of your own.",
+                ephemeral=True)
+            return False
+        return True
+
+    async def callback(self, interaction):
+        cog = interaction.client.get_cog('Ecology')
+        if cog is None:                                       # pragma: no cover
+            return await interaction.response.send_message(
+                "⚠️ The field systems are offline. Try again in a moment.",
+                ephemeral=True)
+
+        # A catch is a database write and possibly a sprite render, both of which can
+        # outlast the three-second interaction deadline.
+        await interaction.response.defer()
+
+        spawn = (user_active_spawns.get(self.owner_id) or {}).get(self.spawn_id)
+        if not spawn:
+            # Taken, timed out, or lost to a restart. All three read the same to the
+            # person clicking, and all three are answered by retiring the card.
+            await self._retire(interaction, "💨 That encounter is over.")
+            return await interaction.followup.send(
+                "💨 That specimen is no longer here. Run `!expedition` to find another.",
+                ephemeral=True)
+
+        if self.action == 'flee':
+            user_active_spawns.get(self.owner_id, {}).pop(self.spawn_id, None)
+            clean = str(spawn.get('name', 'specimen')).replace('-', ' ').title()
+            # Costs nothing and takes nothing. This is the legitimate way to pass on an
+            # encounter rather than burning a ball or letting the card rot.
+            await self._retire(
+                interaction,
+                f"🏃 You left the **{clean}** alone. It watches you go.")
+            return
+
+        ctx = _ButtonContext(interaction, cog.bot)
+        await Ecology.catch_pokemon.callback(
+            cog, ctx, full_input=f"{spawn['name']} {self.action}")
+
+        # Whether the specimen survived the throw decides whether the panel should stay.
+        # `!catch` removes it from the store on a catch AND on a flee-after-break-free,
+        # so "still there" is exactly "you may throw again".
+        still_there = (user_active_spawns.get(self.owner_id) or {}).get(self.spawn_id)
+        if not still_there:
+            await self._retire(interaction, None)
+        else:
+            await self._refresh(interaction)
+
+    async def _retire(self, interaction, note):
+        """Disable the panel, and optionally say why."""
+        try:
+            message = interaction.message
+            if message is None:
+                return
+            embed = message.embeds[0] if message.embeds else None
+            if embed is not None and note:
+                embed.description = note
+                embed.colour = discord.Colour.dark_grey()
+            keep = rebind_image(embed, message) if embed is not None else []
+            if embed is not None:
+                await message.edit(embed=embed, attachments=keep, view=None)
+            else:
+                await message.edit(view=None)
+        except Exception as e:
+            print(f"⚠️ Could not retire the encounter panel: {e}")
+
+    async def _refresh(self, interaction):
+        """Redraw the counts after a ball was spent and the specimen stayed."""
+        try:
+            view = await build_encounter_view(self.owner_id, self.spawn_id)
+            await interaction.message.edit(view=view)
+        except Exception as e:
+            print(f"⚠️ Could not refresh the encounter panel: {e}")
+
+
+async def ball_counts(user_id):
+    """How many of each purchasable ball this trainer holds."""
+    wanted = [key for key, _, _, needed in BALL_BUTTONS if needed]
+    marks = ','.join('?' * len(wanted))
+    try:
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    f"SELECT item_name, quantity FROM user_inventory "
+                    f"WHERE user_id = ? AND item_name IN ({marks})",
+                    (str(user_id), *wanted)) as cursor:
+                return {row[0]: row[1] for row in await cursor.fetchall()}
+    except Exception as e:
+        # A panel with every ball greyed out is a worse panel, not a broken one.
+        print(f"⚠️ Could not read ball counts: {e}")
+        return {}
+
+
+async def build_encounter_view(owner_id, spawn_id, timeout=None):
+    """
+    The catch panel for one private encounter.
+
+    Balls you do not hold are DISABLED rather than hidden, so the shape of the panel is
+    the same every time and people learn what exists - a Master Ball button that only
+    appears once you own one is a mechanic nobody discovers.
+    """
+    counts = await ball_counts(owner_id)
+
+    view = discord.ui.View(timeout=timeout)
+    for key, _label, _emoji, needed in BALL_BUTTONS:
+        held = counts.get(key, 0)
+        view.add_item(EncounterButton(
+            owner_id, spawn_id, key,
+            count=None if key == FREE_BALL else held,
+            disabled=bool(needed and held < 1),
+            style=(discord.ButtonStyle.primary if key == FREE_BALL
+                   else discord.ButtonStyle.secondary)))
+
+    view.add_item(EncounterButton(owner_id, spawn_id, 'flee',
+                                  style=discord.ButtonStyle.danger))
+    return view
+
+
 async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=None):
     """
     Edit a spawn's own message to say it has been taken, and by whom.
@@ -108,8 +342,11 @@ async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=Non
         # with its image url set to a signed CDN link, and editing re-issues the
         # attachment under a new signature - so the picture fell out of the embed and
         # reappeared as a bare file hanging underneath it.
+        # `view=None` strips the buttons. An expedition card carries a catch panel, and
+        # leaving it live on a specimen somebody already took means the next click gets
+        # "there is no Charmander here" from a card that plainly shows one.
         keep = rebind_image(embed, message)
-        await message.edit(embed=embed, attachments=keep)
+        await message.edit(embed=embed, attachments=keep, view=None)
         return True
     except Exception as e:
         print(f"⚠️ Could not mark spawn as caught: {e}")
@@ -1169,8 +1406,12 @@ class Ecology(commands.Cog):
                 embed.color = discord.Color.dark_grey()
             
                 
-                # Edit the message AND explicitly clear the attachments to remove the stray image
-                await message.edit(embed=embed, attachments=[])
+                # Edit the message AND explicitly clear the attachments to remove the
+                # stray image. `view=None` takes the catch panel down with it: an
+                # expedition card that has despawned must not still offer a Poke Ball
+                # button, and the View's own timeout only stops it responding - it does
+                # not remove it from the screen.
+                await message.edit(embed=embed, attachments=[], view=None)
                 
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 # The channel or message was deleted by an admin before the timer finished, so we just safely ignore it.
@@ -1259,7 +1500,13 @@ class Ecology(commands.Cog):
                 # Rarity Roll. One shared table, so this, `!spawn` and the
                 # expedition cannot drift apart again - and so the pseudo-legendaries
                 # leave the ordinary pool by the same edit that gives them a tier.
-                tier = roll_rarity(HABITAT_RARITY)
+                #
+                # Scaled by the habitat's health, which until now decided only which
+                # TYPES appeared. A server that maintains its ecosystem sees rarer
+                # things; one that lets it rot sees fewer. At the default 50 the
+                # multiplier is exactly 1.0, so nothing changes for anybody who has
+                # never touched it.
+                tier = roll_rarity(scaled_rarity(HABITAT_RARITY, ecosystem_score))
                 rarity_name = RARITY_LABELS[tier]
 
                 def rarity_query(chosen):
@@ -1292,7 +1539,9 @@ class Ecology(commands.Cog):
         # same one to the specimen that gets caught. The NAME is handed over too,
         # because a species whose name states a sex must not roll the other one.
         gender = roll_gender(gender_rate, species_name=name)
-        is_shiny = random.randint(1, 4096) == 1 
+        # The habitat's health nudges this too, but far less than it moves the rare
+        # tiers - a shiny is worth what it is worth because it is unlikely.
+        is_shiny = roll_shiny(ecosystem_score)
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
         
         # 🚨 NEW ARCHITECTURE: Initialize the guild's dictionary if it doesn't exist
@@ -1505,7 +1754,10 @@ class Ecology(commands.Cog):
     async def start_expedition(self, ctx, *, biome_name: str = None):
         """Embark on a solo ecological expedition to a specific biome."""
         user_id = str(ctx.author.id)
-        
+        # The server the trip sets out from, whose ecosystem score scales the odds.
+        # A DM has no guild; the rate helpers read a missing score as the baseline.
+        guild_id = str(ctx.guild.id) if ctx.guild else None
+
         if not biome_name:
             return await ctx.send("🧭 **Navigation Error:** Please specify a biome (e.g., `!expedition canopy` or `!expedition trench`).")
             
@@ -1543,12 +1795,22 @@ class Ecology(commands.Cog):
                 
                 # 4. Generate the Biome-Specific Encounter (With Rarity Filter)
                 type_tuple = biome_data[biome]['types']
-                
+
+                # The health of the server you set out FROM. An expedition is a private
+                # trip, but it is a trip into this server's ecosystem - and reading the
+                # score here is what stops a neglected habitat being farmed around by
+                # everyone simply using `!expedition` instead.
+                async with db.execute(
+                        "SELECT ecosystem_score FROM servers WHERE guild_id = ?",
+                        (guild_id,)) as cursor:
+                    score_row = await cursor.fetchone()
+                ecosystem_score = score_row[0] if score_row else None
+
                 # Roll the ecological dice. An expedition is a deliberate trip
                 # rather than an accident of conversation, so its rare tiers are a
                 # little kinder than the habitat's - but they come from the same table,
                 # and its legendary branch no longer forgets to exclude the mythicals.
-                tier = roll_rarity(EXPEDITION_RARITY)
+                tier = roll_rarity(scaled_rarity(EXPEDITION_RARITY, ecosystem_score))
 
                 def rarity_query(chosen):
                     return f"""
@@ -1578,8 +1840,9 @@ class Ecology(commands.Cog):
             poke_id, poke_name, true_capture_rate, gender_rate = spawn_data
             gender = roll_gender(gender_rate, species_name=poke_name)
             
-            # Roll for shiny (1/4096 standard rate)
-            is_shiny = random.randint(1, 4096) == 1
+            # Roll for shiny. 1/4096 at a baseline habitat, up to 1.4x that at a
+            # pristine one and the same factor down at a ruined one.
+            is_shiny = roll_shiny(ecosystem_score)
             # Create a unique 6-character tracking ID for this specific specimen
             spawn_id = str(uuid.uuid4())[:6]
 
@@ -1619,7 +1882,7 @@ class Ecology(commands.Cog):
                 description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**`{masked_display}`** {gender_icon(gender)} appeared!",
                 color=discord.Color.dark_green()
             )
-            embed.set_footer(text="This is a private encounter. Use !catch [name]")
+            embed.set_footer(text="This encounter is yours. Pick a ball, or leave it.")
             
             # ==========================================
             # 4. LOCAL ASSET LOADING
@@ -1643,12 +1906,21 @@ class Ecology(commands.Cog):
             if sprite_file:
                 embed.set_image(url=f"attachment://{safe_filename}")
                 
+            # The catch panel. Its timeout matches the despawn window, so the buttons
+            # go quiet at the same moment the specimen does rather than a minute either
+            # side of it - a live button on an expired encounter is the same confusing
+            # bug report as a dead one on a live encounter.
+            settings = await cfg.get_all(guild_id) if guild_id else {}
+            despawn_after = settings.get('despawn_seconds') or 300
+            panel = await build_encounter_view(user_id, spawn_id,
+                                               timeout=despawn_after)
+
             # Send the message, passing BOTH the embed and the file object!
             if sprite_file:
-                msg = await ctx.send(embed=embed, file=sprite_file)
+                msg = await ctx.send(embed=embed, file=sprite_file, view=panel)
             else:
-                msg = await ctx.send(embed=embed)
-            
+                msg = await ctx.send(embed=embed, view=panel)
+
             # Recorded AFTER the send, because the id does not exist until then -
             # it is what lets a successful catch go back and rewrite this card.
             user_active_spawns[user_id][spawn_id]['message_id'] = msg.id
@@ -1806,7 +2078,7 @@ class Ecology(commands.Cog):
                         habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
 
                     # Rarity Roll - the same shared table the habitat spawner uses.
-                    tier = roll_rarity(HABITAT_RARITY)
+                    tier = roll_rarity(scaled_rarity(HABITAT_RARITY, ecosystem_score))
                     rarity_name = RARITY_LABELS[tier]
 
                     def rarity_query(chosen):
@@ -1829,8 +2101,8 @@ class Ecology(commands.Cog):
                                               allowed_types) as cursor:
                             spawned_data = await cursor.fetchone()
                 
-                # The Genetic Mutation (Shiny) Roll 
-                is_shiny = random.randint(1, 4096) == 1 
+                # The Genetic Mutation (Shiny) Roll
+                is_shiny = roll_shiny(ecosystem_score)
         
         # 3. EXECUTE THE SPAWN
         if not spawned_data:
@@ -1844,7 +2116,7 @@ class Ecology(commands.Cog):
         
         # Ensure Ultra Beasts get a shiny roll too if it wasn't defined!
         if 'is_shiny' not in locals():
-            is_shiny = random.randint(1, 4096) == 1 
+            is_shiny = roll_shiny(ecosystem_score)
 
         shiny_text = "🌟 **SHINY MUTATION** " if is_shiny else ""
         
@@ -4094,7 +4366,36 @@ class Ecology(commands.Cog):
                         value=f"🕒 {now.strftime('%H:%M')} · `{zone}`", inline=True)
         embed.add_field(name="Active Hazards", value=f"⚠️ {pollution.replace('_', ' ').title()}" if pollution != 'none' else "✅ None", inline=False)
         embed.add_field(name=f"Ecosystem Health: {score}/100", value=health_bar, inline=False)
-        
-        await ctx.send(embed=embed)   
+
+        # What that number actually BUYS. The score has always decided which types
+        # appear and now scales the rare tiers too, and a bonus nobody can see is a
+        # bonus nobody will work for - so it is stated in the units people care about
+        # rather than left as a bar to interpret.
+        rare_mult = ecosystem_multiplier(score, RARITY_SCORE_CEILING)
+        shiny_mult = ecosystem_multiplier(score, SHINY_SCORE_CEILING)
+
+        # The commands named here have to be ones that exist. `!plant` and `!clean` are
+        # the two that raise the score, and `!intervene` is the one that answers an
+        # active hazard - so which to suggest depends on whether there IS one.
+        repair = "`!intervene`" if pollution != 'none' else "`!plant` and `!clean`"
+
+        if rare_mult > 1.005:
+            verdict = f"A healthy habitat turns up rarer things. Keep it up with {repair}."
+        elif rare_mult < 0.995:
+            verdict = f"A damaged habitat turns up fewer. Use {repair} to bring it back."
+        else:
+            verdict = f"Baseline rates. Raise the score with {repair} to improve them."
+
+        embed.add_field(
+            name="Encounter Rates",
+            value=(f"⭐ Rare tiers **×{rare_mult:.2f}**  ·  "
+                   f"✨ Shiny **×{shiny_mult:.2f}**\n*{verdict}*"),
+            inline=False)
+
+        await ctx.send(embed=embed)
 async def setup(bot):
     await bot.add_cog(Ecology(bot))
+    # Registered so a click on a card that outlived its View - a redeploy, a crash -
+    # still reaches a handler. Without this the player gets Discord's own "This
+    # interaction failed", which reads as a broken bot rather than a stale card.
+    bot.add_dynamic_items(EncounterButton)
