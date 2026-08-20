@@ -1221,6 +1221,99 @@ def roll_rarity(tiers=HABITAT_RARITY, roll=None):
 
 
 # ==========================================
+# 🌍 A HEALTHY HABITAT DRAWS RARER THINGS
+# ==========================================
+# `servers.ecosystem_score` runs 0-100 and starts at 50. It already decided which TYPES
+# a habitat spawns - below 30 the pool narrows to poison/dark/steel, above 70 it gains
+# fairy/dragon/psychic - but it had no bearing at all on RARITY. Maintaining a habitat
+# changed the flavour of what appeared and never the odds of something remarkable.
+#
+# The curve is a power of the score's distance from the baseline:
+#
+#     multiplier = ceiling ** ((score - 50) / 50)
+#
+# which gives exactly three properties worth having. At 50 it is 1.0, so a server that
+# never touches its habitat sees precisely today's rates and this change is invisible to
+# them. At 100 it is the ceiling. At 0 it is 1/ceiling, so neglect costs the same factor
+# that care earns - the symmetry is the point, otherwise the "penalty" is just a smaller
+# bonus and there is no reason to ever repair anything.
+#
+# Two ceilings, because they are not the same kind of number. The rare TIERS are already
+# severe (a mythical is one spawn in a hundred thousand) and doubling them at a pristine
+# habitat still leaves them rare. Shiny is different: it is the reward people chase
+# hardest and the one whose value comes from being unlikely, so its ceiling is held
+# deliberately low and separately - 1.4x at a perfect score, and no arrangement of
+# settings moves it further.
+ECOSYSTEM_BASELINE = 50
+ECOSYSTEM_RANGE = 50.0
+
+RARITY_SCORE_CEILING = 2.0
+SHINY_SCORE_CEILING = 1.4
+
+# One in this many, before the habitat has any say.
+SHINY_BASE_ODDS = 4096
+
+
+def ecosystem_multiplier(score, ceiling=RARITY_SCORE_CEILING):
+    """
+    How much a habitat of this health multiplies a rate by.
+
+    A missing score is the baseline rather than zero. `servers` rows predate this and a
+    NULL there is "nobody has said", not "this habitat is dead" - reading it as dead
+    would quietly halve the rates on every server that has never run `!maintain`.
+    """
+    if score is None:
+        score = ECOSYSTEM_BASELINE
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        score = ECOSYSTEM_BASELINE
+
+    score = max(0.0, min(100.0, score))
+    return float(ceiling) ** ((score - ECOSYSTEM_BASELINE) / ECOSYSTEM_RANGE)
+
+
+def scaled_rarity(tiers=HABITAT_RARITY, score=None):
+    """
+    A rarity table with every tier's share scaled by the habitat's health.
+
+    Returns the same shape `roll_rarity` already takes, so the scaling is a decoration
+    on the existing table rather than a second way of choosing a tier.
+
+    The shares are clamped so they cannot sum past 1.0. At today's numbers the total is
+    about 3%, so the ceiling is nowhere in sight - but a future edit to the pseudo rate
+    (the one number in the table meant to be tuned by watching) plus a pristine habitat
+    is exactly how a table quietly starts spawning nothing ordinary at all.
+    """
+    multiplier = ecosystem_multiplier(score, RARITY_SCORE_CEILING)
+
+    scaled, budget = [], 1.0
+    for tier, share in tiers:
+        allowed = max(0.0, min(share * multiplier, budget))
+        scaled.append((tier, allowed))
+        budget -= allowed
+    return tuple(scaled)
+
+
+def shiny_chance(score=None, base_odds=SHINY_BASE_ODDS):
+    """
+    The probability of a shiny in a habitat of this health, as a fraction.
+
+    A probability rather than a denominator, because the caller used to be
+    `randint(1, 4096) == 1` and a scaled denominator would have to be rounded back to a
+    whole number - which at 1.4x turns 4096 into 2926 and quietly loses the rest.
+    """
+    return min(1.0, ecosystem_multiplier(score, SHINY_SCORE_CEILING) / float(base_odds))
+
+
+def roll_shiny(score=None, roll=None):
+    """Whether this specimen is shiny. `roll` is injectable so a test can pin it."""
+    if roll is None:
+        roll = random.random()
+    return roll < shiny_chance(score)
+
+
+# ==========================================
 # 🏷️ TAGS A SPECIMEN EARNS BY EXISTING
 # ==========================================
 # `custom_tag` is a single TEXT column, compared with `=` by the box browser's
