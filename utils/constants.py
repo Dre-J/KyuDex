@@ -656,12 +656,121 @@ TYPE_GEMS = {
 # sold until somebody implements what they actually do.
 INERT_PLATES = {'blank-plate', 'legend-plate'}
 
+# The unicode fallback set. Kept, and still the answer whenever a custom emoji cannot
+# be used or cannot be resolved - see `type_icon` below.
 TYPE_EMOJI = {
     'normal': '⬜', 'fire': '🔥', 'water': '💧', 'electric': '⚡', 'grass': '🌿',
     'ice': '🧊', 'fighting': '🥊', 'poison': '☠️', 'ground': '⛰️', 'flying': '🕊️',
     'psychic': '🔮', 'bug': '🐛', 'rock': '🪨', 'ghost': '👻', 'dragon': '🐉',
     'dark': '🌑', 'steel': '⚙️', 'fairy': '🧚',
+    # The nineteenth. Shadow is a Colosseum/XD type: 18 moves in `base_moves` carry it
+    # and NO species learns any of them, so it can never appear on a specimen - but
+    # `!movedex shadow-rush` still renders one, and rendering it as a bare question
+    # mark would look like a bug rather than like a move nothing can learn. There is no
+    # custom badge because the uploaded set is the eighteen real types.
+    'shadow': '🌒',
 }
+
+# ==========================================
+# 🎨 THE SERVER'S OWN TYPE BADGES
+# ==========================================
+# Uploaded by hand to the bot's home guild. A BOT may use a custom emoji from any guild
+# it is a member of, in every other guild it is in - which is why these render on a
+# server that has never seen them, and why the whole set has to stay in one place.
+#
+# The failure mode is worth knowing, because it is quiet: if the bot ever leaves the
+# guild these live in, or an id is wrong by a digit, Discord renders the raw text
+# `<:fire:1539779394397274213>` instead of an icon. Nothing errors. So `type_icon`
+# falls back to TYPE_EMOJI for anything not in this table rather than inventing a
+# reference that cannot resolve.
+TYPE_ICONS = {
+    'normal':   '<:normal:1539778963663093780>',
+    'fighting': '<:fighting:1539779058328539157>',
+    'flying':   '<:flying:1539779100229767268>',
+    'poison':   '<:poison:1539779146949861456>',
+    'ground':   '<:ground:1539779192181231626>',
+    'rock':     '<:rock:1539779237320458310>',
+    'bug':      '<:bug:1539779274330865774>',
+    'ghost':    '<:ghost:1539779315779113000>',
+    'steel':    '<:steel:1539779354618372096>',
+    'fire':     '<:fire:1539779394397274213>',
+    'water':    '<:water:1539779435958636555>',
+    'grass':    '<:grass:1539779478601998497>',
+    'electric': '<:electric:1539779510231236690>',
+    'psychic':  '<:psychic:1539779562186080406>',
+    'ice':      '<:ice:1539779613486747718>',
+    'dragon':   '<:dragon:1539779644629327922>',
+    'dark':     '<:dark:1539779706235256952>',
+    'fairy':    '<:fairy:1539779735779803316>',
+}
+
+
+def type_icon(element):
+    """
+    The badge for one element.
+
+    Falls through to the unicode set and then to a question mark, because the callers
+    are all display code: a type this table has never heard of - a typo, a NULL out of
+    the database, a new element in some future generation - should render as SOMETHING
+    rather than take an embed down with it.
+    """
+    key = str(element or '').strip().lower()
+    return TYPE_ICONS.get(key) or TYPE_EMOJI.get(key) or '❔'
+
+
+def type_badges(types, separator=" / "):
+    """
+    A specimen's typing, as badges: `<:fire:…> Fire / <:flying:…> Flying`.
+
+    One function rather than a formatting decision repeated at each of the dozen places
+    that show a typing - which is how `!view` and the market listing came to disagree
+    about whether an unknown type says "Unknown" or nothing at all.
+    """
+    labels = [f"{type_icon(t)} {str(t).strip().title()}"
+              for t in (types or []) if t and str(t).strip()]
+    return separator.join(labels) if labels else "❔ Unknown"
+
+
+def build_species_types():
+    """
+    Every species' typing, by name, read once at import.
+
+    Keyed by NAME rather than by pokedex id because that is what the callers hold: the
+    GTS stores `dep_species`/`req_species` as text, and its paginator renders
+    synchronously inside `create_embed`, so it cannot await a lookup at all.
+
+    Built the same way the TM shelf is - one read-only pass at import - because the
+    alternative is a query per row on a page that shows several, which is how a listing
+    page becomes slow without anybody noticing why.
+    """
+    table = {}
+    try:
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True) as _conn:
+            for name, element in _conn.execute("""
+                SELECT s.name, t.type_name
+                FROM base_pokemon_species s
+                JOIN base_pokemon_types t ON t.pokedex_id = s.pokedex_id
+                ORDER BY s.pokedex_id, t.rowid
+            """):
+                table.setdefault(str(name).lower(), []).append(element)
+    except Exception as e:
+        # A listing with no type badge is a worse listing, not a broken one.
+        print(f"⚠️ WARNING: could not read species typings ({e}).")
+    return table
+
+
+SPECIES_TYPES = build_species_types()
+
+
+def species_types(name):
+    """One species' typing, or an empty list for a name nothing recognises."""
+    return SPECIES_TYPES.get(str(name or '').strip().lower(), [])
+
+
+def species_badges(name, separator=" / "):
+    """A species' typing as badges, from its name alone."""
+    return type_badges(species_types(name), separator)
 
 # Prices, in the same band as the battle equipment already on sale (400 situational,
 # 600 set-defining). A plate costs more than a plain enhancer because it does two jobs:
@@ -686,7 +795,7 @@ def build_type_booster_stock():
             "name": item.replace('-', ' ').title(),
             "price": PLATE_PRICE,
             "desc": f"1.2x to {element.title()} moves, and sets Arceus/Judgment to {element.title()}.",
-            "emoji": TYPE_EMOJI.get(element, '💠'),
+            "emoji": type_icon(element),
             "category": "typeboost",
         }
 
@@ -695,7 +804,7 @@ def build_type_booster_stock():
             "name": item.replace('-', ' ').title(),
             "price": TYPE_ENHANCER_PRICE,
             "desc": f"1.2x damage to the holder's {element.title()}-type moves.",
-            "emoji": TYPE_EMOJI.get(element, '💠'),
+            "emoji": type_icon(element),
             "category": "typeboost",
         }
 
@@ -704,7 +813,7 @@ def build_type_booster_stock():
             "name": item.replace('-', ' ').title(),
             "price": TYPE_GEM_PRICE,
             "desc": f"{TYPE_GEM_MULTIPLIER}x to one {element.title()}-type move, then it is used up.",
-            "emoji": TYPE_EMOJI.get(element, '💠'),
+            "emoji": type_icon(element),
             "category": "typeboost",
         }
 
@@ -901,7 +1010,7 @@ def build_tm_stock():
             "name": f"TM {pretty}",
             "price": price,
             "desc": f"{desc} Apply it with `!tm`.",
-            "emoji": TYPE_EMOJI.get(element, '💿'),
+            "emoji": type_icon(element),
             "category": "tm",
             # Kept so the shop can filter on them without going back to the database
             # on every keystroke of a search.

@@ -11,7 +11,7 @@ from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, 
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
-from utils.constants import TM_CATALOG, TYPE_EMOJI
+from utils.constants import TM_CATALOG, type_badges, type_icon
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -3701,7 +3701,7 @@ class DetailedMovepoolPaginator(discord.ui.View):
                 pwr_display = move['power'] if move['power'] and move['power'] > 0 else "-"
             acc_display = f"{move['accuracy']}%" if move['accuracy'] else "-"
             
-            desc = f"**Type:** {move['type'].capitalize()} | {dmg_icon} **{move['class'].capitalize()}**\n"
+            desc = f"{type_badges([move['type']])} | {dmg_icon} **{move['class'].capitalize()}**\n"
             desc += f"**Power:** {pwr_display} | **Accuracy:** {acc_display} | **PP:** {move['pp']}"
 
             # How to GET it, which is the half the listing never answered. The old
@@ -10291,8 +10291,8 @@ class Combat(commands.Cog):
                 names = ", ".join(f"`{m.replace('-', ' ').title()}`"
                                   for m in by_type[element])
                 embed.add_field(
-                    name=f"{TYPE_EMOJI.get(element, '💿')} {element.title()}",
-                    value=names[:1024], inline=False)
+                    name=f"{element.title()}",
+                    value=f"{type_icon(element)} {names}"[:1024], inline=False)
 
             await ctx.send(embed=embed)
 
@@ -10881,7 +10881,7 @@ class Combat(commands.Cog):
         # Build the UI
         embed = discord.Embed(title=f"📖 Field Guide: {name.replace('-', ' ').title()}", color=embed_color)
         
-        embed.add_field(name="Elemental Type", value=move_type.capitalize(), inline=True)
+        embed.add_field(name="Elemental Type", value=type_badges([move_type]), inline=True)
         embed.add_field(name="Classification", value=f"{dmg_icon} {dmg_class.capitalize()}", inline=True)
         embed.add_field(name="Base Power", value=str(pwr_display), inline=True)
         

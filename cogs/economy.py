@@ -4,7 +4,8 @@ import random
 import discord
 from discord.ext import commands
 from utils.constants import (DB_FILE, EQUIPMENT_CATALOG, SHOP_CATALOG, TM_SHOP,
-                             TM_CATALOG, TM_TIER_PRICES, CATEGORY_OPTIONS)
+                             TM_CATALOG, TM_TIER_PRICES, CATEGORY_OPTIONS,
+                             type_badges, species_badges)
 from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
                            suggest_species)
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
@@ -157,12 +158,15 @@ class GTSSearchPaginator(discord.ui.View):
             title=f"GTS Entry: {shiny_icon} {p_name} {gender_icon} (Lvl {p_lvl})",
             color=discord.Color.blue()
         )
-        embed.add_field(name="🧬 Biological Data", value=f"**Ability:** {p_abil}\n**IV Potential:** {iv_pct}%", inline=True)
+        embed.add_field(name="🧬 Biological Data",
+                        value=f"{species_badges(p_name)}\n**Ability:** {p_abil}\n"
+                              f"**IV Potential:** {iv_pct}%", inline=True)
         embed.add_field(name="📝 Trainer Message", value=f"*{msg}*", inline=False)
-        
+
         embed.add_field(
-            name="⚠️ Requirements for Trade", 
-            value=f"**Species:** {req_sp}\n**Level:** {req_lvl_str}\n**Gender:** {req_gen}", 
+            name="⚠️ Requirements for Trade",
+            value=f"**Species:** {req_sp}  {species_badges(req_sp)}\n"
+                  f"**Level:** {req_lvl_str}\n**Gender:** {req_gen}",
             inline=False
         )
         
@@ -810,7 +814,10 @@ class TMShelfView(discord.ui.View):
         body = []
         for move in self.moves[start:start + self.PER_PAGE]:
             data = TM_CATALOG.get(move, {})
-            mark = "✅" if move in self.owned else data.get('emoji', '💿')
+            # The type badge always leads, because it is what the eye scans a list of
+            # forty moves for. Ownership is already said in the cost slot, so a tick
+            # here was spending the one distinctive glyph on the less useful fact.
+            mark = data.get('emoji', '💿')
             bits = [(data.get('type') or 'normal').title()]
             if data.get('power'):
                 bits.append(f"{data['power']} power")
@@ -970,7 +977,7 @@ class MarketPaginator(discord.ui.View):
                 # Format the time remaining cleanly
                 embed.add_field(
                     name=f"Listing #{item['list_id']} | {shiny_icon} {item['name'].capitalize()} (Lv. {item['level']})",
-                    value=f"**Price:** 🪙 {item['price']:,} Tokens\n**Seller ID:** `{item['seller']}`\n**Listed Pokemon ID:** `{item['uuid'][:8]}`",
+                    value=f"{species_badges(item['name'])}\n**Price:** 🪙 {item['price']:,} Tokens\n**Seller ID:** `{item['seller']}`\n**Listed Pokemon ID:** `{item['uuid'][:8]}`",
                     inline=False
                 )
 
@@ -1203,7 +1210,9 @@ class Economy(commands.Cog):
             embed.add_field(
                 name=f"ID: `{gts_id}`",
                 value=f"**Offered:** {pretty_species(dep_sp)} (Lvl {dep_lvl})\n"
-                      f"**Seeking:** {pretty_species(req_sp)} ({lvl_req})",
+                      f"{species_badges(dep_sp)}\n"
+                      f"**Seeking:** {pretty_species(req_sp)} ({lvl_req})\n"
+                      f"{species_badges(req_sp)}",
                 inline=False
             )
             
@@ -1453,7 +1462,7 @@ class Economy(commands.Cog):
                     ORDER BY gm.listed_at DESC
                 """) as cursor:
                     rows = await cursor.fetchall()
-            
+
             # 3. Package the data for the UI
             market_data = []
             for row in rows:
@@ -1464,7 +1473,7 @@ class Economy(commands.Cog):
                     'name': row[3],
                     'level': row[4],
                     'is_shiny': row[5],
-                    'uuid': row[6] 
+                    'uuid': row[6]
                 })
                 
             # 4. Boot up the Paginator
@@ -1496,7 +1505,7 @@ class Economy(commands.Cog):
                     WHERE gm.listing_id = ?
                 """, (listing_id,)) as cursor:
                     data = await cursor.fetchone()
-            
+
             if not data:
                 return await ctx.send(f"❌ Listing `#{listing_id}` does not exist or has already expired.")
                 
@@ -1550,7 +1559,7 @@ class Economy(commands.Cog):
             # Biological Specs
             embed.add_field(
                 name=f"Biological Profile", 
-                value=f"**Species:** {shiny_icon} {name.capitalize()}{gmax_marker}\n**Level:** {level}\n**Nature:** {nature.capitalize()}\n**Ability:** {ability.replace('-', ' ').title() if ability else 'Unknown'}", 
+                value=f"**Species:** {shiny_icon} {name.capitalize()}{gmax_marker}\n**Type:** {species_badges(name)}\n**Level:** {level}\n**Nature:** {nature.capitalize()}\n**Ability:** {ability.replace('-', ' ').title() if ability else 'Unknown'}",
                 inline=False
             )
             
@@ -2020,7 +2029,7 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                                 value=(data.get('class') or 'status').title(),
                                 inline=True)
                 embed.add_field(name="Type",
-                                value=(data.get('type') or 'normal').title(),
+                                value=type_badges([data.get('type') or 'normal']),
                                 inline=True)
 
                 # Which of THEIR specimens can take it. A price is not the useful half
