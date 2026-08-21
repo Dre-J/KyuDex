@@ -5374,9 +5374,10 @@ class BattleDashboard(discord.ui.View):
                         # live in turn_order_key so both engines cannot disagree; PvE used
                         # to compute a trick_room flag here and then never consult it.
                         is_trick_room = state.get('field', {}).get('trick_room', 0) > 0
-                        p_key = turn_order_key(p_prio, priority_tier(p_active, p_move_stats),
+                        _mr = state.get('field', {}).get('magic_room', 0) > 0
+                        p_key = turn_order_key(p_prio, priority_tier(p_active, p_move_stats, _mr),
                                                p_speed, is_trick_room)
-                        n_key = turn_order_key(n_prio, priority_tier(n_active, n_move_stats),
+                        n_key = turn_order_key(n_prio, priority_tier(n_active, n_move_stats, _mr),
                                                n_speed, is_trick_room)
 
                         if p_key > n_key:
@@ -5762,7 +5763,8 @@ class BattleDashboard(discord.ui.View):
                             # of this cannot drift apart.
                             final_acc = hit_chance(
                                 attacker, defender, move_stats,
-                                weather=state.get('weather', {'type': 'none'})['type'])
+                                weather=state.get('weather', {'type': 'none'})['type'],
+                                magic_room=state.get('field', {}).get('magic_room', 0) > 0)
 
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:
@@ -8460,8 +8462,9 @@ class Combat(commands.Cog):
             # cannot order a turn differently.
             _p1_move = c1.get('data') if c1.get('type') == 'attack' else None
             _p2_move = c2.get('data') if c2.get('type') == 'attack' else None
-            key1 = turn_order_key(p1_prio, priority_tier(p1_active, _p1_move), spd1, is_trick_room)
-            key2 = turn_order_key(p2_prio, priority_tier(p2_active, _p2_move), spd2, is_trick_room)
+            _mr = state.get('field', {}).get('magic_room', 0) > 0
+            key1 = turn_order_key(p1_prio, priority_tier(p1_active, _p1_move, _mr), spd1, is_trick_room)
+            key2 = turn_order_key(p2_prio, priority_tier(p2_active, _p2_move, _mr), spd2, is_trick_room)
 
             if key1 > key2:
                 p1_goes_first = True
@@ -8929,7 +8932,8 @@ class Combat(commands.Cog):
                             # of this cannot drift apart.
                             final_acc = hit_chance(
                                 attacker, defender, move_stats,
-                                weather=state.get('weather', {'type': 'none'})['type'])
+                                weather=state.get('weather', {'type': 'none'})['type'],
+                                magic_room=state.get('field', {}).get('magic_room', 0) > 0)
 
                             # 3. Roll the dice!
                             if random.uniform(0, 100) > final_acc:

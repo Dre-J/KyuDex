@@ -1104,6 +1104,108 @@ EQUIPMENT_CATALOG.update(build_phase3_stock())
 
 
 # ==========================================
+# 🎯 THE PHASE 4 SHELF - ACCURACY, CRITS AND FLINCHING
+# ==========================================
+# Nine items that bend a ROLL rather than a number, and every roll they bend already
+# goes through one shared function: hit_chance for the lenses and the evasion pair,
+# priority_tier for the claw and the two that dawdle, and the same inflicted_status
+# route Stench uses for the two that flinch.
+#
+# The two evasion items are written as the ACCURACY figure the games use rather than as
+# the "+1/9 evasion" their PokeAPI text quotes. For Bright Powder the two are the same
+# number - 1/(1 + 1/9) is exactly 0.9 - and for Lax Incense the games' flat 0.95 is half
+# a percent away from the 1/1.05 the text implies. Matching the games is worth more than
+# matching the blurb, and this comment is here so the difference is a decision.
+ITEM_ACCURACY_MULTIPLIERS = {
+    'wide-lens': 1.1,
+}
+
+# Zoom Lens is the same idea with a condition: it only sharpens the holder when the
+# holder is moving SECOND, which the engines already track as `acted_this_turn` for
+# Bolt Beak. Kept out of the table above because a flat lookup cannot express it.
+ZOOM_LENS_MULTIPLIER = 1.2
+
+# What each item does to the accuracy of moves aimed AT its holder. Lower is harder to
+# hit. Stored this way round rather than as an evasion divisor because that is the form
+# the games state, and the one place that reads it inverts it once.
+ITEM_ACCURACY_AGAINST_HOLDER = {
+    'bright-powder': 0.9,
+    'lax-incense': 0.95,
+}
+
+# King's Rock and Razor Fang staple a flinch chance onto every damaging move the holder
+# throws - the same sentence as Stench, so they take the same route through
+# inflicted_status and inherit Inner Focus's refusal for free.
+#
+# Two deliberate non-interactions, both matching the modern games: Serene Grace does NOT
+# double this, and Shield Dust does NOT block it. Neither is a move's secondary effect,
+# which is what those two abilities answer.
+ITEM_FLINCH_CHANCE = {
+    'kings-rock': 10,
+    'razor-fang': 10,
+}
+
+# Quick Claw jumps to the front of its bracket 3 times in 16. Written as the fraction
+# rather than as 18.75 because the roll below compares against it directly, and a
+# percentage would invite the randint(1, 100) form that cannot express three-sixteenths.
+QUICK_CLAW_ODDS = 3 / 16
+
+# ...and the two that go to the BACK of their bracket, always. The item half of
+# LAST_IN_BRACKET_ABILITIES.
+LAST_IN_BRACKET_ITEMS = {'lagging-tail', 'full-incense'}
+
+PHASE4_PRICE = 350
+
+PHASE4_DESCRIPTIONS = {
+    'wide-lens':     "Every move the holder uses is 10% more accurate.",
+    'zoom-lens':     "The holder's moves are 20% more accurate when it moves second.",
+    'bright-powder': "Moves aimed at the holder are 10% less accurate.",
+    'lax-incense':   "Moves aimed at the holder are 5% less accurate.",
+    'kings-rock':    "The holder's damaging moves gain a 10% chance to flinch.",
+    'razor-fang':    "The holder's damaging moves gain a 10% chance to flinch.",
+    'quick-claw':    "The holder has a 3-in-16 chance to move first in its bracket.",
+    'lagging-tail':  "The holder always moves last in its bracket.",
+    'full-incense':  "The holder always moves last in its bracket.",
+}
+
+PHASE4_EMOJI = {
+    'wide-lens': '🔍', 'zoom-lens': '🔬', 'bright-powder': '✨', 'lax-incense': '🌸',
+    'kings-rock': '👑', 'razor-fang': '🦷', 'quick-claw': '🪝',
+    'lagging-tail': '🐌', 'full-incense': '🕯️',
+}
+
+
+def build_phase4_stock():
+    """
+    The Phase 4 shelf, checked against the tables the engine reads.
+
+    Same assertion as Phases 2 and 3: an item on this shelf that no table implements is
+    an item the shop charges for and the engine ignores.
+    """
+    implemented = (set(ITEM_ACCURACY_MULTIPLIERS) | {'zoom-lens'}
+                   | set(ITEM_ACCURACY_AGAINST_HOLDER) | set(ITEM_FLINCH_CHANCE)
+                   | {'quick-claw'} | set(LAST_IN_BRACKET_ITEMS))
+    missing = implemented - set(PHASE4_DESCRIPTIONS)
+    assert not missing, f"Phase 4 items with no shop entry: {sorted(missing)}"
+    extra = set(PHASE4_DESCRIPTIONS) - implemented
+    assert not extra, f"Phase 4 shop entries with no implementation: {sorted(extra)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE4_PRICE,
+            "desc": PHASE4_DESCRIPTIONS[item],
+            "emoji": PHASE4_EMOJI.get(item, '🎯'),
+            "category": "battleitems",
+        }
+        for item in sorted(implemented)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase4_stock())
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a
