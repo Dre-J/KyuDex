@@ -370,7 +370,11 @@ EQUIPMENT_CATALOG = {
     "water-stone":    {"name": "Water Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, blue and glistens.", "emoji": "💎", "category": "evoitems"},
     "leaf-stone":    {"name": "Leaf Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is green and mossy.", "emoji": "💎", "category": "evoitems"},
     "fire-stone":    {"name": "Fire Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, orange and glistens.", "emoji": "💎", "category": "evoitems"},
-    "rare-candy":    {"name": "Rare Candy", "price": 10000, "desc": "A sweet treat that increases a pokemon's level by 1.", "emoji": "🍬", "category": "evoitems"},
+    # 10,000 made a single level cost more than most of the shop put together, so the
+    # candy was a curiosity rather than a tool and nobody built a second team. At 1,200
+    # it is a real option and still dear enough that levelling by battling is the
+    # cheaper road - which is the balance it should have had.
+    "rare-candy":    {"name": "Rare Candy", "price": 1200, "desc": "A sweet treat that increases a pokemon's level by 1.", "emoji": "🍬", "category": "evoitems"},
 
     # ==========================================
     # HELD BATTLE EQUIPMENT
@@ -729,6 +733,80 @@ def type_badges(types, separator=" / "):
     labels = [f"{type_icon(t)} {str(t).strip().title()}"
               for t in (types or []) if t and str(t).strip()]
     return separator.join(labels) if labels else "❔ Unknown"
+
+
+# ==========================================
+# 🏅 THE TRAIT BADGES
+# ==========================================
+# The two things a specimen can BE rather than have. Both were being drawn with a
+# stand-in unicode glyph chosen separately at each site, so the box browser called a
+# G-Max specimen 🌪️, the market called the same one 🌀, and an Alpha was the word
+# "ALPHA" in the box and 🔥 on the catch card.
+#
+# Same rule as the type badges: NEVER put one inside a code span. A custom emoji in
+# backticks renders as its raw `<:alpha:154…>` text, which is the one place these
+# cannot go.
+GMAX_ICON = '<:gigantamax:1540095450030411806>'
+ALPHA_ICON = '<:alpha:1540095412286001192>'
+
+# The Poke Ball line, for the encounter panel's buttons. Discord takes a custom emoji on
+# a button through its own `emoji=` parameter rather than in the label, so these are
+# stored as bare ids and parsed by the caller - a button label containing `<:x:1>` shows
+# the literal text.
+BALL_ICONS = {
+    'pokeball':   '<:pokeball:1538255998014193744>',
+    'greatball':  '<:greatball:1538256357457789068>',
+    'ultraball':  '<:ultraball:1538256466698305596>',
+    'masterball': '<:masterball:1538256522193276978>',
+}
+
+# Unicode stand-ins, used only where a custom emoji cannot go. A bot may use a custom
+# emoji from any guild it is in, so these should almost never be reached - but a badge
+# that silently renders as raw text is worse than a plain circle.
+BALL_FALLBACK = {
+    'pokeball': '⚪', 'greatball': '🔵', 'ultraball': '🟡', 'masterball': '🟣',
+}
+
+
+def ball_icon(key):
+    """The badge for one ball, falling through to a coloured circle."""
+    key = str(key or '').strip().lower()
+    return BALL_ICONS.get(key) or BALL_FALLBACK.get(key) or '⚪'
+
+
+def is_alpha_size(height_multiplier):
+    """
+    Whether a height multiplier makes this specimen an Alpha.
+
+    One question asked in one place. The tagger, the catch card and the box browser each
+    compared against the threshold themselves, which is how a specimen could be labelled
+    ALPHA by one and not tagged as one by another.
+    """
+    try:
+        return float(height_multiplier or 0) >= ALPHA_HEIGHT_THRESHOLD
+    except (TypeError, ValueError):
+        return False
+
+
+def trait_badges(*, gmax=False, height_multiplier=None, shiny=False, spaced=True):
+    """
+    The badges a specimen carries, in a fixed order, or an empty string.
+
+    Order is deliberate and shared: shiny, then Alpha, then G-Max. A caller that wants
+    only some of them passes only those. Returns '' when there is nothing to say, so it
+    can be concatenated into a title without leaving a stray gap.
+    """
+    marks = []
+    if shiny:
+        marks.append('🌟')
+    if is_alpha_size(height_multiplier):
+        marks.append(ALPHA_ICON)
+    if gmax:
+        marks.append(GMAX_ICON)
+    if not marks:
+        return ''
+    joined = ' '.join(marks)
+    return f" {joined}" if spaced else joined
 
 
 def build_species_types():
@@ -1274,6 +1352,45 @@ EXPEDITION_BIOMES = {
     'apex':   {'emoji': '🐉', 'types': ('dragon',),
                'blurb': "The high ridge. Dragons only, and nothing else at all."},
 }
+
+# ==========================================
+# ⚔️ DUEL FORMATS
+# ==========================================
+# The levels a PvP duel may be normalised to. 50 and 100 are the two the competitive
+# formats use and the two worth having: 50 is where most movepools and items are
+# available without the numbers getting silly, and 100 is the ceiling.
+#
+# A capped duel does NOT pay experience and does not level anything up - see
+# `initialize_pvp_battle`. A specimen fighting at a level it has not reached is a test
+# of the team, not a training session, and letting a level-20 specimen earn against a
+# level-100 threshold is how a spar would permanently rewrite it.
+PVP_LEVEL_CAPS = (50, 100)
+
+
+def parse_level_cap(text):
+    """
+    A duel's level cap from what somebody typed, as (cap, complaint).
+
+    Accepts `50`, `100`, `lv50`, `level 100`, `50s`. Returns (None, None) for nothing at
+    all, which is an uncapped duel at everybody's real levels.
+    """
+    raw = str(text or '').strip().lower()
+    if not raw:
+        return None, None
+
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return None, (f"⚠️ I did not understand `{text}`. A duel is either uncapped or "
+                      f"set to {' or '.join(str(c) for c in PVP_LEVEL_CAPS)} — "
+                      f"try `!battle @them 50`.")
+
+    value = int(digits)
+    if value not in PVP_LEVEL_CAPS:
+        return None, (f"⚠️ Level **{value}** is not a duel format. Pick "
+                      f"{' or '.join(str(c) for c in PVP_LEVEL_CAPS)}, or leave it off "
+                      f"to fight at your real levels.")
+    return value, None
+
 
 # Five minutes between trips. Long enough that `!expedition` is not a button to mash,
 # short enough that a session is not spent waiting - and it is the throttle that

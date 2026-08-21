@@ -12,6 +12,7 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              STARTER_CAN_BE_SHINY, type_badges,
                              scaled_rarity, roll_shiny, ecosystem_multiplier,
                              SHINY_SCORE_CEILING, RARITY_SCORE_CEILING,
+                             shiny_chance, ECOSYSTEM_BASELINE,
                              STARTER_IV_CEILING, OFFICIAL_BROADCAST_CHANNEL_ID,
                              SURVEY_EXCLUDES_RARE_SPECIES, spawnable_forms,
                              ultra_beasts, paradox_species,
@@ -24,7 +25,9 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              sql_type_tuple,
                              EXPEDITION_COOLDOWN_SECONDS, EXPEDITION_WARN_AT,
                              HABITAT_DEGRADED_BELOW, HABITAT_PRISTINE_ABOVE,
-                             HABITAT_DEGRADED_TYPES, HABITAT_PRISTINE_BONUS)
+                             HABITAT_DEGRADED_TYPES, HABITAT_PRISTINE_BONUS,
+                             ball_icon, BALL_FALLBACK, trait_badges, is_alpha_size,
+                             GMAX_ICON, ALPHA_ICON)
 from utils.limits import (EXPEDITION, EXPEDITION_DAILY_CAP, check_cap,
                           record_use, describe_reset)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
@@ -32,6 +35,7 @@ import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
+from utils.roster import locate_specimen
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
@@ -165,12 +169,33 @@ def hint_seed(spawn, display_name):
 # to the channel, so one person dismissing it would be taking it from everyone.
 
 BALL_BUTTONS = (
-    # key, label, emoji, whether it must be held in the pack
-    ('pokeball',   'Poké Ball',   '⚪', False),
-    ('greatball',  'Great Ball',  '🔵', True),
-    ('ultraball',  'Ultra Ball',  '🟡', True),
-    ('masterball', 'Master Ball', '🟣', True),
+    # key, label, whether it must be held in the pack. The emoji is looked up rather
+    # than written here, so the panel and anything else that draws a ball agree.
+    ('pokeball',   'Poké Ball',   False),
+    ('greatball',  'Great Ball',  True),
+    ('ultraball',  'Ultra Ball',  True),
+    ('masterball', 'Master Ball', True),
 )
+
+
+def button_emoji(key):
+    """
+    A ball's badge as something a Button will accept.
+
+    Discord takes a button's emoji through its own `emoji=` parameter; a custom emoji
+    written into the LABEL renders as the literal text `<:pokeball:153…>`. It also wants
+    a PartialEmoji rather than that string, so the id is parsed back out here.
+
+    A malformed entry falls through to the unicode circle instead of taking the whole
+    encounter panel down with it - the panel is how a specimen gets caught, and a
+    missing picture is not a reason to lose the catch.
+    """
+    raw = ball_icon(key)
+    try:
+        return discord.PartialEmoji.from_str(raw)
+    except Exception:                                      # pragma: no cover
+        print(f"⚠️ Could not parse ball emoji for {key}: {raw!r}")
+        return BALL_FALLBACK.get(key, '⚪')
 
 # A Poke Ball is free and unlimited everywhere else in the bot, so its button is never
 # disabled and never carries a count.
@@ -238,13 +263,13 @@ class EncounterButton(
     def _default_emoji(action):
         if action == 'flee':
             return '🏃'
-        return next((e for key, _, e, _ in BALL_BUTTONS if key == action), '⚪')
+        return button_emoji(action)
 
     @staticmethod
     def _default_label(action, count):
         if action == 'flee':
             return 'Leave it'
-        name = next((n for key, n, _, _ in BALL_BUTTONS if key == action), action.title())
+        name = next((n for key, n, _ in BALL_BUTTONS if key == action), action.title())
         # The count is on the button because the alternative is opening `!backpack`
         # mid-encounter to find out whether you can afford the throw you are about to
         # make. A free ball has no count to show.
@@ -352,7 +377,7 @@ class EncounterButton(
 
 async def ball_counts(user_id):
     """How many of each purchasable ball this trainer holds."""
-    wanted = [key for key, _, _, needed in BALL_BUTTONS if needed]
+    wanted = [key for key, _, needed in BALL_BUTTONS if needed]
     marks = ','.join('?' * len(wanted))
     try:
         async with aiosqlite.connect(DB_FILE) as db:
@@ -378,7 +403,7 @@ async def build_encounter_view(owner_id, spawn_id, timeout=None):
     counts = await ball_counts(owner_id)
 
     view = discord.ui.View(timeout=timeout)
-    for key, _label, _emoji, needed in BALL_BUTTONS:
+    for key, _label, needed in BALL_BUTTONS:
         held = counts.get(key, 0)
         view.add_item(EncounterButton(
             owner_id, spawn_id, key,
@@ -919,8 +944,10 @@ class PokemonPaginator(discord.ui.View):
         display_title = f'"{nickname}" {name.capitalize()}' if nickname else name.capitalize()
         display_ability = ability.replace('-', ' ').title() if ability else "Unknown"
         item_display = held_item.replace('-', ' ').title() if held_item != 'none' else "None"
-        gmax_icon = " 🌪️ (G-Max Factor)" if gmax_factor else ""
-        
+        # The shiny star stays on `title_prefix` below, which already carries it, so
+        # only the two trait badges are asked for here.
+        gmax_icon = trait_badges(gmax=gmax_factor, height_multiplier=h_mult)
+
         if happiness < 50: bond_icon = "🤍🤍🤍 (Acclimating)"
         elif happiness < 150: bond_icon = "❤️🤍🤍 (Trusting)"
         elif happiness < 220: bond_icon = "❤️❤️🤍 (Bonded)"
@@ -949,7 +976,7 @@ class PokemonPaginator(discord.ui.View):
         size_tag = "Average"
         if h_mult <= 0.80: size_tag = "Teeny"
         elif h_mult <= 0.95: size_tag = "Small"
-        elif h_mult >= ALPHA_HEIGHT_THRESHOLD: size_tag = "ALPHA"
+        elif is_alpha_size(h_mult): size_tag = f"{ALPHA_ICON} ALPHA"
         elif h_mult >= 1.06: size_tag = "Large"
 
         # ==========================================
@@ -3696,7 +3723,7 @@ class Ecology(commands.Cog):
                 elif iv_percentage >= 40: appraisal = "C-Tier (Average)"
                 else: appraisal = "D-Tier (Weak)"
                 
-                alpha_tag = "🔥 **ALPHA** " if is_alpha else ""
+                alpha_tag = f"{ALPHA_ICON} **ALPHA** " if is_alpha else ""
 
                 base_desc = f"**{ctx.author.name}** successfully tagged the {alpha_tag}**{gender_emoji} {typed_name.capitalize().replace('-', ' ')}** using a {ball_type.capitalize()}!\n\n"
                 
@@ -4061,8 +4088,22 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     @checks.is_not_in_combat()
-    async def use_rare_candy(self, ctx, box_number: int, amount: int = 1):
-        """Feed rare candies to a specimen to artificially accelerate its growth."""
+    async def use_rare_candy(self, ctx, target: str = None, amount: int = 1):
+        """
+        Feed rare candies to a specimen. `!candy` alone feeds your selected partner.
+
+        The box number used to be REQUIRED, so the specimen a trainer is actively
+        levelling - the one `!partner` selected, the one every other command already
+        defaults to - was the one thing `!candy` could not be pointed at without first
+        going to look its box number up.
+
+        `target` takes a box number, a tag, the word `partner`, or nothing at all, which
+        is the same vocabulary `!equip`, `!learn` and the rest already accept.
+        """
+        # `!candy 5` means box 5, but `!candy 5` could also read as "five candies" - and
+        # the old signature made the first word a box number, so it stays one. A single
+        # number with no second argument is therefore a TARGET, which is what it has
+        # always been.
         if amount <= 0:
             return await ctx.send("⚠️ You must use at least 1 candy.")
 
@@ -4070,7 +4111,7 @@ class Ecology(commands.Cog):
 
         async with aiosqlite.connect(DB_FILE) as db:
             async with db.execute("""
-                SELECT quantity FROM user_inventory 
+                SELECT quantity FROM user_inventory
                 WHERE user_id = ? AND item_name IN ('rare candy', 'rare-candy')
             """, (user_id,)) as cursor:
                 candy_record = await cursor.fetchone()
@@ -4078,27 +4119,16 @@ class Ecology(commands.Cog):
             if not candy_record or candy_record[0] < amount:
                 return await ctx.send(f"🍬 You do not have `{amount}x Rare Candy` in your inventory.")
 
-            # 🚨 UPDATE: Fetch held_item and ability traits
-            async with db.execute("""
-                WITH NumberedPC AS (
-                    SELECT 
-                        cp.instance_id, cp.level, cp.pokedex_id, cp.happiness, cp.held_item, cp.ability,
-                        s.name, s.growth_rate, s.standard_abilities, s.hidden_ability,
-                        ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ? 
-                      AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                      AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)  
-                )
-                SELECT instance_id, level, pokedex_id, happiness, name, growth_rate, held_item, ability, standard_abilities, hidden_ability 
-                FROM NumberedPC 
-                WHERE box_number = ?
-            """, (user_id, box_number)) as cursor:
-                pokemon = await cursor.fetchone()
-
-            if not pokemon:
-                return await ctx.send(f"⚠️ Could not find a valid specimen at Box `#{box_number}`. It may be deployed on a mission or doesn't exist.")
+            # The shared locator, so a box number here counts the same rows a box number
+            # anywhere else does - the hand-rolled CTE this replaces was a fourth copy of
+            # that numbering.
+            pokemon, complaint = await locate_specimen(
+                db, user_id, target,
+                "cp.instance_id, cp.level, cp.pokedex_id, cp.happiness, s.name, "
+                "s.growth_rate, cp.held_item, cp.ability, s.standard_abilities, "
+                "s.hidden_ability")
+            if complaint:
+                return await ctx.send(complaint)
 
             instance_id, current_level, pokedex_id, happiness, species_name, growth_rate, held_item, current_ability, current_standards, current_hidden = pokemon
 
@@ -4767,6 +4797,97 @@ class Ecology(commands.Cog):
             inline=False)
 
         await ctx.send(embed=embed)
+
+    # ==========================================
+    # 🎲 THE ODDS
+    # ==========================================
+    @commands.command(name="rates", aliases=["odds", "rarity", "chances"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def encounter_rates(self, ctx):
+        """The real odds on every rare tier, scaled by this server's ecosystem score."""
+        # `!habitat` shows the two multipliers, which answers "is my score doing
+        # anything" but not "what are my chances". Those are different questions and
+        # the second is the one people actually ask.
+        guild_id = str(ctx.guild.id) if ctx.guild else None
+
+        score = ECOSYSTEM_BASELINE
+        async with aiosqlite.connect(DB_FILE) as db:
+            if guild_id:
+                async with db.execute(
+                        "SELECT ecosystem_score FROM servers WHERE guild_id = ?",
+                        (guild_id,)) as cursor:
+                    row = await cursor.fetchone()
+                if row and row[0] is not None:
+                    score = row[0]
+
+            # How many species share each tier. A 0.3% tier split across twenty species
+            # is a very different thing from a 0.3% tier with one, and the per-tier
+            # number on its own hides that completely.
+            populations = {}
+            for tier, _ in HABITAT_RARITY:
+                async with db.execute(
+                        f"SELECT COUNT(*) FROM base_pokemon_species s "
+                        f"WHERE {spawnable_forms('s')} {rarity_filter(tier, 's')}"
+                ) as cursor:
+                    populations[tier] = (await cursor.fetchone())[0]
+
+        tiers = scaled_rarity(HABITAT_RARITY, score)
+        shiny = shiny_chance(score)
+
+        embed = discord.Embed(
+            title="🎲 Encounter Rates",
+            description=(f"Rolled fresh for every wild spawn and every expedition, "
+                         f"against this server's ecosystem score of **{score}/100**."),
+            color=discord.Color.purple())
+
+        lines = []
+        rare_total = 0.0
+        for tier, chance in tiers:
+            rare_total += chance
+            count = populations.get(tier, 0)
+            per_species = (chance / count) if count else 0
+            lines.append(
+                f"{RARITY_LABELS[tier]} — **{chance * 100:.3f}%**  ·  1 in "
+                f"**{round(1 / chance):,}**\n"
+                f"　*{count} species share this tier "
+                + (f"· 1 in {round(1 / per_species):,} for a named one*"
+                   if per_species else "*"))
+
+        embed.add_field(name="Rare Tiers", value="\n".join(lines), inline=False)
+
+        embed.add_field(
+            name="Ordinary Wildlife",
+            value=f"Everything else — **{(1 - rare_total) * 100:.2f}%**",
+            inline=False)
+
+        # Shiny is rolled separately from the tier, so a shiny pseudo-legendary is the
+        # two chances multiplied rather than a tier of its own. Worth saying, because
+        # the number underneath it is otherwise the most misread in the bot.
+        embed.add_field(
+            name="✨ Shiny",
+            value=(f"1 in **{round(1 / shiny):,}** — rolled *separately* from the "
+                   f"tier above, so a shiny pseudo-legendary is both at once "
+                   f"(1 in {round(1 / (shiny * dict(tiers)['pseudo'])):,})."),
+            inline=False)
+
+        # What moving the score would do, in the same units as the table above.
+        best = scaled_rarity(HABITAT_RARITY, 100)
+        worst = scaled_rarity(HABITAT_RARITY, 0)
+        embed.add_field(
+            name="What the score is worth",
+            value=(f"At **0** a pseudo is 1 in {round(1 / dict(worst)['pseudo']):,} "
+                   f"and a shiny 1 in {round(1 / shiny_chance(0)):,}.\n"
+                   f"At **100** they are 1 in {round(1 / dict(best)['pseudo']):,} "
+                   f"and 1 in {round(1 / shiny_chance(100)):,}.\n"
+                   f"*Raise it with `!plant`, `!clean` and `!intervene`.*"),
+            inline=False)
+
+        embed.set_footer(text="Expeditions roll the same table · !biomes shows where "
+                              "each species can appear")
+        await ctx.send(embed=embed)
+
+
 async def setup(bot):
     # No schema work here on purpose. The daily-counter table creates itself on first
     # use, inside the connection the caller already owns - see utils/limits.py. Doing
