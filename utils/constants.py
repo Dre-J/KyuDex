@@ -1349,6 +1349,131 @@ EQUIPMENT_CATALOG.update(build_phase5_stock())
 
 
 # ==========================================
+# 🧬 THE PHASE 6 SHELF - SPECIES-SPECIFIC GEAR
+# ==========================================
+# Sixteen items, and every one of them is "a flat effect, but only for this species".
+# That is the shape stat_multiplier_for already handles for Huge Power, so almost all of
+# this is a table rather than a mechanism.
+#
+# Species are matched on the BASE name - the part before the first hyphen - which is the
+# same idiom the Crowned forms use. That is what lets an Alolan Marowak swing a Thick
+# Club and a Galarian Farfetch'd hold a Stick, both of which are correct.
+
+# 1. The stat multipliers. Stat keys are the ones stat_multiplier_for is called with:
+#    attack, sp_atk, defense, sp_def, speed.
+SPECIES_STAT_ITEMS = {
+    'light-ball':     {'species': {'pikachu'},
+                       'stats': {'attack': 2.0, 'sp_atk': 2.0}},
+    'thick-club':     {'species': {'cubone', 'marowak'},
+                       'stats': {'attack': 2.0}},
+    'soul-dew':       {'species': {'latias', 'latios'},
+                       'stats': {'sp_atk': 1.5, 'sp_def': 1.5}},
+    'deep-sea-tooth': {'species': {'clamperl'}, 'stats': {'sp_atk': 2.0}},
+    'deep-sea-scale': {'species': {'clamperl'}, 'stats': {'sp_def': 2.0}},
+    # The two Ditto powders are the only rows with a condition: both descriptions end
+    # "the boost is lost after transforming", and Transform is a volatile this engine
+    # already tracks.
+    'metal-powder':   {'species': {'ditto'},
+                       'stats': {'defense': 1.5, 'sp_def': 1.5},
+                       'lost_on_transform': True},
+    'quick-powder':   {'species': {'ditto'}, 'stats': {'speed': 2.0},
+                       'lost_on_transform': True},
+}
+
+# 2. The two that sharpen a crit rather than a stat. Sirfetch'd is included because the
+#    modern games let it hold the Leek; the item is still filed under its old name here.
+SPECIES_CRIT_ITEMS = {
+    'lucky-punch': {'species': {'chansey'}, 'stages': 2},
+    'stick':       {'species': {'farfetchd', 'sirfetchd'}, 'stages': 2},
+}
+
+# 3. The three Orbs, which are type boosters with a species gate. Kept apart from
+#    TYPE_BOOST_ITEMS because that table is item -> ONE type and these are item -> two,
+#    and because a plate on the wrong species still works while an Orb does not.
+SPECIES_TYPE_BOOST_ITEMS = {
+    'adamant-orb':  {'species': 'dialga',   'types': {'dragon', 'steel'}},
+    'lustrous-orb': {'species': 'palkia',   'types': {'dragon', 'water'}},
+    'griseous-orb': {'species': 'giratina', 'types': {'dragon', 'ghost'}},
+}
+SPECIES_ORB_MULTIPLIER = 1.2
+
+# 4. The ones that change a FORM on entry, which is the Rusted Sword's machinery. The
+#    Griseous Orb is the only item in this phase that does both - it boosts two elements
+#    AND reshapes its holder, so it appears in this table and the one above.
+SPECIES_FORM_ITEMS = {
+    'griseous-orb':  {'species': 'giratina', 'form': 'giratina-origin',
+                      'flavour': 'was drawn into its Origin Forme'},
+    'red-nectar':    {'species': 'oricorio', 'form': 'oricorio-baile',
+                      'flavour': 'drank deep and danced the Baile style'},
+    'yellow-nectar': {'species': 'oricorio', 'form': 'oricorio-pom-pom',
+                      'flavour': 'drank deep and danced the Pom-Pom style'},
+    'pink-nectar':   {'species': 'oricorio', 'form': 'oricorio-pau',
+                      'flavour': "drank deep and danced the Pa'u style"},
+    'purple-nectar': {'species': 'oricorio', 'form': 'oricorio-sensu',
+                      'flavour': 'drank deep and danced the Sensu style'},
+}
+
+PHASE6_PRICE = 450
+
+PHASE6_DESCRIPTIONS = {
+    'light-ball':     "Doubles Pikachu's Attack and Sp. Atk.",
+    'thick-club':     "Doubles Cubone's or Marowak's Attack.",
+    'soul-dew':       "Raises Latias's and Latios's Sp. Atk and Sp. Def by 50%.",
+    'deep-sea-tooth': "Doubles Clamperl's Sp. Atk.",
+    'deep-sea-scale': "Doubles Clamperl's Sp. Def.",
+    'metal-powder':   "Raises Ditto's Defense and Sp. Def by 50%, until it Transforms.",
+    'quick-powder':   "Doubles Ditto's Speed, until it Transforms.",
+    'lucky-punch':    "Raises Chansey's critical hit ratio by two stages.",
+    'stick':          "Raises Farfetch'd's critical hit ratio by two stages.",
+    'adamant-orb':    "Dialga's Dragon and Steel moves do 20% more damage.",
+    'lustrous-orb':   "Palkia's Dragon and Water moves do 20% more damage.",
+    'griseous-orb':   "Giratina's Dragon and Ghost moves do 20% more damage, and it "
+                      "takes its Origin Forme.",
+    'red-nectar':     "Changes Oricorio to its Baile style.",
+    'yellow-nectar':  "Changes Oricorio to its Pom-Pom style.",
+    'pink-nectar':    "Changes Oricorio to its Pa'u style.",
+    'purple-nectar':  "Changes Oricorio to its Sensu style.",
+}
+
+PHASE6_EMOJI = {
+    'light-ball': '💡', 'thick-club': '🦴', 'soul-dew': '💧', 'deep-sea-tooth': '🦷',
+    'deep-sea-scale': '🐚', 'metal-powder': '⚙️', 'quick-powder': '💨',
+    'lucky-punch': '🥊', 'stick': '🥬', 'adamant-orb': '💎', 'lustrous-orb': '🔮',
+    'griseous-orb': '🟣', 'red-nectar': '🌺', 'yellow-nectar': '🌼',
+    'pink-nectar': '🌸', 'purple-nectar': '💜',
+}
+
+
+def build_phase6_stock():
+    """
+    The Phase 6 shelf, checked against the tables the engine reads.
+
+    Same assertion as Phases 2 to 5. The Griseous Orb is deliberately in two of the
+    source tables and must still appear exactly once on the shelf.
+    """
+    implemented = (set(SPECIES_STAT_ITEMS) | set(SPECIES_CRIT_ITEMS)
+                   | set(SPECIES_TYPE_BOOST_ITEMS) | set(SPECIES_FORM_ITEMS))
+    missing = implemented - set(PHASE6_DESCRIPTIONS)
+    assert not missing, f"Phase 6 items with no shop entry: {sorted(missing)}"
+    extra = set(PHASE6_DESCRIPTIONS) - implemented
+    assert not extra, f"Phase 6 shop entries with no implementation: {sorted(extra)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE6_PRICE,
+            "desc": PHASE6_DESCRIPTIONS[item],
+            "emoji": PHASE6_EMOJI.get(item, '🧬'),
+            "category": "battleitems",
+        }
+        for item in sorted(implemented)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase6_stock())
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a
