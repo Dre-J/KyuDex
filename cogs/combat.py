@@ -7,7 +7,7 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, roll_gender, declared_gender
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, roll_gender, declared_gender
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
@@ -1558,6 +1558,30 @@ async def end_of_turn_survival(state, *sides):
             log += (f"🚪 {owner} **{specimen['name'].capitalize()}**'s "
                     f"{pretty_ability(get_active_ability(specimen))} "
                     f"sent it running for the bench!\n")
+
+    # ==========================================
+    # ITEM PHASE 3: CASHING IN THE PARKED EJECTIONS
+    # ==========================================
+    # Eject Button, Eject Pack and Red Card all parked a request when they fired, because
+    # the place they fired from has two combatants and no teams. This is where those
+    # become the same pivot flag Wimp Out sets, so all five go through one switch-out
+    # clock rather than two.
+    #
+    # A specimen that fainted on the way here is not going anywhere, and the request is
+    # dropped rather than left to fire on whatever arrives in its slot. The flag is set
+    # WITHOUT clearing the request: the swap paths still need to read it, to know that a
+    # Red Card means a random replacement rather than a chosen one, and leave_field
+    # clears it as the specimen actually goes.
+    for specimen, flag, owner in sides:
+        asked = pending_pivot(specimen)
+        if not asked:
+            continue
+        if specimen.get('current_hp', 0) <= 0:
+            clear_pivot_request(specimen)
+            continue
+        state[flag] = True
+        log += (f"🚪 {owner} **{specimen['name'].capitalize()}** was sent back by the "
+                f"{asked.replace('-', ' ').title()}!\n")
 
     return log
 
@@ -7046,11 +7070,23 @@ class BattleDashboard(discord.ui.View):
                     state['npc_must_pivot'] = False # Flush the memory flag
 
                 # ==========================================
+                # ITEM PHASE 3: A RED CARD IS NOT A FREE SWITCH
+                # ==========================================
+                # A rival dragged out by a Red Card does not get to pick its best answer
+                # to what is standing opposite - the whole point of the card is to undo
+                # the position, and letting the heuristic below choose would hand the AI
+                # a better matchup than it started with as a REWARD for being carded.
+                _npc_bench = [i for i, p in enumerate(state['npc_team'])
+                              if p['current_hp'] > 0 and i != state['active_npc_index']]
+                _npc_dragged = involuntary_pivot(n_active) and _npc_bench
+
+                # ==========================================
                 # TACTICAL AI: OPTIMAL REPLACEMENT HEURISTIC
                 # ==========================================
                 best_score = -1.0
                 next_npc_idx = None
-                
+
+
                 for i, benched_specimen in enumerate(state['npc_team']):
                     # "Benched" means benched. A fainted active slot is excluded by the
                     # HP test anyway, but a PIVOTING one is not, and picking it made the
@@ -7095,7 +7131,13 @@ class BattleDashboard(discord.ui.View):
                             best_score = score
                             next_npc_idx = i
                 # ==========================================
-                
+
+                # ...unless it was dragged, in which case the heuristic above does not
+                # get a say. Overridden after the scan rather than instead of it so the
+                # ordinary path is untouched by this.
+                if _npc_dragged:
+                    next_npc_idx = random.choice(_npc_bench)
+
                 if next_npc_idx is not None:
                     state['active_npc_index'] = next_npc_idx
                     n_active = state['npc_team'][next_npc_idx]
@@ -7358,12 +7400,35 @@ class BattleDashboard(discord.ui.View):
                 # Ensure they actually have a living bench specimen to swap into!
                 has_survivors = any(p['current_hp'] > 0 and i != state['active_player_index'] for i, p in enumerate(state['player_team']))
                 
-                if has_survivors:
+                # ==========================================
+                # ITEM PHASE 3: A RED CARD IS NOT A FREE SWITCH
+                # ==========================================
+                # Being dragged out means being dragged out. Offering the menu here would
+                # turn the card into a free pivot for the person it was played against,
+                # which is the opposite of what it costs a slot to hold.
+                if has_survivors and involuntary_pivot(p_active):
+                    _bench = [i for i, p in enumerate(state['player_team'])
+                              if p['current_hp'] > 0 and i != state['active_player_index']]
+                    _drawn = random.choice(_bench)
+                    leave_field(p_active)
+                    p_active['volatile_statuses'] = {}
+                    state['active_player_index'] = _drawn
+                    p_active = state['player_team'][_drawn]
+
+                    combat_log += f"\n↳ **{p_active['name'].capitalize()}** was dragged in!"
+                    hazard_log = apply_entry_hazards(p_active, state['player_hazards'],
+                                                     TYPE_CHART, "Your")
+                    if hazard_log:
+                        combat_log += "\n" + hazard_log
+                    combat_log = await trigger_single_entry_ability(
+                        p_active, n_active, "Your", state, combat_log)
+
+                elif has_survivors:
                     combat_log += "\n**Who will you send out next?**"
-                    
+
                     # We pass `forced=True` to hide the cancel button!
                     swap_view = SwapMenu(self.cog, self.user_id, self.ctx, self, forced=True)
-                    
+
                     embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=combat_log, color=discord.Color.orange())
                     return await interaction.edit_original_response(embed=embed, view=swap_view, attachments=[])
                 else:
@@ -9902,9 +9967,34 @@ class Combat(commands.Cog):
                 
                 embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=f"{combat_log}\nWaiting for researchers to deploy replacements...", color=discord.Color.orange())
                 await state['message_obj'].edit(embed=embed, attachments=[], view=None)
-                
+
+                # ==========================================
+                # ITEM PHASE 3: A RED CARD IS NOT A FREE SWITCH
+                # ==========================================
+                # Somebody dragged out by a Red Card gets no menu. The commit is filled in
+                # for them with a random bench slot, which is what makes the card worth a
+                # held-item slot: offering the choice would hand the carded trainer a free
+                # pivot into whatever answers the board best.
+                def _drag_commit(tag, needs_swap, active):
+                    """Fill in a forced random commit, or None to prompt as usual."""
+                    if not needs_swap or not involuntary_pivot(active):
+                        return None
+                    bench = [i for i, p in enumerate(state[f'{tag}_team'])
+                             if p['current_hp'] > 0 and i != state[f'{tag}_active_index']]
+                    if not bench:
+                        return None
+                    return {'type': 'forced_swap', 'data': random.choice(bench)}
+
                 # Ping P1 if they triggered a swap, otherwise auto-ready them!
-                if p1_needs_swap:
+                _p1_drag = _drag_commit('p1', p1_needs_swap, new_p1_active)
+                _p2_drag = _drag_commit('p2', p2_needs_swap, new_p2_active)
+
+                if _p1_drag:
+                    state['commits'][p1_id] = _p1_drag
+                    await state['p1'].send(
+                        "🟥 Your active specimen was dragged out by a Red Card - "
+                        "the replacement was chosen for you!")
+                elif p1_needs_swap:
                     view1 = PvPForcedSwapMenu(self, state, p1_id)
                     reason = "fainted" if new_p1_active['current_hp'] <= 0 else "is pivoting out"
                     await state['p1'].send(f"⚠️ Your active specimen {reason}! Select a replacement:", view=view1)
@@ -9912,7 +10002,12 @@ class Combat(commands.Cog):
                     state['commits'][p1_id] = {'type': 'pass'}
                     
                 # Ping P2 if they triggered a swap, otherwise auto-ready them!
-                if p2_needs_swap:
+                if _p2_drag:
+                    state['commits'][p2_id] = _p2_drag
+                    await state['p2'].send(
+                        "🟥 Your active specimen was dragged out by a Red Card - "
+                        "the replacement was chosen for you!")
+                elif p2_needs_swap:
                     view2 = PvPForcedSwapMenu(self, state, p2_id)
                     reason = "fainted" if new_p2_active['current_hp'] <= 0 else "is pivoting out"
                     await state['p2'].send(f"⚠️ Your active specimen {reason}! Select a replacement:", view=view2)

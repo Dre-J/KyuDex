@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -2381,6 +2381,18 @@ def is_trapped(pokemon, opponent=None):
     if volatiles.get('fairy_lock'):
         return True
 
+    # ITEM PHASE 3: Shed Shell walks out of anything that is HOLDING it - Mean Look, a
+    # Wrap, Shadow Tag, Arena Trap. Placed after Fairy Lock and beside the Ghost
+    # exemption on purpose: Fairy Lock pins the whole field rather than targeting
+    # anybody, and the games do not let a Shed Shell out of it either.
+    #
+    # "Multi-turn moves still cannot be switched out of" in the item's description is
+    # about the holder's OWN locked-in move - Outrage, a charge turn - which this
+    # function has never answered. That lives with the move lock, so the caveat is
+    # satisfied by where the check is rather than by a clause here.
+    if get_active_item(pokemon) == SHED_SHELL:
+        return False
+
     if not can_be_trapped(pokemon):
         return False
 
@@ -3318,6 +3330,10 @@ def leave_field(pokemon):
         # line rather than sitting under it.
         pokemon.pop(BAIL_OUT_MARKER, None)
         pokemon.pop(HP_THRESHOLD_MARKER, None)
+        # A parked ejection dies with the departure it was asking for. Left set, a
+        # specimen that walked off for any other reason would be asked to leave AGAIN
+        # the moment it came back in, on the strength of a button it no longer holds.
+        pokemon.pop(PIVOT_REQUEST, None)
         # Truant starts afresh: whatever it was owed, it acts on the turn it
         # arrives back. Left set, a Slaking could bank its loafing on the bench.
         pokemon.pop(TRUANT_MARKER, None)
@@ -4001,6 +4017,23 @@ def resolve_stat_stages(pending, prefix="", foe_of=None):
     for specimen in dropped:
         log += apply_white_herb(specimen)
 
+    # ==========================================
+    # ITEM PHASE 3: THE EJECT PACK
+    # ==========================================
+    # Same list and the same reason as the herb above: a drop that Clear Body refused or
+    # that was pinned at -6 never reaches `dropped`, so it cannot spend a pack.
+    #
+    # AFTER the herb deliberately. A specimen cannot hold both, so they never argue - but
+    # the order states the intent: restoring a stat is answering the drop, and leaving is
+    # answering it too, and if an item ever did both the restore would come first.
+    for specimen in dropped:
+        _pack = eject_pack_fires(specimen)
+        if _pack:
+            request_pivot(specimen, _pack)
+            spend_item(specimen, _pack)
+            log += (f"{prefix}🎒 **{specimen['name'].capitalize()}**'s Eject Pack "
+                    f"launched it off the field!\n")
+
     return log
 
 # ==========================================
@@ -4150,6 +4183,107 @@ def item_hit_reaction(defender, move, damage, type_multiplier=1.0, magic_room=Fa
         return None
 
     return item, list(row['self'])
+
+
+# ==========================================
+# ITEM PHASE 3: THE EJECTORS
+# ==========================================
+# Eject Button, Eject Pack and Red Card. Each one ASKS its question here and, if the
+# answer is yes, parks a request on the specimen that has to leave. Nothing switches
+# anybody: these functions have two combatants and no teams, which is the same reason
+# the weather and terrain reactions above are smuggled out through a payload rather than
+# applied in place.
+#
+# The request is cashed in by `end_of_turn_survival`, beside Wimp Out, which already
+# owns the "this specimen wants off the field" clock. One clock, three items and two
+# abilities feeding it.
+
+def request_pivot(pokemon, item):
+    """Park an ejection on `pokemon`, to be cashed in at the end of the turn."""
+    if pokemon is None or pokemon.get('current_hp', 0) <= 0:
+        return
+    pokemon[PIVOT_REQUEST] = item
+
+
+def pending_pivot(pokemon):
+    """Which item is asking this specimen to leave, or None."""
+    if pokemon is None:
+        return None
+    return pokemon.get(PIVOT_REQUEST)
+
+
+def clear_pivot_request(pokemon):
+    """Forget a parked ejection - it has either been honoured or has nowhere to go."""
+    if pokemon is not None:
+        pokemon.pop(PIVOT_REQUEST, None)
+
+
+def involuntary_pivot(pokemon):
+    """
+    Whether this specimen is being dragged out rather than choosing to leave.
+
+    Only Red Card. A trainer who is Red Carded does not pick the replacement - that is
+    the whole difference between being dragged out and pivoting, and letting them choose
+    would turn the card into a free switch for the person it was played against.
+    """
+    return pending_pivot(pokemon) in RANDOM_REPLACEMENT_ITEMS
+
+
+def eject_button_fires(defender, move, damage, magic_room=False):
+    """
+    Eject Button: the holder leaves after a move damages it.
+
+    Gated on damage landing, exactly as the Phase 2 policies are - a status move that
+    lands does not press it, and neither does a move the holder was immune to.
+    """
+    if defender is None or damage <= 0 or defender.get('current_hp', 0) <= 0:
+        return None
+    if (move or {}).get('class') == 'status':
+        return None
+    if get_active_item(defender, magic_room) != 'eject-button':
+        return None
+    return 'eject-button'
+
+
+def red_card_fires(defender, attacker, move, damage, magic_room=False):
+    """
+    Red Card: the ATTACKER leaves after damaging the holder.
+
+    The holder spends the card; the attacker is the one that goes. Suction Cups and
+    Guard Dog refuse it for the same reason they refuse Whirlwind - the card is a
+    forced switch, so it is answered by the ability that answers forced switches rather
+    than by a rule of its own.
+
+    A dead attacker is not dragged anywhere, and neither is one whose holder has just
+    fainted: the card needs a living hand to play it.
+    """
+    if defender is None or attacker is None or damage <= 0:
+        return None
+    if (move or {}).get('class') == 'status':
+        return None
+    if defender.get('current_hp', 0) <= 0 or attacker.get('current_hp', 0) <= 0:
+        return None
+    if get_active_item(defender, magic_room) != 'red-card':
+        return None
+    if resists_forced_switch(attacker):
+        return None
+    return 'red-card'
+
+
+def eject_pack_fires(pokemon, magic_room=False):
+    """
+    Eject Pack: the holder leaves after any of its stats is LOWERED.
+
+    Asked once a drop has actually landed, so a drop that Clear Body refused or that was
+    already pinned at -6 does not spend the pack. That is the same place and the same
+    reason as the White Herb, and both read the one list of specimens that really lost a
+    stage - which is what stops the pack answering an Intimidate that never took.
+    """
+    if pokemon is None or pokemon.get('current_hp', 0) <= 0:
+        return None
+    if get_active_item(pokemon, magic_room) != 'eject-pack':
+        return None
+    return 'eject-pack'
 
 
 def terrain_seed_fires(pokemon, terrain, magic_room=False):
@@ -7567,6 +7701,28 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         spend_item(defender, _policy)
         msg += (f" \U0001f4a5 {defender['name'].capitalize()}'s "
                 f"{_policy.replace('-', ' ').title()} kicked in!")
+
+    # ==========================================
+    # HOOK 3d: ITEM PHASE 3 - THE EJECTORS THAT ANSWER A HIT
+    # ==========================================
+    # Eject Button moves its own holder; Red Card moves whoever just hit it. Both only
+    # PARK the request - this function has no teams to switch anybody into - and
+    # end_of_turn_survival cashes them in beside Wimp Out.
+    #
+    # A specimen can hold only one item, so these two cannot both fire on one hit.
+    _eject = eject_button_fires(defender, move, damage, magic_room)
+    if _eject:
+        request_pivot(defender, _eject)
+        spend_item(defender, _eject)
+        msg += (f" ⏏️ {defender['name'].capitalize()}'s Eject Button "
+                f"went off!")
+
+    _card = red_card_fires(defender, attacker, move, damage, magic_room)
+    if _card:
+        request_pivot(attacker, _card)
+        spend_item(defender, _card)
+        msg += (f" \U0001f7e5 {defender['name'].capitalize()} held up a Red Card "
+                f"against {attacker['name'].capitalize()}!")
 
     # The balloon bursts. Deliberately AFTER the policy above, so a specimen carrying
     # both is not saved from one by the other, and after the damage is settled, so the
