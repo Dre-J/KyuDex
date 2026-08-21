@@ -19,7 +19,14 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              RARITY_LABELS, rarity_filter, roll_rarity,
                              pseudo_legendaries, is_pseudo_legendary,
                              MAX_ACTIVE_DIRECTIVES, MAX_NOTES_PER_ANALYSIS,
-                             auto_tag, ALPHA_HEIGHT_THRESHOLD)
+                             auto_tag, ALPHA_HEIGHT_THRESHOLD,
+                             HABITAT_BIOMES, EXPEDITION_BIOMES, habitat_types,
+                             sql_type_tuple,
+                             EXPEDITION_COOLDOWN_SECONDS, EXPEDITION_WARN_AT,
+                             HABITAT_DEGRADED_BELOW, HABITAT_PRISTINE_ABOVE,
+                             HABITAT_DEGRADED_TYPES, HABITAT_PRISTINE_BONUS)
+from utils.limits import (EXPEDITION, EXPEDITION_DAILY_CAP, check_cap,
+                          record_use, describe_reset)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
@@ -69,6 +76,72 @@ def event_alert(settings):
     settings = settings or {}
     role = settings.get('ping_role')
     return f"<@&{role}> " if role and settings.get('ping_events') else ""
+
+
+# ==========================================
+# 🔤 THE MASKED NAME
+# ==========================================
+# How much of the name `!hint` gives up, as a fraction of its letters. The count scales
+# with length, so a Mew is nearly solved and a Crabominable is merely narrowed - which
+# is the right shape: the long names are the ones people cannot spell under time
+# pressure, and they have the most letters to spare.
+HINT_REVEAL_RATIO = 0.5
+
+# However generous the ratio gets, this many letters stay hidden. A hint that completes
+# the name is not a hint, it is the answer with extra steps.
+HINT_MIN_HIDDEN = 1
+
+
+def mask_name(name, reveal_ratio=0.0, seed=None):
+    """
+    A species name with most of its letters blanked out.
+
+    At `reveal_ratio=0` this is the spawn card's mask: the first letter of the name and
+    the first letter after each hyphen, everything else an underscore. That is the
+    puzzle, and it stays as it was.
+
+    Above zero it additionally uncovers a share of the remaining letters, which is what
+    `!hint` buys. The extra letters are picked from a generator seeded on `seed`, and
+    that seeding is the part that matters: with an unseeded roll, running `!hint` twice
+    would uncover a DIFFERENT subset each time and the union of a few casts would be
+    the whole name. Seeded per spawn, the hint is the same hint however often it is
+    asked for, and everyone looking at a public card sees the same one.
+
+    Four copies of the zero-ratio version lived in this file - two spawn cards, the
+    expedition card and the hint. They were identical, which is precisely why changing
+    the hint would have left three of them behind.
+    """
+    name = str(name or '')
+    positions = [i for i, ch in enumerate(name) if ch != '-']
+
+    # Free by construction: the first letter of each hyphenated segment. Without it a
+    # long name is an unreadable row of underscores rather than a puzzle.
+    always = {i for i in positions if i == 0 or name[i - 1] == '-'}
+    shown = set(always)
+
+    if reveal_ratio > 0:
+        hidden = [i for i in positions if i not in always]
+        extra = int(round(len(positions) * reveal_ratio))
+        # Never uncover the last of them, however long the name is.
+        extra = min(extra, max(0, len(hidden) - HINT_MIN_HIDDEN))
+        if extra > 0:
+            rng = random.Random(seed if seed is not None else name)
+            shown.update(rng.sample(hidden, extra))
+
+    return " ".join('-' if ch == '-' else (ch.upper() if i in shown else '_')
+                    for i, ch in enumerate(name))
+
+
+def hint_seed(spawn, display_name):
+    """
+    A stable key for one spawn's hint, so repeated `!hint` calls agree.
+
+    The message id is the encounter's identity and is set the moment the card is sent.
+    The name is folded in as well so that asking in another language reveals a different
+    subset - otherwise the English and Japanese hints would uncover the same positions
+    and one would give away the other.
+    """
+    return f"{(spawn or {}).get('message_id', '')}:{display_name}"
 
 
 # ==========================================
@@ -1029,8 +1102,12 @@ def analysis_embed(issued, *, wanted, held, room, open_after):
 # One place that turns a directive row into words, so the page, the menu option and the
 # analysis summary cannot describe the same task three different ways.
 DIRECTIVE_SHAPES = {
+    # "wild" came out of this line because the tracker has never checked: any specimen
+    # knocked out in a field battle counts, and it counted before this was written. A
+    # description that promises a narrower rule than the code enforces sends people
+    # hunting for a restriction that is not there.
     'cull_type': ("⚠️", "Invasive Species Management",
-                  "Defeat wild **{target}**-type specimens to restore equilibrium."),
+                  "Defeat **{target}**-type specimens in battle to restore equilibrium."),
     'survey_species': ("🧬", "Genetic Population Survey",
                        "Successfully capture and tag wild **{target}**."),
     'trigger_mutation': ("📈", "Kinetic Maturation Study",
@@ -1545,15 +1622,13 @@ class Ecology(commands.Cog):
                     spawned_data = await cursor.fetchone()
             else:
                 # --- STANDARD BIOME & POLLUTION LOGIC ---
-                if active_biome == 'urban': allowed_types = ['electric', 'steel', 'poison', 'normal']
-                elif active_biome == 'coastal': allowed_types = ['water', 'flying', 'ice', 'normal']
-                else: allowed_types = ['grass', 'bug', 'ground', 'normal']
+                # The pool comes from the shared table now. `!spawn` had a second copy
+                # of these six lines and `!biomes` would have been a third.
+                allowed_types = habitat_types(active_biome, ecosystem_score)
 
-                if ecosystem_score < 30:
-                    allowed_types = ['poison', 'dark', 'steel']
+                if ecosystem_score < HABITAT_DEGRADED_BELOW:
                     habitat_condition = f"The {active_biome} is degraded and covered in thick smog."
-                elif ecosystem_score > 70:
-                    allowed_types.extend(['fairy', 'dragon', 'psychic'])
+                elif ecosystem_score > HABITAT_PRISTINE_ABOVE:
                     habitat_condition = f"The {active_biome} is pristine, vibrant, and bursting with life."
                 else:
                     habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
@@ -1646,19 +1721,7 @@ class Ecology(commands.Cog):
             # Package the image as a discord File object
             sprite_file = discord.File(file_path, filename=safe_filename)
         
-        def mask_name(name):
-            masked = ""
-            for i, char in enumerate(name):
-                if char == "-":
-                    masked += "- "
-                elif i == 0 or (i > 0 and name[i-1] == "-"):
-                    masked += f"{char.upper()} "
-                else:
-                    masked += "_ "
-            return masked
-        
         masked_display = mask_name(name)
-        print(masked_display)
         # 4. Build the Visual Camera Trap Embed
         embed = discord.Embed(
             title=f"📸 Habitat Activity Detected!", 
@@ -1810,6 +1873,7 @@ class Ecology(commands.Cog):
         await ctx.send(embed=embed, view=view)
 
     @commands.command(name="expedition", aliases=["travel", "explore"])
+    @commands.cooldown(1, EXPEDITION_COOLDOWN_SECONDS, commands.BucketType.user)
     @checks.has_started()
     @checks.is_authorized()
     async def start_expedition(self, ctx, *, biome_name: str = None):
@@ -1819,28 +1883,38 @@ class Ecology(commands.Cog):
         # A DM has no guild; the rate helpers read a missing score as the baseline.
         guild_id = str(ctx.guild.id) if ctx.guild else None
 
+        # A refusal is not a trip. Every early return below hands the cooldown back,
+        # because five minutes is a long time to lose to a typo - and losing it to
+        # "you have no visa for that sector" would punish exactly the player who does
+        # not yet know which sectors they can reach.
+        def refuse():
+            ctx.command.reset_cooldown(ctx)
+
         if not biome_name:
-            return await ctx.send("🧭 **Navigation Error:** Please specify a biome (e.g., `!expedition canopy` or `!expedition trench`).")
-            
+            refuse()
+            return await ctx.send(
+                f"🧭 **Navigation Error:** Please specify a biome "
+                f"(e.g., `!expedition canopy` or `!expedition trench`).\n"
+                f"*`!biomes` lists every sector and what lives there.*")
+
         biome = biome_name.lower()
-        
-        # 1. Define the Biome Ecological Parameters (Elemental Types)
-        biome_data = {
-            'canopy': {'types': "('grass', 'bug', 'poison', 'flying', 'normal')", 'emoji': '🌲'},
-            'trench': {'types': "('water', 'ice')", 'emoji': '🌊'},
-            'core': {'types': "('fire', 'ground', 'rock', 'fighting')", 'emoji': '🌋'},
-            'sprawl': {'types': "('electric', 'steel', 'dark', 'ghost', 'psychic', 'fairy')", 'emoji': '🏙️'},
-            'apex': {'types': "('dragon')", 'emoji': '🐉'}
-        }
-        
-        if biome not in biome_data:
-            return await ctx.send("⚠️ Unknown biome. Available sectors: Canopy, Trench, Core, Sprawl.")
-            
+
+        # 1. The Biome Ecological Parameters, read from the shared table. This was a
+        #    local copy, and the habitat spawner had two more of its own - which is how
+        #    the error message below came to list four of the five sectors.
+        if biome not in EXPEDITION_BIOMES:
+            refuse()
+            return await ctx.send(
+                f"⚠️ Unknown biome. Available sectors: "
+                f"{', '.join(name.title() for name in EXPEDITION_BIOMES)}.\n"
+                f"*`!biomes` shows what lives in each.*")
+
         # 2. Check if the user is already on an expedition
         # 🚨 UPDATED CHECK: Looks to see if their personal dictionary exists AND has active spawns in it
         if user_id in user_active_spawns and len(user_active_spawns[user_id]) > 0:
+            refuse()
             return await ctx.send("🛑 You are already tracking a private spawn! Catch it first.")
-        
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
 
@@ -1852,10 +1926,26 @@ class Ecology(commands.Cog):
                 visas = user_data[0] if user_data and user_data[0] else "canopy"
                 
                 if biome not in visas.split(','):
+                    refuse()
                     return await ctx.send(f"⛔ **ACCESS DENIED:** You do not have the required Visa for the **{biome.title()}**. Defeat the local Sector Warden to advance.")
-                
+
+                # 3b. The daily ceiling. Checked here rather than at the top so a
+                #     mistyped biome or a locked sector does not read as "you are out
+                #     of expeditions" - by this line the trip is genuinely going to
+                #     happen unless the scanner comes back empty.
+                allowed, used_so_far, _ = await check_cap(
+                    db, user_id, EXPEDITION, EXPEDITION_DAILY_CAP)
+                if not allowed:
+                    refuse()
+                    return await ctx.send(
+                        f"🛰️ **Deployment Quota Reached:** You have run "
+                        f"**{used_so_far}/{EXPEDITION_DAILY_CAP}** expeditions today. "
+                        f"Field clearance renews in **{describe_reset()}**.\n"
+                        f"*Wild spawns in the habitat channel are unaffected — and "
+                        f"`!missions` still has fieldwork waiting.*")
+
                 # 4. Generate the Biome-Specific Encounter (With Rarity Filter)
-                type_tuple = biome_data[biome]['types']
+                type_tuple = sql_type_tuple(EXPEDITION_BIOMES[biome]['types'])
 
                 # The health of the server you set out FROM. An expedition is a private
                 # trip, but it is a trip into this server's ecosystem - and reading the
@@ -1893,8 +1983,18 @@ class Ecology(commands.Cog):
                     tier = 'wild'
                     async with db.execute(rarity_query('wild')) as cursor:
                         spawn_data = await cursor.fetchone()
-            
+
+                # Spend the allowance only once the sector has actually produced
+                # something. A scanner that comes back empty is a bug, not a trip, and
+                # it should not cost one of the day's forty.
+                if spawn_data:
+                    trips_today = await record_use(db, user_id, EXPEDITION)
+                    await db.commit()
+                else:
+                    trips_today = used_so_far
+
             if not spawn_data:
+                refuse()
                 return await ctx.send("📡 Scanner error: Could not locate native wildlife in this sector. Try again.")
                 
             poke_id, poke_name, true_capture_rate, gender_rate = spawn_data
@@ -1923,18 +2023,7 @@ class Ecology(commands.Cog):
             
             # 6. UI Output
             shiny_icon = "✨ " if is_shiny else ""
-            b_emoji = biome_data[biome]['emoji']
-            
-            def mask_name(name):
-                masked = ""
-                for i, char in enumerate(name):
-                    if char == "-":
-                        masked += "- "
-                    elif i == 0 or (i > 0 and name[i-1] == "-"):
-                        masked += f"{char.upper()} "
-                    else:
-                        masked += "_ "
-                return masked
+            b_emoji = EXPEDITION_BIOMES[biome]['emoji']
             
             masked_display = mask_name(poke_name)
             embed = discord.Embed(
@@ -1942,7 +2031,14 @@ class Ecology(commands.Cog):
                 description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**`{masked_display}`** {gender_icon(gender)} appeared!",
                 color=discord.Color.dark_green()
             )
-            embed.set_footer(text="This encounter is yours. Pick a ball, or leave it.")
+            # The allowance is only worth mentioning once it is nearly gone. Printing
+            # "3/40" on every card would turn a counter nobody will reach into a
+            # scoreboard everybody watches.
+            footer = "This encounter is yours. Pick a ball, or leave it."
+            if trips_today >= EXPEDITION_DAILY_CAP - EXPEDITION_WARN_AT:
+                footer += (f" · {EXPEDITION_DAILY_CAP - trips_today} expedition(s) "
+                           f"left today")
+            embed.set_footer(text=footer)
             
             # ==========================================
             # 4. LOCAL ASSET LOADING
@@ -1986,6 +2082,9 @@ class Ecology(commands.Cog):
             user_active_spawns[user_id][spawn_id]['message_id'] = msg.id
             asyncio.create_task(self.spawn_timer(message=msg, spawn_id=spawn_id, pokemon_name=poke_name, user_id=user_id, config_guild=str(ctx.guild.id)))
         except Exception as e:
+            # A crash costs the player nothing. The allowance is only spent on a commit
+            # that succeeded, and the cooldown goes back here.
+            refuse()
             print(f"Expedition Error: {e}")
             await ctx.send("❌ A critical error occurred during field deployment.")
 
@@ -2037,7 +2136,7 @@ class Ecology(commands.Cog):
                     if trans_data:
                         display_name = trans_data[0]
                     else:
-                        await ctx.send(f"⚠️ *Sensor Warning: No telemetry data found for language code '{lang}'. Defaulting to ENG.*")
+                        await ctx.send(f"⚠️ *Sensor Warning: No data found for language code '{lang}'. Defaulting to ENG.*")
                 
                 # 3. Fetch Elemental Types
                 async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
@@ -2051,32 +2150,250 @@ class Ecology(commands.Cog):
         type_str = type_badges([row[0] for row in db_data])
 
         # 4. MASK THE DISPLAY NAME
-        masked_name = ""
-        for i, char in enumerate(display_name):
-            if char == "-":
-                masked_name += "- "
-            elif i == 0 or (i > 0 and display_name[i-1] == "-"):
-                masked_name += f"{char.upper()} "
-            else:
-                masked_name += "_ "
-                
+        # More generous than the card it is read against - which is the whole point of
+        # spending a command on it. The spawn card gives you the first letters; the
+        # scan gives you about half, scaled to how long the name is.
+        masked_name = mask_name(display_name,
+                                reveal_ratio=HINT_REVEAL_RATIO,
+                                seed=hint_seed(target, display_name))
+
         # 5. Render the Dashboard
         embed = discord.Embed(
             title=f"📡 Biological Sensor Readout [{lang}]",
-            description="Your field equipment has isolated the strongest unidentified signal nearby. Here is the partial telemetry data:",
+            description="Your field equipment has found the strongest unidentified signal nearby. Here is the partial data:",
             color=discord.Color.blue()
         )
         
         # No longer wrapped in backticks: a custom emoji inside a code span renders as
         # its raw `<:fire:123…>` text, which is the one place these badges CANNOT go.
         embed.add_field(name="Elemental Signature", value=type_str, inline=False)
-        embed.add_field(name="Acoustic Syllable Profile", value=f"`{masked_name.strip()}`", inline=False)
+        embed.add_field(name="Unidentified Specimen Name", value=f"`{masked_name.strip()}`", inline=False)
         
         if target.get('is_shiny'):
-            embed.set_footer(text="⚠️ ANOMALY DETECTED: The signal frequency exhibits a rare chromatic mutation!")
-            
+            embed.set_footer(text="⚠️ ANOMALY DETECTED: The signal frequency exhibits a rare discolored mutation!")
+
         await ctx.send(embed=embed)
-    
+
+    # ==========================================
+    # 🗺️ THE SURVEY MAP
+    # ==========================================
+    @commands.command(name="biomes", aliases=["biome", "sectors", "where"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def biome_atlas(self, ctx, *, query: str = None):
+        """Which specimens live where. `!biomes`, `!biomes trench`, `!biomes gible`."""
+        # Three questions, one command, because they are the same question asked from
+        # different ends: what is out there, what is in THIS sector, and where do I go
+        # for THIS species. Splitting them into three commands would have meant three
+        # things to discover instead of one.
+        wanted = (query or '').strip().lower()
+
+        if not wanted:
+            return await ctx.send(embed=await self._biome_overview(ctx))
+
+        if wanted in EXPEDITION_BIOMES or wanted in HABITAT_BIOMES:
+            return await ctx.send(embed=await self._biome_card(wanted))
+
+        # Not a sector, so read it as a species. Hyphens are how the database spells
+        # them but nobody types `iron-valiant`, so spaces are folded in.
+        species = wanted.replace(' ', '-')
+        card = await self._species_card(species)
+        if card is None:
+            return await ctx.send(
+                f"🧭 No sector or species called **{query}**.\n"
+                f"*Sectors: "
+                f"{', '.join(name.title() for name in EXPEDITION_BIOMES)}. "
+                f"Habitats: "
+                f"{', '.join(name.title() for name in HABITAT_BIOMES)}.*")
+        return await ctx.send(embed=card)
+
+    async def _spawnable_count(self, db, types):
+        """How many distinct species of these types the world can actually produce."""
+        if not types:
+            return 0
+        marks = ','.join('?' * len(types))
+        async with db.execute(f"""
+            SELECT COUNT(DISTINCT s.pokedex_id)
+            FROM base_pokemon_species s
+            JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+            WHERE t.type_name IN ({marks}) AND {spawnable_forms('s')}
+        """, tuple(types)) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def _biome_overview(self, ctx):
+        """Every sector at once, with what each one draws from."""
+        embed = discord.Embed(
+            title="🗺️ Ecological Survey Map",
+            description=("Every specimen is drawn by its **elemental type**, so a "
+                         "sector's typing is the whole of what lives there.\n"
+                         "`!biomes <sector>` for one in detail, or "
+                         "`!biomes <species>` to find where something lives."),
+            color=discord.Color.teal())
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            # The server's own habitat first - it is the one the reader is standing in.
+            active = 'forest'
+            if ctx.guild:
+                async with db.execute(
+                        "SELECT active_biome, ecosystem_score FROM servers "
+                        "WHERE guild_id = ?", (str(ctx.guild.id),)) as cursor:
+                    row = await cursor.fetchone()
+                if row:
+                    active = row[0] or 'forest'
+                    score = row[1]
+                    embed.add_field(
+                        name=f"📍 This Server · {HABITAT_BIOMES.get(active, {}).get('emoji', '🌳')} {active.title()}",
+                        value=(f"{type_badges(habitat_types(active, score))}\n"
+                               f"*Ecosystem score {score}. "
+                               f"{self._health_note(score)}*"),
+                        inline=False)
+
+            lines = []
+            for name, data in EXPEDITION_BIOMES.items():
+                count = await self._spawnable_count(db, list(data['types']))
+                lines.append(f"{data['emoji']} **{name.title()}** — "
+                             f"{type_badges(data['types'])}\n"
+                             f"　*{data['blurb']}* · **{count}** species")
+            embed.add_field(name="Expedition Sectors  ·  `!expedition <sector>`",
+                            value="\n".join(lines), inline=False)
+
+            habitat_lines = []
+            for name, data in HABITAT_BIOMES.items():
+                marker = " ← current" if name == active else ""
+                habitat_lines.append(
+                    f"{data['emoji']} **{name.title()}**{marker} — "
+                    f"{type_badges(data['types'])}")
+            embed.add_field(
+                name="Habitat Biomes  ·  set with `!terraform`",
+                value="\n".join(habitat_lines) +
+                      (f"\n\n*Below **{HABITAT_DEGRADED_BELOW}** a habitat's pool is "
+                       f"replaced by {type_badges(HABITAT_DEGRADED_TYPES)}; above "
+                       f"**{HABITAT_PRISTINE_ABOVE}** it gains "
+                       f"{type_badges(HABITAT_PRISTINE_BONUS)}.*"),
+                inline=False)
+
+        embed.set_footer(text="Rare tiers are drawn from the same typing — a sector "
+                              "with no Dragons has no Dragon pseudo-legendaries.")
+        return embed
+
+    @staticmethod
+    def _health_note(score):
+        """One line on what this server's score is doing to its own spawns."""
+        if score is None:
+            return "Untouched."
+        if score < HABITAT_DEGRADED_BELOW:
+            return "Degraded — the native pool has been replaced by scavengers."
+        if score > HABITAT_PRISTINE_ABOVE:
+            return "Pristine — rarer typings have moved in."
+        return "Stable — the biome's own typing, unmodified."
+
+    async def _biome_card(self, name):
+        """One sector, its typing, and a sample of what actually lives there."""
+        expedition = name in EXPEDITION_BIOMES
+        data = (EXPEDITION_BIOMES if expedition else HABITAT_BIOMES)[name]
+        types = list(data['types'])
+
+        embed = discord.Embed(
+            title=f"{data['emoji']} {name.title()}",
+            description=f"*{data['blurb']}*\n\n{type_badges(types)}",
+            color=discord.Color.dark_teal())
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            total = await self._spawnable_count(db, types)
+
+            marks = ','.join('?' * len(types))
+            # A sample rather than the list: a sector holds hundreds of species and an
+            # embed field holds 1024 characters. Random, so repeating the command
+            # shows a different draw - which is a fair picture of what a trip is.
+            async with db.execute(f"""
+                SELECT DISTINCT s.name FROM base_pokemon_species s
+                JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
+                WHERE t.type_name IN ({marks}) AND {spawnable_forms('s')}
+                ORDER BY RANDOM() LIMIT 18
+            """, tuple(types)) as cursor:
+                sample = [row[0] for row in await cursor.fetchall()]
+
+        embed.add_field(
+            name=f"Resident Species ({total} total)",
+            value=", ".join(s.replace('-', ' ').title() for s in sample) or "*none*",
+            inline=False)
+
+        if expedition:
+            access = ("No visa required." if name == 'canopy'
+                      else f"Requires the {name.title()} visa — defeat the Sector Warden.")
+            embed.add_field(name="Access",
+                            value=f"`!expedition {name}` · {access}", inline=False)
+        else:
+            embed.add_field(
+                name="Access",
+                value=f"Set with `!terraform {name}`. Specimens appear on their own "
+                      f"in the habitat channel — no command needed.",
+                inline=False)
+
+        embed.set_footer(text="Sampled at random · run again for a different draw")
+        return embed
+
+    async def _species_card(self, species):
+        """Where one species can be found, or None if there is no such species."""
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT pokedex_id, name FROM base_pokemon_species "
+                    "WHERE name = ? LIMIT 1", (species,)) as cursor:
+                row = await cursor.fetchone()
+
+            # Nothing exact, so try a prefix - `!biomes char` should find Charmander
+            # rather than a shrug.
+            if not row:
+                async with db.execute(
+                        "SELECT pokedex_id, name FROM base_pokemon_species "
+                        "WHERE name LIKE ? ORDER BY LENGTH(name) LIMIT 1",
+                        (f"{species}%",)) as cursor:
+                    row = await cursor.fetchone()
+            if not row:
+                return None
+
+            poke_id, real_name = row
+            async with db.execute(
+                    "SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?",
+                    (poke_id,)) as cursor:
+                types = [r[0] for r in await cursor.fetchall()]
+
+        clean = real_name.replace('-', ' ').title()
+        embed = discord.Embed(
+            title=f"🧭 Where to find {clean}",
+            description=type_badges(types) or "*No recorded typing.*",
+            color=discord.Color.teal())
+
+        # A sector matches if it draws ANY of the species' types - which is exactly the
+        # `IN` the spawn queries use, so this cannot promise a sector the spawner would
+        # never actually produce it in.
+        sectors = [f"{d['emoji']} **{n.title()}** — `!expedition {n}`"
+                   for n, d in EXPEDITION_BIOMES.items()
+                   if set(types) & set(d['types'])]
+        embed.add_field(name="Expedition Sectors",
+                        value="\n".join(sectors) or
+                              "*None. This species is not reachable by expedition.*",
+                        inline=False)
+
+        habitats = [f"{d['emoji']} **{n.title()}**"
+                    for n, d in HABITAT_BIOMES.items()
+                    if set(types) & set(d['types'])]
+        extra = []
+        if set(types) & set(HABITAT_DEGRADED_TYPES):
+            extra.append(f"any habitat below **{HABITAT_DEGRADED_BELOW}**")
+        if set(types) & set(HABITAT_PRISTINE_BONUS):
+            extra.append(f"any habitat above **{HABITAT_PRISTINE_ABOVE}**")
+        embed.add_field(
+            name="Habitat Biomes",
+            value=("\n".join(habitats) or "*Not in any biome's base pool.*")
+                  + (f"\n\n*Also: {', '.join(extra)}.*" if extra else ""),
+            inline=False)
+
+        embed.set_footer(text="Typing decides the sector. Rarity decides the odds — "
+                              "see !habitat for this server's encounter rates.")
+        return embed
+
     @commands.command(name="spawn", aliases=["force_spawn"])
     @commands.is_owner() # SECURITY: Only you can run this!
     async def force_spawn(self, ctx, target_species: str = None, force_shiny: bool = False):
@@ -2124,15 +2441,13 @@ class Ecology(commands.Cog):
                         spawned_data = await cursor.fetchone()
                 else:
                     # --- STANDARD BIOME & POLLUTION LOGIC ---
-                    if active_biome == 'urban': allowed_types = ['electric', 'steel', 'poison', 'normal']
-                    elif active_biome == 'coastal': allowed_types = ['water', 'flying', 'ice', 'normal']
-                    else: allowed_types = ['grass', 'bug', 'ground', 'normal']
+                    # Shares the habitat spawner's table, so an admin `!spawn` samples
+                    # the pool the channel would actually have produced.
+                    allowed_types = habitat_types(active_biome, ecosystem_score)
 
-                    if ecosystem_score < 30:
-                        allowed_types = ['poison', 'dark', 'steel']
+                    if ecosystem_score < HABITAT_DEGRADED_BELOW:
                         habitat_condition = f"The {active_biome} is degraded and covered in thick smog."
-                    elif ecosystem_score > 70:
-                        allowed_types.extend(['fairy', 'dragon', 'psychic'])
+                    elif ecosystem_score > HABITAT_PRISTINE_ABOVE:
                         habitat_condition = f"The {active_biome} is pristine, vibrant, and bursting with life."
                     else:
                         habitat_condition = f"The {active_biome} ecosystem is perfectly stable."
@@ -2212,17 +2527,6 @@ class Ecology(commands.Cog):
             sprite_file = discord.File(file_path, filename=safe_filename)
         # ==========================================
 
-        def mask_name(name):
-            masked = ""
-            for i, char in enumerate(name):
-                if char == "-":
-                    masked += "- "
-                elif i == 0 or (i > 0 and name[i-1] == "-"):
-                    masked += f"{char.upper()} "
-                else:
-                    masked += "_ "
-            return masked
-        
         masked_display = mask_name(name)
         # Build the Visual Camera Trap Embed
         embed = discord.Embed(
@@ -4464,6 +4768,10 @@ class Ecology(commands.Cog):
 
         await ctx.send(embed=embed)
 async def setup(bot):
+    # No schema work here on purpose. The daily-counter table creates itself on first
+    # use, inside the connection the caller already owns - see utils/limits.py. Doing
+    # it at load time instead would mean merely IMPORTING this cog writes to whatever
+    # database is configured, which is the one thing test_import_wiring exists to stop.
     await bot.add_cog(Ecology(bot))
     # Registered so a click on a card that outlived its View - a redeploy, a crash -
     # still reaches a handler. Without this the player gets Discord's own "This
