@@ -2587,6 +2587,80 @@ def apply_struggle_recoil(attacker):
     return recoil
 
 
+# ==========================================
+# 🃏 LAST RESORT
+# ==========================================
+# 140 base power, physical, and 266 species can learn it. Nothing gated it, so it was
+# simply the strongest Normal move in the game with no cost attached.
+LAST_RESORT = 'last-resort'
+
+# The key a specimen's used-move set lives under. A set, not a list: the question is
+# only ever "has this been used", never how often or in what order.
+MOVES_USED_KEY = 'moves_used_this_battle'
+
+
+def record_move_used(pokemon, move_name):
+    """
+    Remember that this specimen has used this move during this battle.
+
+    Called from the same two places that set `last_move_used`, which is the point a move
+    has actually RESOLVED - recording at selection instead would let a move that was
+    flinched or fully paralysed away count toward Last Resort.
+
+    The set is cleared on switch-out by `reset_stat_stages`, because Last Resort's
+    condition is per-appearance in the games: a specimen that comes back in has to earn
+    it again.
+    """
+    if pokemon is None or not move_name:
+        return
+    used = pokemon.get(MOVES_USED_KEY)
+    if not isinstance(used, set):
+        used = set(used or ())
+    used.add(move_name)
+    pokemon[MOVES_USED_KEY] = used
+
+
+def last_resort_ready(pokemon, opponent=None):
+    """
+    Whether Last Resort may be used right now, and why not if it may not.
+
+    Returns (ready, reason). Two doors, and the second is the wider one:
+
+    * the games' rule - every OTHER move the specimen knows has been used at least once
+      since it came in; and
+    * it is genuinely the only move left to pick, which is what "a last resort" means in
+      plain English and is the rule this was asked for. The games actually FAIL a lone
+      Last Resort; refusing to let a specimen act at all is a worse outcome than
+      diverging here, and a specimen with nothing else usable would otherwise be pushed
+      into Struggle while holding a 140-power attack.
+    """
+    others = [m for m in (pokemon.get('moves') or [])
+              if m.get('name') and m.get('name') != LAST_RESORT]
+
+    # Knows nothing else at all.
+    if not others:
+        return True, None
+
+    # Nothing else is pickable - out of PP, disabled, taunted, sealed. Checking the
+    # other moves cannot recurse: this branch is only reached for Last Resort itself,
+    # and none of `others` is named that.
+    still_open = [m for m in others
+                  if m.get('pp', 0) > 0
+                  and move_is_restricted(pokemon, m, opponent) is None]
+    if not still_open:
+        return True, None
+
+    used = pokemon.get(MOVES_USED_KEY) or set()
+    missing = [m['name'] for m in others if m['name'] not in used]
+    if not missing:
+        return True, None
+
+    pretty = ", ".join(n.replace('-', ' ').title() for n in missing[:3])
+    if len(missing) > 3:
+        pretty += f" +{len(missing) - 3} more"
+    return False, f"needs {pretty} used first"
+
+
 def move_is_restricted(pokemon, move, opponent=None):
     """
     Why this move cannot be chosen right now, or None if it is free to use.
@@ -2624,6 +2698,18 @@ def move_is_restricted(pokemon, move, opponent=None):
         sealed = (opponent.get('volatile_statuses') or {}).get('imprison') or []
         if name in sealed:
             return "sealed by Imprison"
+
+    # Last. Everything above can rule the move out on its own, and this branch walks the
+    # specimen's OTHER moves - so it wants the cheap disqualifications settled first.
+    #
+    # Put here rather than at either engine's move handler because this one function
+    # already drives all three consumers: the player's move buttons (which grey out and
+    # explain), the NPC's `usable_moves` filter, and the "but it failed" path. Gating it
+    # in the engines would have meant two copies and would have missed the button.
+    if name == LAST_RESORT:
+        ready, reason = last_resort_ready(pokemon, opponent)
+        if not ready:
+            return reason
 
     return None
 
@@ -3109,10 +3195,16 @@ def reset_stat_stages(pokemon):
 
     Boosts are tied to the slot, not the specimen, so a Swords Dance does not survive a
     switch out and back in.
+
+    The Last Resort tally goes with them, and for the same reason: the games count moves
+    used since the specimen ENTERED, so a switch out and back in makes it earn the move
+    again. Leaving the set behind would have turned a pivot into a way to bank the
+    condition and bring it back ready.
     """
     if pokemon is None:
         return
     pokemon['stat_stages'] = {stat: 0 for stat in ALL_STAT_STAGES}
+    pokemon.pop(MOVES_USED_KEY, None)
 
 def snapshot_base_stats(pokemon):
     """

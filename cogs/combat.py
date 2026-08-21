@@ -7,11 +7,12 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, roll_gender, declared_gender
+from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, roll_gender, declared_gender
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
-from utils.constants import TM_CATALOG, type_badges, type_icon
+from utils.constants import (TM_CATALOG, type_badges, type_icon,
+                             PVP_LEVEL_CAPS, parse_level_cap)
 from utils.directives import credit_cull, credit_evolution
 from utils import checks
 import aiohttp
@@ -3405,11 +3406,15 @@ class PvPSwapMenu(discord.ui.View):
         return swap_callback
 
 class ChallengeView(discord.ui.View):
-    def __init__(self, cog, challenger: discord.Member, opponent: discord.Member):
+    def __init__(self, cog, challenger: discord.Member, opponent: discord.Member,
+                 level_cap=None):
         super().__init__(timeout=60) # 60 seconds to accept before the invite expires
         self.cog = cog
         self.challenger = challenger
         self.opponent = opponent
+        # Carried on the invitation rather than asked for again on accept, so the
+        # format is part of what the opponent is agreeing to.
+        self.level_cap = level_cap
 
     @discord.ui.button(label="Accept Duel", style=discord.ButtonStyle.success, emoji="⚔️")
     async def accept_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3425,7 +3430,8 @@ class ChallengeView(discord.ui.View):
         await interaction.edit_original_response(content=f"⚔️ **{self.opponent.display_name}** accepted the challenge! Initializing joint-combat arena...", view=self)
         
         # Hand off to the initialization engine
-        await self.cog.initialize_pvp_battle(interaction.channel, self.challenger, self.opponent)
+        await self.cog.initialize_pvp_battle(interaction.channel, self.challenger,
+                                             self.opponent, level_cap=self.level_cap)
         self.stop()
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
@@ -5800,6 +5806,9 @@ class BattleDashboard(discord.ui.View):
                         # Encore copies whatever actually resolved here; Conversion 2
                         # reads the element off it.
                         attacker['last_move_used'] = raw_move_name
+                        # Last Resort counts what has RESOLVED, not what was
+                        # picked - a move flinched away must not unlock it.
+                        record_move_used(attacker, raw_move_name)
                         attacker['last_move_type'] = move_stats.get('type')
                         # A sacrifice move banks its wish against the SIDE, so whoever
                         # fills the vacated slot collects it - see trigger_single_entry_ability.
@@ -7727,13 +7736,26 @@ class Combat(commands.Cog):
     @checks.is_authorized()
     @checks.is_not_in_combat()
     @checks.partner_not_deployed()
-    async def challenge_player(self, ctx, opponent: discord.Member = None):
-        """Issues a formal Ecological Field Duel invitation to another researcher."""
+    async def challenge_player(self, ctx, opponent: discord.Member = None,
+                               level: str = None):
+        """
+        Invite another researcher to a duel. `!battle @them 50` normalises both teams.
+
+        An uncapped duel is what this has always been - everybody at their real levels -
+        and it stays the default. A capped one puts both sides at 50 or 100 so the
+        result is about the teams rather than about who has been playing longer.
+        """
         challenger_id = str(ctx.author.id)
-        
+
         if not opponent:
-            return await ctx.send("⚠️ You must ping the researcher you wish to spar with! Usage: `!battle @User`")
-            
+            return await ctx.send(
+                "⚠️ You must ping the researcher you wish to spar with! "
+                "Usage: `!battle @User`, or `!battle @User 50` for a level-capped duel.")
+
+        level_cap, complaint = parse_level_cap(level)
+        if complaint:
+            return await ctx.send(complaint)
+
         opponent_id = str(opponent.id)
 
         if challenger_id == opponent_id:
@@ -7765,16 +7787,32 @@ class Combat(commands.Cog):
                     return await ctx.send(f"⚠️ **{opponent.display_name}** does not have a fieldwork roster assembled yet.")
 
         # 3. FIRE THE HANDSHAKE
-        view = ChallengeView(self, ctx.author, opponent)
-        
+        view = ChallengeView(self, ctx.author, opponent, level_cap=level_cap)
+
+        # The format is on the invitation, because agreeing to a duel at your own levels
+        # and agreeing to one at 50 are different things to agree to.
+        format_line = (f"\n📏 **Format:** all specimens set to **Level {level_cap}** "
+                       f"for this duel — no experience is earned."
+                       if level_cap else "")
+
         # Save the message to the view so the timeout function can edit it later
         view.message = await ctx.send(
-            f"⚔️ {opponent.mention}, **{ctx.author.display_name}** has challenged you to an Ecological Field Duel!\nDo you accept?", 
+            f"⚔️ {opponent.mention}, **{ctx.author.display_name}** has challenged you to an Ecological Field Duel!{format_line}\nDo you accept?",
             view=view
         )
 
-    async def initialize_pvp_battle(self, channel, p1: discord.Member, p2: discord.Member):
-        """Builds a shared memory state for a synchronous PvP duel."""
+    async def initialize_pvp_battle(self, channel, p1: discord.Member,
+                                    p2: discord.Member, level_cap=None):
+        """
+        Builds a shared memory state for a synchronous PvP duel.
+
+        `level_cap` normalises every specimen on both sides for the duration. The real
+        level is kept alongside as `true_level` and is what gets written back, because
+        the stat block is not the only thing that reads `level`: the post-battle save
+        persists it, and the level-up threshold is computed from it. A cap written into
+        `level` alone would have turned a Level 20 specimen into a Level 51 one the
+        first time it survived a capped duel.
+        """
         print(f"\n=== DEBUG: Initializing PvP Duel: {p1.display_name} vs {p2.display_name} ===")
         p1_id = str(p1.id)
         p2_id = str(p2.id)
@@ -7810,6 +7848,12 @@ class Combat(commands.Cog):
                         for row in rows:
                             tag, poke_id, p_name, p_lvl, p_nature = row[0:5]
                             roster_slot = row[26]
+
+                            # The level the duel is fought at, and the one the specimen
+                            # actually is. Only the first feeds the stat block.
+                            true_level = p_lvl
+                            if level_cap:
+                                p_lvl = level_cap
                             
                             print(f"DEBUG: Loading [Slot {roster_slot}] -> {p_name.capitalize()} (Level {p_lvl})")
                             
@@ -7861,6 +7905,8 @@ class Combat(commands.Cog):
                             
                             player_team.append({
                                 'instance_id': tag, 'pokedex_id': poke_id, 'name': p_name, 'level': p_lvl,
+                                # What it really is. `level` above may be the duel's cap.
+                                'true_level': true_level,
                                 'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
                                 'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 
                                 'is_shiny': row[21], 'held_item': row[22], 'gmax_factor': row[23], 
@@ -7892,6 +7938,7 @@ class Combat(commands.Cog):
             # 2. Build the Shared Memory Reference (The PvP Ecosystem)
             shared_state = {
                 'is_pvp': True,
+                'level_cap': level_cap,
                 'p1_id': p1_id,
                 'p2_id': p2_id,
                 'p1': p1, 
@@ -8871,6 +8918,9 @@ class Combat(commands.Cog):
                     # Encore copies whatever actually resolved here; Conversion 2
                     # reads the element off it.
                     attacker['last_move_used'] = raw_move_name
+                    # Last Resort counts what has RESOLVED, not what was
+                    # picked - a move flinched away must not unlock it.
+                    record_move_used(attacker, raw_move_name)
                     attacker['last_move_type'] = move.get('type')
                     # A sacrifice move banks its wish against the SIDE, so whoever
                     # fills the vacated slot collects it - see trigger_single_entry_ability.
@@ -9634,7 +9684,19 @@ class Combat(commands.Cog):
                             survivors = [p for p in p_team if p['current_hp'] > 0]
 
                             # 2. Distribute EXP and Level Up
-                            if survivors and total_exp > 0:
+                            #
+                            # A capped duel pays none. The level-up threshold is read
+                            # off `level`, which is the FORMAT's level here, so a
+                            # Level 20 specimen fighting at 100 would be measured
+                            # against a Level 100 threshold - and the evolution check
+                            # below it would fire on a level it has not reached. The
+                            # honest version of "normalise the levels" is that the
+                            # result does not count toward progression.
+                            if state.get('level_cap') and survivors:
+                                rewards_log += (
+                                    f"\n\n📏 Level-{state['level_cap']} exhibition — "
+                                    f"no experience awarded.")
+                            elif survivors and total_exp > 0:
                                 exp_per = math.floor(total_exp / len(survivors))
                                 rewards_log += f"\n\n📈 **{player_obj.display_name}'s** surviving team gained **{exp_per} EXP**!"
 
@@ -9676,11 +9738,16 @@ class Combat(commands.Cog):
                             for p in p_team:
                                 if 'instance_id' in p:
                                     # 🚨 This line permanently deletes any Berries/Sashes consumed during the fight!
+                                    # `true_level`, NOT `level`. In a capped duel the
+                                    # latter is the format's level, and writing it back
+                                    # would permanently promote every specimen that
+                                    # walked off the field.
                                     await cursor.execute("""
                                         UPDATE caught_pokemon
                                         SET level = ?, experience = ?, held_item = ?
                                         WHERE instance_id = ?
-                                    """, (p['level'], p['experience'], resolve_persisted_item(p), p['instance_id']))
+                                    """, (p.get('true_level', p['level']), p['experience'],
+                                          resolve_persisted_item(p), p['instance_id']))
 
                                     sketched = await persist_sketch(cursor, p)
                                     if sketched:

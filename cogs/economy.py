@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from utils.constants import (DB_FILE, EQUIPMENT_CATALOG, SHOP_CATALOG, TM_SHOP,
                              TM_CATALOG, TM_TIER_PRICES, CATEGORY_OPTIONS,
-                             type_badges, species_badges)
+                             type_badges, species_badges, trait_badges)
 from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
                            suggest_species)
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
@@ -145,7 +145,15 @@ class GTSSearchPaginator(discord.ui.View):
 
     def create_embed(self):
         row = self.results[self.current_page]
-        gts_id, dep_owner, msg, req_sp, req_min, req_max, req_gen, p_name, p_lvl, p_gen, p_shiny, p_abil, hp, atk, defn, spatk, spdef, spd = row
+        (gts_id, dep_owner, msg, req_sp, req_min, req_max, req_gen, p_name, p_lvl,
+         p_gen, p_shiny, p_abil, hp, atk, defn, spatk, spdef, spd) = row[:18]
+
+        # Read off the END rather than widening the unpack above, so a row built to the
+        # older eighteen-column shape still renders - it simply carries no trait badges.
+        # A positional tuple that grows is the one thing every caller has to agree about
+        # at once, and this view has two separate queries feeding it.
+        p_gmax = row[18] if len(row) > 18 else 0
+        p_h_mult = row[19] if len(row) > 19 else None
         
         iv_total = hp + atk + defn + spatk + spdef + spd
         iv_pct = int((iv_total / 186.0) * 100)
@@ -159,7 +167,9 @@ class GTSSearchPaginator(discord.ui.View):
             color=discord.Color.blue()
         )
         embed.add_field(name="🧬 Biological Data",
-                        value=f"{species_badges(p_name)}\n**Ability:** {p_abil}\n"
+                        value=f"{species_badges(p_name)}"
+                              f"{trait_badges(gmax=p_gmax, height_multiplier=p_h_mult)}"
+                              f"\n**Ability:** {p_abil}\n"
                               f"**IV Potential:** {iv_pct}%", inline=True)
         embed.add_field(name="📝 Trainer Message", value=f"*{msg}*", inline=False)
 
@@ -395,7 +405,8 @@ class GTSSearchModal(discord.ui.Modal, title="GTS Network Search"):
         query = """
             SELECT 
                 g.gts_id, g.user_id, g.message, g.req_species, g.req_min_level, g.req_max_level, g.req_gender,
-                s.name, cp.level, cp.gender, cp.is_shiny, cp.ability, cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed
+                s.name, cp.level, cp.gender, cp.is_shiny, cp.ability, cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                cp.gmax_factor, cp.height_multiplier
             FROM gts_deposits g
             JOIN caught_pokemon cp ON g.instance_id = cp.instance_id
             JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -976,8 +987,12 @@ class MarketPaginator(discord.ui.View):
                 
                 # Format the time remaining cleanly
                 embed.add_field(
+                    # The badges go on the VALUE, not the field name: an embed field
+                    # name renders a custom emoji as its raw `<:alpha:154…>` text.
                     name=f"Listing #{item['list_id']} | {shiny_icon} {item['name'].capitalize()} (Lv. {item['level']})",
-                    value=f"{species_badges(item['name'])}\n**Price:** 🪙 {item['price']:,} Tokens\n**Seller ID:** `{item['seller']}`\n**Listed Pokemon ID:** `{item['uuid'][:8]}`",
+                    value=f"{species_badges(item['name'])}"
+                          f"{trait_badges(gmax=item.get('gmax'), height_multiplier=item.get('h_mult'))}"
+                          f"\n**Price:** 🪙 {item['price']:,} Tokens\n**Seller ID:** `{item['seller']}`\n**Listed Pokemon ID:** `{item['uuid'][:8]}`",
                     inline=False
                 )
 
@@ -1191,10 +1206,13 @@ class Economy(commands.Cog):
         
         async with aiosqlite.connect(DB_FILE) as db:
             async with db.execute("""
-                SELECT gts_id, dep_species, dep_level, req_species, req_min_level, req_max_level, deposit_time
-                FROM gts_deposits 
-                WHERE user_id = ?
-                ORDER BY deposit_time DESC
+                SELECT g.gts_id, g.dep_species, g.dep_level, g.req_species,
+                       g.req_min_level, g.req_max_level, g.deposit_time,
+                       cp.gmax_factor, cp.height_multiplier
+                FROM gts_deposits g
+                LEFT JOIN caught_pokemon cp ON cp.instance_id = g.instance_id
+                WHERE g.user_id = ?
+                ORDER BY g.deposit_time DESC
             """, (user_id,)) as cursor:
                 deposits = await cursor.fetchall()
                 
@@ -1204,13 +1222,18 @@ class Economy(commands.Cog):
         embed = discord.Embed(title="🌐 Your Active GTS Listings", color=discord.Color.blue())
         
         for d in deposits:
-            gts_id, dep_sp, dep_lvl, req_sp, req_min, req_max, dep_time = d
+            (gts_id, dep_sp, dep_lvl, req_sp, req_min, req_max, dep_time,
+             dep_gmax, dep_h_mult) = d
             lvl_req = f"Lvl {req_min}-{req_max}" if req_min != req_max else f"Lvl {req_min}"
-            
+
+            # Only the OFFERED specimen gets trait badges. What you are seeking is a
+            # species and a level range, not a particular specimen, so there is no
+            # G-Max factor or height to report on that half.
             embed.add_field(
                 name=f"ID: `{gts_id}`",
                 value=f"**Offered:** {pretty_species(dep_sp)} (Lvl {dep_lvl})\n"
-                      f"{species_badges(dep_sp)}\n"
+                      f"{species_badges(dep_sp)}"
+                      f"{trait_badges(gmax=dep_gmax, height_multiplier=dep_h_mult)}\n"
                       f"**Seeking:** {pretty_species(req_sp)} ({lvl_req})\n"
                       f"{species_badges(req_sp)}",
                 inline=False
@@ -1275,7 +1298,8 @@ class Economy(commands.Cog):
             query = """
             SELECT 
                 g.gts_id, g.user_id, g.message, g.req_species, g.req_min_level, g.req_max_level, g.req_gender,
-                s.name, cp.level, cp.gender, cp.is_shiny, cp.ability, cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed
+                s.name, cp.level, cp.gender, cp.is_shiny, cp.ability, cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                cp.gmax_factor, cp.height_multiplier
             FROM gts_deposits g
             JOIN caught_pokemon cp ON g.instance_id = cp.instance_id
             JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -1455,7 +1479,8 @@ class Economy(commands.Cog):
                 # 2. Fetch all active listings, joining the biological data AND fetching instance_id
                 async with db.execute("""
                     SELECT gm.listing_id, gm.price, gm.seller_id,
-                        s.name, cp.level, cp.is_shiny, gm.instance_id
+                        s.name, cp.level, cp.is_shiny, gm.instance_id,
+                        cp.gmax_factor, cp.height_multiplier
                     FROM global_market gm
                     JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -1473,7 +1498,11 @@ class Economy(commands.Cog):
                     'name': row[3],
                     'level': row[4],
                     'is_shiny': row[5],
-                    'uuid': row[6]
+                    'uuid': row[6],
+                    # Carried so the browse list can badge an Alpha or a G-Max specimen
+                    # without opening every listing to find out.
+                    'gmax': row[7],
+                    'h_mult': row[8],
                 })
                 
             # 4. Boot up the Paginator
@@ -1498,7 +1527,7 @@ class Economy(commands.Cog):
                     SELECT gm.price, gm.seller_id, gm.expires_at,
                         cp.pokedex_id, s.name, cp.level, cp.nature, cp.is_shiny, cp.ability,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                        cp.gmax_factor, cp.gender
+                        cp.gmax_factor, cp.gender, cp.height_multiplier
                     FROM global_market gm
                     JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
@@ -1511,7 +1540,8 @@ class Economy(commands.Cog):
                 
             # Unpack the massive data payload, including the new marker
             (price, seller_id, expires_at, p_id, name, level, nature, is_shiny, ability,
-             iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, gmax_factor, gender) = data
+             iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, gmax_factor, gender,
+             h_mult) = data
             
             # 2. Calculate Genetic Potential (IVs)
             iv_total = iv_hp + iv_atk + iv_def + iv_spa + iv_spd + iv_spe
@@ -1547,7 +1577,10 @@ class Economy(commands.Cog):
             # ==========================================
             # 5. Build the UI
             shiny_icon = "🌟" if is_shiny else "🌿"
-            gmax_marker = " 🌀 **(G-Max Capable)**" if gmax_factor else ""
+            # Was a lone 🌀 with no mention of size at all, so a listing could not tell
+            # you it was an Alpha - the one trait a buyer most wants to know and cannot
+            # infer from the stat block. Same badges the box browser draws.
+            gmax_marker = trait_badges(gmax=gmax_factor, height_multiplier=h_mult)
             
             embed = discord.Embed(title=f"📋 Market Assay: Listing #{listing_id}", color=discord.Color.teal())
             
