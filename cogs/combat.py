@@ -1966,6 +1966,39 @@ def field_of(state):
                                       'gravity': 0, 'magic_room': 0})
 
 
+def has_replacement(team, active_index):
+    """
+    Whether this side has anyone to send out INSTEAD of the specimen on the field.
+
+    Every swap path asks this, and the two PvP ones never did. A forced-swap menu built
+    for a side with no bench renders zero buttons, and PvP's forced swap waits on a
+    commit that menu is the only way to supply - so the duel wedged permanently and both
+    players stayed locked in active_battles. One function so the answer cannot drift
+    between the five places that need it.
+    """
+    return any(member['current_hp'] > 0 and i != active_index
+               for i, member in enumerate(team or []))
+
+
+def scene_attachment(embed, battle_file):
+    """
+    Bind a rendered scene to `embed`, tolerating the render having failed.
+
+    generate_battle_scene RETURNS None when the renderer gives up - it does not raise -
+    so every call site has to answer "and what if there is no picture". Five did not.
+    The PvP paths dereferenced `.filename` on None and let the surrounding `except`
+    clear the attachments, which is the scene disappearing mid-duel; three initialisers
+    passed `files=[None]` and aborted the battle outright.
+
+    Returns the list to hand to `files=` or `attachments=`, which is `[]` when there is
+    nothing to show - exactly what Discord wants for "no attachments".
+    """
+    if battle_file is None:
+        return []
+    embed.set_image(url=f"attachment://{battle_file.filename}")
+    return [battle_file]
+
+
 def side_of(state, specimen):
     """
     Which side's slot this specimen occupies. Used for effects banked against a side
@@ -2909,6 +2942,12 @@ class PvPDashboard(discord.ui.View):
         if is_trapped:
             return await interaction.response.send_message("⚠️ Your active specimen is trapped and cannot be withdrawn!", ephemeral=True)
         # ==========================================
+
+        # PvE disables this button outright when the bench is empty; PvP drew the menu
+        # anyway, and a menu with no buttons is a dead end rather than an answer.
+        if not has_replacement(self.state[team_key], active_idx):
+            return await interaction.response.send_message(
+                "⚠️ You have no other healthy specimens to deploy!", ephemeral=True)
 
         # Spawn the private terminal
         view = PvPSwapMenu(self.cog, self.state, user_id)
@@ -4230,11 +4269,8 @@ class BattleDashboard(discord.ui.View):
         # ==========================================
         await self.refresh_buttons()
         # Dynamically grab the new randomized filename!
-        if battle_file:
-                embed.set_image(url=f"attachment://{battle_file.filename}")
-                await interaction.edit_original_response(embed=embed, view=self, attachments=[battle_file])
-        else:
-            await interaction.edit_original_response(embed=embed, view=self, attachments=[])
+        await interaction.edit_original_response(
+            embed=embed, view=self, attachments=scene_attachment(embed, battle_file))
 
     async def check_for_evolution(self, db, user_id, specimen, combat_log):
         """Thin wrapper so existing PvE call sites keep working. See the module-level
@@ -4451,11 +4487,10 @@ class BattleDashboard(discord.ui.View):
             )
             
             # Dynamically grab the new randomized filename!
-            if battle_file:
-                embed.set_image(url=f"attachment://{battle_file.filename}")
-            await self.refresh_buttons() 
-            
-            await interaction.edit_original_response(embed=embed, view=self, attachments=[battle_file])
+            scene = scene_attachment(embed, battle_file)
+            await self.refresh_buttons()
+
+            await interaction.edit_original_response(embed=embed, view=self, attachments=scene)
             print("=== DEBUG: handle_transformation COMPLETE ===")
 
         except Exception as e:
@@ -6958,6 +6993,19 @@ class BattleDashboard(discord.ui.View):
 
             n_needs_swap = n_active['current_hp'] <= 0 or state.get('npc_must_pivot')
             p_needs_swap = p_active['current_hp'] <= 0 or state.get('player_must_pivot')
+
+            # A rival that wants to pivot but has no bench stays where it is. The
+            # replacement scan below picks the best specimen with HP left and did not
+            # exclude the one already on the field, so a lone Wimp Out rival "retreated
+            # to the bench" and was then sent straight back out as itself - walking into
+            # its own entry hazards on a switch-in that never happened. On Stealth Rock
+            # that killed it outright.
+            if (n_needs_swap and n_active['current_hp'] > 0
+                    and not has_replacement(state['npc_team'], state['active_npc_index'])):
+                combat_log += (f"\n💨 The rival's **{n_active['name'].capitalize()}** "
+                               f"tried to retreat, but there was nowhere to go!")
+                state['npc_must_pivot'] = False
+                n_needs_swap = False
             
             # ==========================================
             # 🚨 NEW: PRIMORDIAL WEATHER FAINT/PIVOT CLEAR
@@ -7004,7 +7052,10 @@ class BattleDashboard(discord.ui.View):
                 next_npc_idx = None
                 
                 for i, benched_specimen in enumerate(state['npc_team']):
-                    if benched_specimen['current_hp'] > 0:
+                    # "Benched" means benched. A fainted active slot is excluded by the
+                    # HP test anyway, but a PIVOTING one is not, and picking it made the
+                    # rival its own replacement.
+                    if benched_specimen['current_hp'] > 0 and i != state['active_npc_index']:
                         if next_npc_idx is None:
                             next_npc_idx = i # Set a fallback just in case
                             
@@ -7371,11 +7422,8 @@ class BattleDashboard(discord.ui.View):
             await self.refresh_buttons()
             # Dynamically grab the new randomized filename!
             # If the image generated successfully, overwrite the old attachments with the new one!
-            if battle_file:
-                embed.set_image(url=f"attachment://{battle_file.filename}")
-                await interaction.edit_original_response(embed=embed, view=self, attachments=[battle_file])
-            else:
-                await interaction.edit_original_response(embed=embed, view=self, attachments=[])
+            await interaction.edit_original_response(
+                embed=embed, view=self, attachments=scene_attachment(embed, battle_file))
             print("=== DEBUG: process_turn_end COMPLETE ===")
         
         except Exception as e:
@@ -8022,13 +8070,13 @@ class Combat(commands.Cog):
             embed.add_field(name=f"🔴 {p2.display_name}'s {p2_lead['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
             # Dynamically grab the new randomized filename!
             # Dynamically attach the first image!
-            embed.set_image(url=f"attachment://{battle_file.filename}")
+            scene = scene_attachment(embed, battle_file)
             embed.set_footer(text="Awaiting inputs from both researchers...")
 
             dashboard_view = PvPDashboard(self, shared_state)
-            
+
             print("DEBUG: Sending final payload to Discord...")
-            shared_state['message_obj'] = await channel.send(embed=embed, files=[battle_file], view=dashboard_view)
+            shared_state['message_obj'] = await channel.send(embed=embed, files=scene, view=dashboard_view)
             print("=== DEBUG: PvP Initialization COMPLETE ===")
 
         except Exception as e:
@@ -9801,6 +9849,34 @@ class Combat(commands.Cog):
             p2_needs_swap = new_p2_active['current_hp'] <= 0 or state.get('p2_must_pivot')
 
             # ==========================================
+            # A PIVOT WITH NOWHERE TO GO STAYS PUT
+            # ==========================================
+            # PvE says this out loud in process_turn_end; PvP never asked. A benchless
+            # Wimp Out here entered the swap phase, wiped `commits`, and DMed a menu
+            # with zero buttons on it - so the commit it then waited on could never
+            # arrive, check_pvp_commits never fired again, and BOTH researchers stayed
+            # locked in active_battles until the process restarted.
+            #
+            # Only a SURVIVING pivoter is downgraded. A faint with no bench cannot reach
+            # this line: the alive-check above ends the duel first.
+            for tag, needs_swap, active in (('p1', p1_needs_swap, new_p1_active),
+                                            ('p2', p2_needs_swap, new_p2_active)):
+                if not needs_swap or active['current_hp'] <= 0:
+                    continue
+                if has_replacement(state[f'{tag}_team'], state[f'{tag}_active_index']):
+                    continue
+
+                combat_log += (f"\n*...But {state[tag].display_name}'s "
+                               f"**{active['name'].capitalize()}** had no healthy "
+                               f"specimens left to swap into!*")
+                state[f'{tag}_must_pivot'] = False
+                if tag == 'p1':
+                    p1_needs_swap = False
+                else:
+                    p2_needs_swap = False
+            # ==========================================
+
+            # ==========================================
             # 🚨 NEW: PRIMORDIAL WEATHER FAINT/PIVOT CLEAR
             # ==========================================
             weather = state.get('weather', {})
@@ -9873,18 +9949,15 @@ class Combat(commands.Cog):
                     n_aura=battle_render.aura_for(state.get('p2_adaptation'), new_p2_active)
                 )
                 
-                embed.set_image(url=f"attachment://{battle_file.filename}")
-                
+                scene = scene_attachment(embed, battle_file)
+
             except Exception as img_err:
                 print(f"DEBUG: Failed to generate image: {img_err}")
-                battle_file = None
+                scene = []
 
             dashboard_view = PvPDashboard(self, state)
-            
-            if battle_file:
-                await state['message_obj'].edit(embed=embed, attachments=[battle_file], view=dashboard_view)
-            else:
-                await state['message_obj'].edit(embed=embed, attachments=[], view=dashboard_view)
+
+            await state['message_obj'].edit(embed=embed, attachments=scene, view=dashboard_view)
 
             print("=== DEBUG: process_pvp_turn COMPLETE ===")
 
@@ -9996,18 +10069,16 @@ class Combat(commands.Cog):
                     p_aura=battle_render.aura_for(state.get('p1_adaptation'), p1_active),
                     n_aura=battle_render.aura_for(state.get('p2_adaptation'), p2_active)
                 )
-                embed.set_image(url=f"attachment://{battle_file.filename}")
+                scene = scene_attachment(embed, battle_file)
             except Exception as img_err:
                 print(f"DEBUG: Image generation failed in Faint Phase: {img_err}")
-                battle_file = None
+                scene = []
 
             dashboard_view = PvPDashboard(self, state)
-            
-            if battle_file:
-                await state['message_obj'].edit(embed=embed, attachments=[battle_file], view=dashboard_view)
-            else:
-                # If image fails, clear old attachments so ghost Pokémon don't linger!
-                await state['message_obj'].edit(embed=embed, attachments=[], view=dashboard_view)
+
+            # An empty list clears the old attachments, so a failed render leaves no
+            # ghost Pokemon behind from the previous frame.
+            await state['message_obj'].edit(embed=embed, attachments=scene, view=dashboard_view)
                 
             print("=== DEBUG: process_faint_swaps COMPLETE ===")
 
@@ -10297,11 +10368,10 @@ class Combat(commands.Cog):
             )
 
             # Dynamically grab the new randomized filename!
-            if battle_file:
-                embed.set_image(url=f"attachment://{battle_file.filename}")
-            
+            scene = scene_attachment(embed, battle_file)
+
             dashboard_view = await BattleDashboard.create(self, user_id, ctx)
-            await ctx.send(embed=embed, files=[battle_file], view=dashboard_view)
+            await ctx.send(embed=embed, files=scene, view=dashboard_view)
 
         except Exception as e:
             print("\n🚨 CRITICAL CRASH IN WARDEN INITIALIZATION 🚨")
@@ -11228,8 +11298,7 @@ class Combat(commands.Cog):
 
             # Attach the file to the embed
             # Dynamically grab the new randomized filename!
-            if battle_file:
-                embed.set_image(url=f"attachment://{battle_file.filename}")
+            scene = scene_attachment(embed, battle_file)
             print("DEBUG: Battle scene generated and attached.")
 
             print("file generated and attached")
@@ -11239,7 +11308,7 @@ class Combat(commands.Cog):
             print("=== DEBUG: npcduel execution COMPLETE ===")
             # Send the embed WITH the file and the view
             print("View attached")
-            await ctx.send(embed=embed, files=[battle_file], view=dashboard_view)
+            await ctx.send(embed=embed, files=scene, view=dashboard_view)
         except Exception as e:
             print("\n🚨 CRITICAL CRASH IN NPCDUEL INITIALIZATION 🚨")
             traceback.print_exc()
