@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, SPECIES_STAT_ITEMS, SPECIES_CRIT_ITEMS, SPECIES_TYPE_BOOST_ITEMS, SPECIES_ORB_MULTIPLIER, SPECIES_FORM_ITEMS, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -4866,7 +4866,7 @@ def paradox_multiplier(pokemon, stat, weather='none', terrain='none'):
 
 
 def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=None,
-                        party=None):
+                        party=None, magic_room=False):
     """
     The flat multiplier an ability puts on one of its owner's own stats.
 
@@ -4888,7 +4888,11 @@ def stat_multiplier_for(pokemon, stat, weather='none', terrain='none', opponent=
     # ride alongside the table row rather than replacing it.
     against = (ruin_multiplier(stat, opponent)
                * paradox_multiplier(pokemon, stat, weather, terrain)
-               * supreme_overlord_multiplier(pokemon, stat, party))
+               * supreme_overlord_multiplier(pokemon, stat, party)
+               # ITEM PHASE 6: the species-gated items ride alongside the ability row for
+               # the same reason the three above do - a Light Ball and a Huge Power are
+               # two separate claims on the same stat and both should be honoured.
+               * species_stat_multiplier(pokemon, stat, magic_room))
 
     trait = BIOLOGICAL_TRAITS.get('stat_multipliers', {}).get(get_active_ability(pokemon))
     if not trait or stat not in trait['stats']:
@@ -4963,7 +4967,8 @@ def battle_speed(pokemon, has_tailwind=False, weather='none', terrain='none', ma
     raw = (pokemon.get('stats') or {}).get('speed', 50)
     speed = apply_stat_stage(raw, (pokemon.get('stat_stages') or {}).get('speed', 0))
 
-    speed *= stat_multiplier_for(pokemon, 'speed', weather, terrain)
+    speed *= stat_multiplier_for(pokemon, 'speed', weather, terrain,
+                                 magic_room=magic_room)
 
     if get_active_item(pokemon, magic_room) == 'choice-scarf':
         speed *= 1.5
@@ -5156,6 +5161,97 @@ def loaded_dice_floor(attacker, magic_room=False):
     if get_active_item(attacker, magic_room) != 'loaded-dice':
         return 0
     return LOADED_DICE_MIN_HITS
+
+
+# ==========================================
+# ITEM PHASE 6: SPECIES-SPECIFIC GEAR
+# ==========================================
+# Sixteen items that all say "a flat effect, but only for this species". Three of the
+# four groups fold into a function that already exists - stat_multiplier_for, the crit
+# stage, and the type-booster line in the damage stack - and the fourth is the Rusted
+# Sword's form machinery, which lives in the engine because it needs the database.
+
+def true_species_name(pokemon):
+    """
+    The BASE species name, seeing through a disguise and ignoring the form suffix.
+
+    'marowak-alola' and 'giratina-altered' both answer as their base, which is what lets
+    an Alolan Marowak swing a Thick Club. Illusion is seen through for the same reason
+    true_pokedex_id sees through it: a disguise is meant to fool a trainer, not the
+    physics, and a Zoroark wearing Pikachu's face must not be handed Pikachu's Light Ball.
+    """
+    if not pokemon:
+        return ''
+    real = pokemon.get(ILLUSION_MARKER)
+    name = (real or pokemon).get('name') or ''
+    return str(name).lower().split('-')[0].strip()
+
+
+def species_stat_multiplier(pokemon, stat, magic_room=False):
+    """
+    What a species-gated ITEM does to one of its holder's own stats.
+
+    The item twin of stat_multiplier_for's table, and read from inside it - so a Light
+    Ball and a Huge Power multiply together rather than one quietly replacing the other.
+    """
+    if not pokemon:
+        return 1.0
+
+    row = SPECIES_STAT_ITEMS.get(get_active_item(pokemon, magic_room))
+    if not row or stat not in row['stats']:
+        return 1.0
+    if true_species_name(pokemon) not in row['species']:
+        return 1.0
+    # The two Ditto powders, whose descriptions both end "lost after transforming".
+    if row.get('lost_on_transform') and (pokemon.get('volatile_statuses') or {}).get('transformed'):
+        return 1.0
+    return row['stats'][stat]
+
+
+def species_crit_stage(attacker, magic_room=False):
+    """The Lucky Punch and the Stick: crit stages owed to a species-gated item, or 0."""
+    if not attacker:
+        return 0
+    row = SPECIES_CRIT_ITEMS.get(get_active_item(attacker, magic_room))
+    if not row or true_species_name(attacker) not in row['species']:
+        return 0
+    return row['stages']
+
+
+def species_type_boost(attacker, move_type, magic_room=False):
+    """
+    The three Orbs: 1.2 to two named elements, but only in the right hands.
+
+    Apart from TYPE_BOOST_ITEMS because that table is one item to ONE element, and
+    because a plate held by the wrong species still works while an Orb does nothing at
+    all - which is the whole difference between an enhancer and a signature item.
+    """
+    if not attacker or not move_type:
+        return 1.0
+    row = SPECIES_TYPE_BOOST_ITEMS.get(get_active_item(attacker, magic_room))
+    if not row or true_species_name(attacker) != row['species']:
+        return 1.0
+    return SPECIES_ORB_MULTIPLIER if str(move_type).lower() in row['types'] else 1.0
+
+
+def species_form_for(pokemon, magic_room=False):
+    """
+    The form a species-gated item wants its holder to take, or None.
+
+    The Griseous Orb and the four nectars. Returns the row rather than doing the work,
+    because reshaping a specimen needs the species tables and this module is synchronous
+    - the same split the Crowned forms and the Primal reversions already use.
+    """
+    if not pokemon:
+        return None
+    row = SPECIES_FORM_ITEMS.get(get_active_item(pokemon, magic_room))
+    if not row or true_species_name(pokemon) != row['species']:
+        return None
+    # Already wearing it. Without this a switch-out and back in would re-derive the stats
+    # from an already-transformed specimen, which is the bug the Crowned guard exists for.
+    if (pokemon.get('name') or '').lower() == row['form']:
+        return None
+    return row
 
 
 def item_priority_tier(attacker, magic_room=False):
@@ -5392,10 +5488,10 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     # press on stats that are not its owner's. Only the ATTACKER is handed the party:
     # Supreme Overlord counts its own fallen, and the two offensive lines are the only
     # ones it touches.
-    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain, defender, party))
-    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain, defender, party))
-    phys_def = math.floor(phys_def * stat_multiplier_for(defender, 'defense', weather, terrain, attacker))
-    spec_def = math.floor(spec_def * stat_multiplier_for(defender, 'sp_def', weather, terrain, attacker))
+    phys_atk = math.floor(phys_atk * stat_multiplier_for(attacker, 'attack', weather, terrain, defender, party, magic_room))
+    spec_atk = math.floor(spec_atk * stat_multiplier_for(attacker, 'sp_atk', weather, terrain, defender, party, magic_room))
+    phys_def = math.floor(phys_def * stat_multiplier_for(defender, 'defense', weather, terrain, attacker, magic_room=magic_room))
+    spec_def = math.floor(spec_def * stat_multiplier_for(defender, 'sp_def', weather, terrain, attacker, magic_room=magic_room))
 
     # Assault Vest reinforces the Sp. Def stat itself, so it follows that stat rather than
     # the move - a Psyshock aimed at physical Defense correctly ignores the vest.
@@ -5427,7 +5523,7 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
         # The target's Huge Power comes along with its Attack, because it IS the target's
         # Attack that is being swung. Its Supreme Overlord does not: only one party is
         # threaded this far down, and it is the attacker's. Stated rather than hidden.
-        borrowed = math.floor(borrowed * stat_multiplier_for(defender, 'attack', weather, terrain, attacker))
+        borrowed = math.floor(borrowed * stat_multiplier_for(defender, 'attack', weather, terrain, attacker, magic_room=magic_room))
         return borrowed, phys_def, 'physical'
 
     # --- BODY PRESS: swings with the user's own Defense ---
@@ -5435,7 +5531,7 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
         body_press_atk = apply_stat_stage(attacker.get('stats', {}).get('defense', 50), a_stages.get('defense', 0))
         # Likewise Marvel Scale, which is a Defense boost the move is now attacking with
         body_press_atk = math.floor(
-            body_press_atk * stat_multiplier_for(attacker, 'defense', weather, terrain, defender))
+            body_press_atk * stat_multiplier_for(attacker, 'defense', weather, terrain, defender, magic_room=magic_room))
         return body_press_atk, phys_def, 'physical'
 
     # --- PSYSHOCK FAMILY: special attack aimed at the physical wall ---
@@ -7446,6 +7542,10 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         # a Draco Plate just turned Dragon collects that same plate's 20% - which is
         # what the games do, and the reason this belongs here rather than earlier.
         ability_mod *= type_boost_multiplier(attacker_item, move_type)
+        # ITEM PHASE 6: the three Orbs. A separate line rather than a row in the
+        # table above because each covers TWO elements and is refused outright in
+        # the wrong hands, neither of which that table can express.
+        ability_mod *= species_type_boost(attacker, move_type, magic_room)
 
         # Gems are the same rule with a single-use flag. Spent here because this is
         # where the move is definitely being thrown, and only against a target the
@@ -7568,6 +7668,10 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             # Super Luck. Merciless is not here: it forces the crit outright rather than
             # nudging the odds, so it sits with the guaranteed-crit rule below.
             crit_stage += CRIT_STAGE_ABILITIES.get(atk_ability, 0)
+
+            # ITEM PHASE 6: the Lucky Punch and the Stick, worth two stages each but only
+            # in the right hands. Beside Super Luck because they are the same claim.
+            crit_stage += species_crit_stage(attacker, magic_room)
 
 
             # Calculate the final threshold based on modern ecosystem rules
