@@ -118,7 +118,7 @@ FIELD_MISSIONS = {
         "desc": "Clear debris from fragile underwater ecosystems.",
         "preferred_type": "water",
         "base_xp_hr": 200,
-        "item_pool": ["water-stone", "nugget", "dive-ball", "rare-candy"]
+        "item_pool": ["water-stone", "nugget", "rare-candy"]
     },
     "canopy": {
         "category": "exp",
@@ -1023,6 +1023,84 @@ def build_phase2_stock():
 
 
 EQUIPMENT_CATALOG.update(build_phase2_stock())
+
+
+# ==========================================
+# 🚪 THE PHASE 3 SHELF - PIVOT AND ESCAPE
+# ==========================================
+# Four items that move a specimen off the field rather than changing a number on it.
+# Three of them eject somebody; the fourth is the one that refuses to BE held.
+#
+# All three ejectors resolve at the END of the turn rather than the instant they fire.
+# That is a divergence from the games and it is deliberate: it is the same divergence
+# `end_of_turn_survival` already documents for Wimp Out and Emergency Exit, and making
+# the items leave mid-turn while the abilities leave at the end would have meant two
+# switch-out clocks in an engine that has trouble keeping one.
+EJECT_ITEMS = {
+    # what the holder answers -> whether the holder or the ATTACKER is the one that goes
+    'eject-button': 'self',
+    'eject-pack':   'self',
+    'red-card':     'attacker',
+}
+
+# Where a pending ejection is parked between firing and the end of the turn. Holds the
+# item name, so the log can say which one did it and so Red Card can be told apart from
+# the two that move their own holder.
+PIVOT_REQUEST = '_pivot_requested_by'
+
+# Red Card drags somebody out against their will, so they do NOT get to choose the
+# replacement - that is the entire difference between being Red Carded and choosing to
+# pivot. Everything else here is a voluntary switch and keeps its menu.
+RANDOM_REPLACEMENT_ITEMS = {'red-card'}
+
+# Shed Shell is the item half of the trapping table. It answers `is_trapped`, not the
+# ejectors, and it is here rather than beside them because it is the only one of the
+# four that is not a one-shot.
+SHED_SHELL = 'shed-shell'
+
+PHASE3_PRICE = 300
+
+PHASE3_DESCRIPTIONS = {
+    'eject-button': "Switches the holder out at end of turn after it is damaged by a "
+                    "move. Single use.",
+    'eject-pack':   "Switches the holder out at end of turn after any of its stats is "
+                    "lowered. Single use.",
+    'red-card':     "Drags the attacker out at end of turn after it damages the holder. "
+                    "Their replacement is random. Single use.",
+    'shed-shell':   "The holder can always switch out, whatever is holding it there.",
+}
+
+PHASE3_EMOJI = {
+    'eject-button': '⏏️', 'eject-pack': '🎒', 'red-card': '🟥', 'shed-shell': '🐚',
+}
+
+
+def build_phase3_stock():
+    """
+    The Phase 3 shelf, checked against the tables the engine reads.
+
+    Same assertion as Phase 2 and for the same reason: an item on this shelf that no
+    table implements is an item the shop charges for and the engine ignores.
+    """
+    implemented = set(EJECT_ITEMS) | {SHED_SHELL}
+    missing = implemented - set(PHASE3_DESCRIPTIONS)
+    assert not missing, f"Phase 3 items with no shop entry: {sorted(missing)}"
+    extra = set(PHASE3_DESCRIPTIONS) - implemented
+    assert not extra, f"Phase 3 shop entries with no implementation: {sorted(extra)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE3_PRICE,
+            "desc": PHASE3_DESCRIPTIONS[item],
+            "emoji": PHASE3_EMOJI.get(item, '🚪'),
+            "category": "battleitems",
+        }
+        for item in sorted(implemented)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase3_stock())
 
 
 # ==========================================
