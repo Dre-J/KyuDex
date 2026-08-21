@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -11,7 +11,12 @@ def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
     """
     log = ""
     types = specimen.get('types', [])
-    
+
+    # ITEM PHASE 5: Heavy-Duty Boots walk over everything laid on this side of the field.
+    # Answered before anything is read, because the boots do not care WHICH hazard it is.
+    if ignores_hazards(specimen):
+        return log
+
     # Is the specimen touching the ground? (We check for Flying type!)
     ability = get_active_ability(specimen)
 
@@ -1466,6 +1471,25 @@ def get_stored_ability(pokemon):
     return (pokemon.get('ability') or 'none').lower().replace(' ', '-')
 
 
+def _shield_in_hand(pokemon):
+    """
+    Whether an Ability Shield is in force, WITHOUT asking what ability the holder has.
+
+    get_active_item consults Klutz, and Klutz is an ability, so the ordinary accessor
+    cannot be used from inside get_active_ability - it would call back into the function
+    it was called from. Embargo is a volatile and costs no ability lookup, so it is
+    honoured here; Klutz and Magic Room are not, and a shield under either keeps working.
+    Stated rather than hidden: it is a narrow gap, and closing it would mean untangling
+    the accessor pair.
+    """
+    if pokemon is None:
+        return False
+    held = (pokemon.get('held_item') or 'none').lower().replace(' ', '-')
+    if held != ABILITY_SHIELD:
+        return False
+    return not (pokemon.get('volatile_statuses') or {}).get('embargo')
+
+
 def get_active_ability(pokemon):
     """
     The ability actually in force right now - 'none' while it is suppressed.
@@ -1492,6 +1516,12 @@ def get_active_ability(pokemon):
         return 'none'
 
     volatiles = pokemon.get('volatile_statuses') or {}
+
+    # ITEM PHASE 5: an Ability Shield refuses all three suppressors at once, which is why
+    # it is answered before any of them rather than beside one.
+    if _shield_in_hand(pokemon):
+        return get_stored_ability(pokemon)
+
     if volatiles.get('ability_suppressed'):
         return 'none'
 
@@ -1509,6 +1539,11 @@ def set_active_ability(pokemon, new_ability):
     restore_base_ability can put it back when the specimen leaves the field.
     """
     if pokemon is None:
+        return
+    # ITEM PHASE 5: an Ability Shield refuses to have its holder's ability rewritten.
+    # Skill Swap, Entrainment, Worry Seed, Simple Beam and a Trace aimed at it all stop
+    # here, because this is the one function every one of them goes through.
+    if _shield_in_hand(pokemon):
         return
     if '_base_ability' not in pokemon:
         pokemon['_base_ability'] = pokemon.get('ability')
@@ -3785,6 +3820,11 @@ def move_family_blocked(defender, move_name):
     family = move_family(move_name)
     if not family:
         return None
+    # ITEM PHASE 5: Safety Goggles refuses powder exactly as Overcoat does. Returned as
+    # the ITEM's name, which is what makes the log say what actually answered - the
+    # caller only ever prints whatever came back from here.
+    if refuses_powder(defender, move_name):
+        return 'safety-goggles'
     ability = get_active_ability(defender)
     return ability if MOVE_FAMILY_IMMUNE_ABILITIES.get(ability) == family else None
 
@@ -3826,6 +3866,11 @@ def refuses_stat_drop(target, stat):
     Never consulted for a specimen's own drops - the callers screen those out first,
     because Clear Body has never stopped Close Combat costing its owner Defense.
     """
+    # ITEM PHASE 5: a Clear Amulet refuses every stat, which is Clear Body's own row -
+    # answered before the ability so a specimen holding one is covered whatever it has.
+    if get_active_item(target) in STAT_DROP_IMMUNE_ITEMS:
+        return True
+
     ability = get_active_ability(target)
     guarded = STAT_DROP_IMMUNE_ABILITIES.get(ability)
     if guarded is None:
@@ -4775,8 +4820,16 @@ def is_effectively_asleep(pokemon):
 
 
 def copies_stat_boosts(pokemon):
-    """Opportunist: takes a copy of whatever the specimen opposite gains."""
-    return get_active_ability(pokemon) in OPPORTUNIST_ABILITIES
+    """
+    Opportunist: takes a copy of whatever the specimen opposite gains.
+
+    ITEM PHASE 5: a Mirror Herb says the same thing. Answered here rather than beside the
+    ability so the copy still travels through resolve_stat_stages' loop guard - two
+    Mirror Herbs cannot trade one Swords Dance back and forth for ever, for the same
+    reason two Opportunists cannot.
+    """
+    return (get_active_ability(pokemon) in OPPORTUNIST_ABILITIES
+            or get_active_item(pokemon) in COPIES_BOOSTS_ITEMS)
 
 
 def fallen_allies(party, exclude=None):
@@ -4990,6 +5043,121 @@ def item_flinch_chance(attacker, move, damage, magic_room=False):
     return ITEM_FLINCH_CHANCE.get(get_active_item(attacker, magic_room), 0)
 
 
+# ==========================================
+# ITEM PHASE 5: THE DEFENSIVE AND UTILITY SHELF
+# ==========================================
+# Everything here that could join an existing ability predicate already has - Covert
+# Cloak sits in secondary_chance, Clear Amulet in refuses_stat_drop, Protective Pads in
+# makes_contact, Mirror Herb in copies_stat_boosts. What is left are the ones with no
+# ability twin, and they are gathered here rather than scattered.
+
+def can_still_evolve(pokemon):
+    """
+    Whether this specimen has somewhere left to evolve to - the Eviolite condition.
+
+    Read off the REAL species. An Illusion fools the trainer; letting it fool an Eviolite
+    as well would have a disguised Zoroark wearing somebody else's walls.
+    """
+    return true_pokedex_id(pokemon) in UNEVOLVED_SPECIES
+
+
+def eviolite_multiplier(pokemon, stat, magic_room=False):
+    """The Eviolite's factor for one defensive stat, or 1.0."""
+    if pokemon is None or stat not in EVIOLITE_STATS:
+        return 1.0
+    if get_active_item(pokemon, magic_room) != 'eviolite':
+        return 1.0
+    return EVIOLITE_MULTIPLIER if can_still_evolve(pokemon) else 1.0
+
+
+def punching_glove_boost(attacker, move_name, magic_room=False):
+    """1.1 for a punch thrown by a Punching Glove, otherwise 1.0."""
+    if get_active_item(attacker, magic_room) != 'punching-glove':
+        return 1.0
+    return PUNCHING_GLOVE_BOOST if normalise_move_name(move_name) in PUNCH_MOVES else 1.0
+
+
+def ignores_hazards(pokemon, magic_room=False):
+    """Heavy-Duty Boots: the holder walks over everything laid on its side."""
+    return get_active_item(pokemon, magic_room) == HEAVY_DUTY_BOOTS
+
+
+def ability_is_shielded(pokemon, magic_room=False):
+    """
+    Ability Shield: the holder's ability cannot be changed, copied onto it or suppressed.
+
+    Read by the paths Block 21 built for Neutralizing Gas, Skill Swap, Entrainment,
+    Gastro Acid and the rest, rather than by a rule of its own.
+    """
+    return get_active_item(pokemon, magic_room) == ABILITY_SHIELD
+
+
+def refuses_powder(defender, move_name, magic_room=False):
+    """Safety Goggles: the item half of Overcoat's powder immunity."""
+    if get_active_item(defender, magic_room) not in POWDER_IMMUNE_ITEMS:
+        return False
+    return normalise_move_name(move_name) in POWDER_MOVES
+
+
+def shrugs_off_weather_chip(pokemon, magic_room=False):
+    """Safety Goggles again: no sandstorm grit and no hail."""
+    return get_active_item(pokemon, magic_room) in WEATHER_CHIP_IMMUNE_ITEMS
+
+
+def focus_band_holds(defender, magic_room=False, rng=random):
+    """
+    Focus Band: a one-in-ten chance to survive a lethal hit at 1 HP.
+
+    Unlike a Focus Sash this does NOT require full health and is not consumed, which is
+    what it pays for by being a chance rather than a certainty.
+    """
+    if get_active_item(defender, magic_room) != 'focus-band':
+        return False
+    return rng.random() < FOCUS_BAND_ODDS
+
+
+def shell_bell_heal(attacker, damage, magic_room=False):
+    """How much a Shell Bell gives back for the damage just dealt, or 0."""
+    if attacker is None or damage <= 0:
+        return 0
+    if get_active_item(attacker, magic_room) != 'shell-bell':
+        return 0
+    return max(1, math.floor(damage * SHELL_BELL_FRACTION))
+
+
+def big_root_bonus(attacker, magic_room=False):
+    """Big Root's multiplier on anything the holder DRAINS back."""
+    if get_active_item(attacker, magic_room) != 'big-root':
+        return 1.0
+    return BIG_ROOT_DRAIN_BONUS
+
+
+def bind_turns(attacker, magic_room=False, rng=random):
+    """How long a bind laid by this attacker lasts. A Grip Claw pins it at the maximum."""
+    if get_active_item(attacker, magic_room) == 'grip-claw':
+        return GRIP_CLAW_TURNS
+    return rng.randint(4, 5)
+
+
+def bind_damage_multiplier(binder, magic_room=False):
+    """A Binding Band doubles the per-turn chip of whatever ITS HOLDER tied down."""
+    if get_active_item(binder, magic_room) != 'binding-band':
+        return 1.0
+    return BINDING_BAND_MULTIPLIER
+
+
+def loaded_dice_floor(attacker, magic_room=False):
+    """
+    The fewest hits a multi-strike move may roll for this attacker.
+
+    Loaded Dice only ever raises the floor, so a move that would have hit five times
+    still hits five - the dice are loaded, not fixed.
+    """
+    if get_active_item(attacker, magic_room) != 'loaded-dice':
+        return 0
+    return LOADED_DICE_MIN_HITS
+
+
 def item_priority_tier(attacker, magic_room=False):
     """
     Where the attacker's ITEM puts it inside its bracket: 1 first, -1 last, 0 no opinion.
@@ -5033,6 +5201,11 @@ def makes_contact(move, attacker=None):
     """
     if attacker is not None and get_active_ability(attacker) in NO_CONTACT_ABILITIES:
         return False
+    # ITEM PHASE 5: Protective Pads and the Punching Glove both stop the holder TOUCHING
+    # what it hits, which is Long Reach's slot exactly - so Rough Skin, Static, a Rocky
+    # Helmet and Pickpocket are all spared in one line rather than four.
+    if attacker is not None and get_active_item(attacker) in NO_CONTACT_ITEMS:
+        return False
     return (move or {}).get('class') == 'physical'
 
 
@@ -5044,7 +5217,10 @@ def secondary_chance(base_chance, attacker, defender):
     a status move whose whole point is the status - is not a secondary effect, so
     callers pass those through without consulting this.
     """
-    if get_active_ability(defender) in SECONDARY_IMMUNE_ABILITIES:
+    # ITEM PHASE 5: a Covert Cloak is a Shield Dust you can buy, so it answers here
+    # rather than anywhere of its own.
+    if (get_active_ability(defender) in SECONDARY_IMMUNE_ABILITIES
+            or get_active_item(defender) in SECONDARY_IMMUNE_ITEMS):
         return 0
     return base_chance * SECONDARY_CHANCE_ABILITIES.get(get_active_ability(attacker), 1.0)
 
@@ -5225,6 +5401,17 @@ def resolve_combat_stats(move_name, move_class, attacker, defender, wonder_room=
     # the move - a Psyshock aimed at physical Defense correctly ignores the vest.
     if get_active_item(defender, magic_room) == 'assault-vest':
         spec_def = math.floor(spec_def * 1.5)
+
+    # ITEM PHASE 5: an Eviolite reinforces BOTH walls, and only for a specimen that still
+    # has somewhere to evolve to. Beside the vest because it is the same shape of thing -
+    # a flat factor on the stat rather than on the move - and before Wonder Room for the
+    # same reason the vest is: the room swaps which wall is standing where, and both of
+    # these belong to the wall rather than to the position.
+    _evio = eviolite_multiplier(defender, 'defense', magic_room)
+    if _evio != 1.0:
+        phys_def = math.floor(phys_def * _evio)
+        spec_def = math.floor(spec_def * eviolite_multiplier(defender, 'special-defense',
+                                                             magic_room))
 
     # 🚨 WONDER ROOM swaps which of the target's two walls is standing where
     if wonder_room:
@@ -7171,7 +7358,7 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             cond = amplifier['condition']
             mult = amplifier.get('multiplier', 1.0)
             if cond == 'contact' and move.get('class') == 'physical': ability_mod *= mult
-            elif cond == 'punch' and 'punch' in move_name: ability_mod *= mult
+            elif cond == 'punch' and move_name in PUNCH_MOVES: ability_mod *= mult
             elif cond == 'bite' and any(term in move_name for term in ['bite', 'fang', 'crunch']): ability_mod *= mult
             elif cond == 'pulse' and any(term in move_name for term in ['pulse', 'aura-sphere']): ability_mod *= mult
             elif cond == 'power_cap' and 0 < move_power <= amplifier['threshold']: ability_mod *= mult
@@ -7302,6 +7489,13 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
                 else: target_hits = 5
             else:
                 target_hits = random.randint(hit_data['min'], hit_data['max'])
+
+            # ITEM PHASE 5: Loaded Dice raises the FLOOR rather than fixing the count, so
+            # a roll that already beat it is left alone - the dice are loaded, not
+            # rigged. Skill Link above still wins outright, which is correct: it is the
+            # certainty and this is only a nudge.
+            target_hits = max(target_hits,
+                              min(hit_data['max'], loaded_dice_floor(attacker, magic_room)))
 
         if parental_bond:
             target_hits = 2
@@ -7582,7 +7776,12 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             if 'volatile_statuses' not in defender:
                 defender['volatile_statuses'] = {}
             # Traps lock the victim in for 4 to 5 turns!
-            defender['volatile_statuses']['partially_trapped'] = random.randint(4, 5)
+            defender['volatile_statuses']['partially_trapped'] = bind_turns(
+                attacker, magic_room)
+            # ITEM PHASE 5: whose Binding Band is doing the squeezing, recorded on the
+            # VICTIM because the end-of-turn chip has the victim and not the binder.
+            if bind_damage_multiplier(attacker, magic_room) > 1.0:
+                defender['volatile_statuses']['bind_band'] = True
             msg += f" 🌪️ {defender['name'].capitalize()} became trapped in the vortex!"
             
         # Wipe the variable so it doesn't return to the main loop and overwrite their primary Status Condition!
@@ -8069,7 +8268,11 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
     # 1. Parasitic Healing (Giga Drain, Horn Leech)
     if drain_pct > 0:
         # ...unless the thing being drained is full of Liquid Ooze.
-        _sapped = math.floor(damage * (drain_pct / 100.0))
+        # ITEM PHASE 5: a Big Root takes a bigger mouthful. Applied to the sapped figure
+        # rather than to the move's percentage so it reads the damage that was actually
+        # dealt, and so Liquid Ooze below turns the LARGER number back on the drinker.
+        _sapped = math.floor(damage * (drain_pct / 100.0)
+                             * big_root_bonus(attacker, magic_room))
         if liquid_ooze_backfires(defender):
             healing_amount -= _sapped
             msg += (f" \U0001f7e2 {attacker['name'].capitalize()} was hurt by "
@@ -8077,8 +8280,17 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         else:
             healing_amount += _sapped
         
+    # ITEM PHASE 5: a Shell Bell gives back an eighth of whatever was dealt, on ANY
+    # damaging move rather than only a draining one - which is why it is here and not
+    # inside the branch above.
+    _bell = shell_bell_heal(attacker, damage, magic_room)
+    if _bell:
+        healing_amount += _bell
+        msg += (f" 🔔 {attacker['name'].capitalize()}'s Shell Bell "
+                f"restored a little health!")
+
     # 2. Kinetic Recoil (Double-Edge, Flare Blitz, Wild Charge)
-    elif drain_pct < 0:
+    if drain_pct < 0:
         # 🚨 ABILITY INTERCEPTOR: Rock Head & Magic Guard negate recoil!
         if atk_ability not in ['rock-head', 'magic-guard']:
             # Calculate the recoil based on the absolute value of the negative drain percentage
@@ -8333,7 +8545,18 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             damage = defender['current_hp'] - 1
             msg += " It endured the hit using Sturdy!"
             
-        # 3. Endure Status (If you add the move 'Endure' later!)
+        # 3. ITEM PHASE 5: a Focus Band. Unlike the Sash it works from ANY HP and is not
+        # consumed, which is what a one-in-ten chance is buying instead of a certainty.
+        #
+        # Its position in this chain is style rather than behaviour: a specimen holds one
+        # item, so the Sash branch above and this one are mutually exclusive and their
+        # order cannot be observed. Sturdy is the only entry here that could genuinely
+        # compete with it, and Sturdy wins by sitting first.
+        elif focus_band_holds(defender, magic_room):
+            damage = defender['current_hp'] - 1
+            msg += " It hung on using its Focus Band!"
+
+        # 4. Endure Status (If you add the move 'Endure' later!)
         elif defender.get('volatile_statuses', {}).get('endure'):
             damage = defender['current_hp'] - 1
             msg += " It endured the hit!"

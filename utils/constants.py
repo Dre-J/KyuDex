@@ -1206,6 +1206,149 @@ EQUIPMENT_CATALOG.update(build_phase4_stock())
 
 
 # ==========================================
+# 🛡️ THE PHASE 5 SHELF - DEFENSIVE AND UTILITY GEAR
+# ==========================================
+# The modern utility layer. Almost every one of these is the ITEM half of something the
+# ability layer already does, so most are a name added to a set the engine already reads
+# rather than a mechanism of their own.
+#
+#   covert-cloak      Shield Dust        secondary_chance
+#   clear-amulet      Clear Body         refuses_stat_drop
+#   protective-pads   Long Reach         makes_contact
+#   mirror-herb       Opportunist        copies_stat_boosts
+#   safety-goggles    Overcoat           powder moves + the weather chip
+#   loaded-dice       Skill Link         the multi-strike roll
+#   focus-band        Sturdy             the survive-at-1 branch
+SECONDARY_IMMUNE_ITEMS = {'covert-cloak'}
+STAT_DROP_IMMUNE_ITEMS = {'clear-amulet'}
+COPIES_BOOSTS_ITEMS = {'mirror-herb'}
+POWDER_IMMUNE_ITEMS = {'safety-goggles'}
+WEATHER_CHIP_IMMUNE_ITEMS = {'safety-goggles'}
+
+# Long Reach's slot. Both of these stop the holder TOUCHING what it hits, which is what
+# spares it from Rough Skin, Static, a Rocky Helmet and Pickpocket alike.
+#
+# The item's PokeAPI text - "prevents side effects of contact moves used on the holder" -
+# has the direction backwards. In the games the pads are worn by the ATTACKER and protect
+# it from what it touches, which is the reading implemented here.
+NO_CONTACT_ITEMS = {'protective-pads', 'punching-glove'}
+
+# ==========================================
+# 👊 WHAT COUNTS AS A PUNCH
+# ==========================================
+# Written out rather than tested with `'punch' in move_name`, which is what the engine
+# did before this shelf needed the same answer. That substring test called Sucker Punch a
+# punch - it is not, and never has been - and missed Meteor Mash, Hammer Arm, Plasma
+# Fists, Ice Hammer, Wicked Blow, Surging Strikes, Double Iron Bash and Rage Fist, none
+# of which has "punch" in the name.
+#
+# Iron Fist reads this table now as well, so the ability and the item cannot come to
+# disagree about what a punch is.
+PUNCH_MOVES = {
+    'bullet-punch', 'comet-punch', 'dizzy-punch', 'double-iron-bash', 'drain-punch',
+    'dynamic-punch', 'fire-punch', 'focus-punch', 'hammer-arm', 'ice-hammer',
+    'ice-punch', 'jet-punch', 'mach-punch', 'mega-punch', 'meteor-mash',
+    'plasma-fists', 'power-up-punch', 'rage-fist', 'shadow-punch', 'sky-uppercut',
+    'surging-strikes', 'thunder-punch', 'wicked-blow',
+}
+PUNCHING_GLOVE_BOOST = 1.1
+
+# ==========================================
+# 🥚 EVIOLITE
+# ==========================================
+# 1.5x both walls, but only for a specimen that still has somewhere to evolve TO.
+# Answered off `evolution_rules` at import, the same way body mass and base Attack are -
+# a battle-time database read inside the damage formula is not available to it, and a
+# hand-written list of every unevolved species would be 453 chances to be wrong.
+EVIOLITE_MULTIPLIER = 1.5
+EVIOLITE_STATS = ('defense', 'special-defense')
+UNEVOLVED_SPECIES = set()
+
+try:
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(DB_FILE) as _conn:
+        UNEVOLVED_SPECIES = {
+            row[0] for row in
+            _conn.execute("SELECT DISTINCT base_species_id FROM evolution_rules")
+            if row[0]
+        }
+    print(f"🥚 Indexed {len(UNEVOLVED_SPECIES)} species that can still evolve.")
+except Exception as e:
+    print(f"⚠️ WARNING: Could not index evolutions ({e}). Eviolite will do nothing.")
+
+# The rest, each a single number read in one place.
+FOCUS_BAND_ODDS = 0.10          # survive at 1 HP, from any HP, unlike Focus Sash
+SHELL_BELL_FRACTION = 1.0 / 8.0  # of the damage DEALT, healed back
+BIG_ROOT_DRAIN_BONUS = 1.3      # to drain, Ingrain and Aqua Ring
+BINDING_BAND_MULTIPLIER = 2.0   # to the per-turn bind chip
+GRIP_CLAW_TURNS = 7             # a bind lasts this long instead of 4-5
+LOADED_DICE_MIN_HITS = 4        # a 2-to-5 move never rolls below this
+
+HEAVY_DUTY_BOOTS = 'heavy-duty-boots'
+ABILITY_SHIELD = 'ability-shield'
+
+PHASE5_PRICE = 400
+
+PHASE5_DESCRIPTIONS = {
+    'ability-shield':   "The holder's ability cannot be changed or suppressed.",
+    'big-root':         "The holder recovers 30% more from draining moves.",
+    'binding-band':     "The holder's binding moves deal double damage each turn.",
+    'clear-amulet':     "The holder's stats cannot be lowered by the opponent.",
+    'covert-cloak':     "The holder is immune to the secondary effects of moves.",
+    'eviolite':         "1.5x Defense and Sp. Def, if the holder can still evolve.",
+    'focus-band':       "A 1-in-10 chance to survive any lethal hit at 1 HP.",
+    'grip-claw':        "The holder's binding moves last 7 turns.",
+    'heavy-duty-boots': "The holder ignores every entry hazard.",
+    'loaded-dice':      "The holder's multi-hit moves never hit fewer than 4 times.",
+    'mirror-herb':      "Copies every stat boost the opponent gains.",
+    'protective-pads':  "The holder's moves never make contact.",
+    'punching-glove':   "Punching moves are 10% stronger and make no contact.",
+    'safety-goggles':   "Immune to powder moves and to sandstorm and hail damage.",
+    'shell-bell':       "The holder recovers an eighth of the damage it deals.",
+}
+
+PHASE5_EMOJI = {
+    'ability-shield': '🛡️', 'big-root': '🌱', 'binding-band': '🎗️',
+    'clear-amulet': '💠', 'covert-cloak': '🧥', 'eviolite': '🥚',
+    'focus-band': '🎽', 'grip-claw': '🦞', 'heavy-duty-boots': '🥾',
+    'loaded-dice': '🎲', 'mirror-herb': '🪞', 'protective-pads': '🧤',
+    'punching-glove': '👊', 'safety-goggles': '🥽', 'shell-bell': '🔔',
+}
+
+
+def build_phase5_stock():
+    """
+    The Phase 5 shelf, checked against the tables the engine reads.
+
+    Same assertion as Phases 2 to 4. The singletons are named explicitly because each is
+    read by exactly one clause rather than looked up in a table.
+    """
+    implemented = (SECONDARY_IMMUNE_ITEMS | STAT_DROP_IMMUNE_ITEMS
+                   | COPIES_BOOSTS_ITEMS | POWDER_IMMUNE_ITEMS | NO_CONTACT_ITEMS
+                   | {'eviolite', 'focus-band', 'shell-bell', 'big-root',
+                      'binding-band', 'grip-claw', 'loaded-dice',
+                      HEAVY_DUTY_BOOTS, ABILITY_SHIELD})
+    missing = implemented - set(PHASE5_DESCRIPTIONS)
+    assert not missing, f"Phase 5 items with no shop entry: {sorted(missing)}"
+    extra = set(PHASE5_DESCRIPTIONS) - implemented
+    assert not extra, f"Phase 5 shop entries with no implementation: {sorted(extra)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE5_PRICE,
+            "desc": PHASE5_DESCRIPTIONS[item],
+            "emoji": PHASE5_EMOJI.get(item, '🛡️'),
+            "category": "battleitems",
+        }
+        for item in sorted(implemented)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase5_stock())
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a
