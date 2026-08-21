@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -3680,24 +3680,35 @@ def prankster_is_snubbed(attacker, defender, move):
     return PRANKSTER_BLOCKED_BY in ((defender or {}).get('types') or [])
 
 
-def priority_tier(attacker, move=None):
+def priority_tier(attacker, move=None, magic_room=False):
     """
     Where inside its bracket this action sits. Higher goes first, 0 is ordinary.
 
     Two brackets is enough for everything here: Quick Draw jumps to the front, Stall and
     Mycelium Might drop to the back. Speed only breaks ties within the same tier, which
     is what makes Stall lose to a slower opponent rather than merely to a faster one.
+
+    ITEM PHASE 4 adds Quick Claw, Lagging Tail and Full Incense to the same two brackets.
+    A specimen holding one AND carrying an opinionated ability is the only interesting
+    case, and it is settled by taking the more extreme of the two: a Lagging Tail on a
+    Quick Draw dawdles, because being nailed to the back of the bracket is a certainty
+    and the claw is only ever a chance. That is a ruling rather than a fact - the games
+    do not let this pair happen often enough to be sure - so it is stated here and
+    asserted in the suite rather than left to whichever branch happened to run first.
     """
     ability = get_active_ability(attacker)
+    from_item = item_priority_tier(attacker, magic_room)
 
     scope = LAST_IN_BRACKET_ABILITIES.get(ability)
     if scope == '*' or (scope == 'status' and (move or {}).get('class') == 'status'):
+        return -1
+    if from_item == -1:
         return -1
 
     if ability == 'quick-draw' and random.randint(1, 100) <= QUICK_DRAW_CHANCE:
         return 1
 
-    return 0
+    return from_item
 
 
 def turn_order_key(priority, tier, speed, trick_room=False):
@@ -4923,6 +4934,79 @@ def accuracy_multiplier(attacker):
     return ACCURACY_MULTIPLIER_ABILITIES.get(get_active_ability(attacker), 1.0)
 
 
+# ==========================================
+# ITEM PHASE 4: THE LENSES AND THE POWDERS
+# ==========================================
+# Deliberately shaped as the item twin of accuracy_multiplier / evasion_multiplier above,
+# and read in the same expression at the bottom of hit_chance - so a lens and a Compound
+# Eyes stack the way two multipliers should, without either learning about the other.
+
+def item_accuracy_multiplier(attacker, defender=None, magic_room=False):
+    """
+    What the ATTACKER's item does to the accuracy of the move it is throwing.
+
+    Wide Lens is unconditional. Zoom Lens only sharpens a holder that is moving SECOND,
+    which is exactly `defender.acted_this_turn` - the flag both engines already keep for
+    Bolt Beak, reset for everybody at the top of the turn and set on each attacker as it
+    acts. Reading it here rather than threading a new argument through both engines is
+    what keeps the two of them from disagreeing about who moved first.
+    """
+    item = get_active_item(attacker, magic_room)
+
+    if item == 'zoom-lens':
+        return ZOOM_LENS_MULTIPLIER if (defender or {}).get('acted_this_turn') else 1.0
+
+    return ITEM_ACCURACY_MULTIPLIERS.get(item, 1.0)
+
+
+def item_evasion_multiplier(defender, magic_room=False):
+    """
+    What the DEFENDER's item does to the chance of being hit, as a number to DIVIDE by.
+
+    Bright Powder and Lax Incense. The table stores the accuracy figure the games use -
+    0.9 and 0.95 - and this is the one place it is inverted, so the value returned lines
+    up with evasion_multiplier's convention where higher means harder to hit.
+    """
+    against = ITEM_ACCURACY_AGAINST_HOLDER.get(get_active_item(defender, magic_room))
+    if not against:
+        return 1.0
+    return 1.0 / against
+
+
+def item_flinch_chance(attacker, move, damage, magic_room=False):
+    """
+    The percentage chance the attacker's ITEM makes its target flinch, or 0.
+
+    King's Rock and Razor Fang, on any damaging move that connected. Two deliberate
+    non-interactions, both matching the modern games and both falling out of this being
+    an ITEM rather than a move's secondary effect: Serene Grace does not double it and
+    Shield Dust does not block it. Inner Focus DOES refuse it, for free, because the
+    caller routes the result through the same volatile check Stench uses.
+    """
+    if attacker is None or damage <= 0:
+        return 0
+    if (move or {}).get('class') == 'status':
+        return 0
+    return ITEM_FLINCH_CHANCE.get(get_active_item(attacker, magic_room), 0)
+
+
+def item_priority_tier(attacker, magic_room=False):
+    """
+    Where the attacker's ITEM puts it inside its bracket: 1 first, -1 last, 0 no opinion.
+
+    Quick Claw rolls; Lagging Tail and Full Incense are certain. Returned separately from
+    the ability answer so that priority_tier can decide which of the two wins rather than
+    having one silently overwrite the other.
+    """
+    item = get_active_item(attacker, magic_room)
+
+    if item in LAST_IN_BRACKET_ITEMS:
+        return -1
+    if item == 'quick-claw' and random.random() < QUICK_CLAW_ODDS:
+        return 1
+    return 0
+
+
 def mimicry_types(pokemon, terrain='none'):
     """
     The elements this specimen counts as, with Mimicry's terrain swap applied.
@@ -4982,7 +5066,7 @@ def evasion_multiplier(defender, weather='none'):
     return trait['multiplier']
 
 
-def hit_chance(attacker, defender, move, weather='none'):
+def hit_chance(attacker, defender, move, weather='none', magic_room=False):
     """
     The percentage chance this move connects, before the roll is made.
 
@@ -5047,8 +5131,14 @@ def hit_chance(attacker, defender, move, weather='none'):
     else:
         stage_mod = 3.0 / (3.0 + abs(net_stage))
 
-    return (move_acc * stage_mod * accuracy_multiplier(attacker)
-            / max(0.01, evasion_multiplier(defender, weather)))
+    # ITEM PHASE 4: the lenses and the powders, folded in as the item twin of the two
+    # ability factors either side of them. Multiplied rather than special-cased so a Wide
+    # Lens and a Compound Eyes stack, and a Bright Powder answers both of them at once.
+    return (move_acc * stage_mod
+            * accuracy_multiplier(attacker)
+            * item_accuracy_multiplier(attacker, defender, magic_room)
+            / max(0.01, evasion_multiplier(defender, weather))
+            / max(0.01, item_evasion_multiplier(defender, magic_room)))
 
 
 def effective_weight(pokemon):
@@ -8056,6 +8146,16 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
     if (atk_ability in FLINCH_ON_HIT_ABILITIES and damage > 0
             and move.get('class') != 'status' and not inflicted_status):
         if random.randint(1, 100) <= FLINCH_ON_HIT_ABILITIES[atk_ability]:
+            inflicted_status = 'flinch'
+
+    # ITEM PHASE 4: King's Rock and Razor Fang say the same sentence as Stench, so they
+    # take the same route - through inflicted_status, which is the one place that knows
+    # flinch is a volatile rather than a status, and which is therefore also where Inner
+    # Focus refuses it. `not inflicted_status` keeps the item from overwriting a status
+    # the move itself was already going to inflict.
+    if not inflicted_status:
+        _rock = item_flinch_chance(attacker, move, damage, magic_room)
+        if _rock and random.randint(1, 100) <= _rock:
             inflicted_status = 'flinch'
 
     # POISON PUPPETEER confuses whatever ITS OWNER poisons - including the poison Toxic
