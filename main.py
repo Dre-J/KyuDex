@@ -62,6 +62,22 @@ async def on_command_error(ctx, error):
     """
     if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
         return
+    if isinstance(error, commands.CommandOnCooldown):
+        # Without this branch a rate-limited command says NOTHING to the player and
+        # prints a traceback to the console - which is what `!plant` and `!clean` have
+        # been doing since they were given cooldowns. A refusal nobody can see reads as
+        # the bot being broken.
+        remaining = max(1, int(error.retry_after))
+        if remaining >= 60:
+            wait = f"{remaining // 60}m {remaining % 60}s" if remaining % 60 else f"{remaining // 60}m"
+        else:
+            wait = f"{remaining}s"
+        try:
+            return await ctx.send(
+                f"⏳ **{ctx.command.qualified_name.title()}** is recharging. "
+                f"Try again in **{wait}**.")
+        except Exception:
+            return
     if isinstance(error, commands.MissingRequiredArgument):
         # Best effort: an error handler that itself raises - because the bot cannot
         # speak in that channel - loses the original error as well as its own.

@@ -12,7 +12,7 @@ from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
 from utils.constants import TM_CATALOG, type_badges, type_icon
-from utils.directives import credit_evolution
+from utils.directives import credit_cull, credit_evolution
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -6966,6 +6966,24 @@ class BattleDashboard(discord.ui.View):
             if n_needs_swap:
                 if n_active['current_hp'] <= 0:
                     combat_log += f"\n💀 The rival's **{n_active['name'].capitalize()}** is unable to continue!"
+
+                    # ==========================================
+                    # DIRECTIVE TRACKER: INVASIVE CULLING
+                    # ==========================================
+                    # Credited HERE, at the knockout, rather than where the battle ends.
+                    # The old site read whichever specimen was on the field once the
+                    # rival ran out of them, so every faint but the last was free - and
+                    # it only ran at all if the player went on to win.
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        _, done = await credit_cull(
+                            db, self.user_id, n_active.get('types', []))
+                        await db.commit()
+
+                    for element in done:
+                        combat_log += (
+                            f"\n📡 **Directive Complete:** You successfully culled the "
+                            f"invasive {element.capitalize()}-type population! "
+                            f"Use `!claim` to receive your funding.")
                 else:
                     combat_log += f"\n💨 The rival's **{n_active['name'].capitalize()}** retreated to the bench!"
                     state['npc_must_pivot'] = False # Flush the memory flag
@@ -7194,28 +7212,9 @@ class BattleDashboard(discord.ui.View):
                         rewards_log += await collect_field_spoils(
                             db, state['player_team'], self.user_id)
 
-                        # ==========================================
-                        # DIRECTIVE TRACKER: INVASIVE CULLING
-                        # ==========================================
-                        defeated_types = n_active.get('types', [])
-                        for p_type in defeated_types:
-                            # 1. Increment progress
-                            await db.execute("""
-                                UPDATE field_directives
-                                SET current_progress = current_progress + 1
-                                WHERE user_id = ? AND objective_type = 'cull_type' AND target_variable = ? AND is_completed = 0
-                            """, (self.user_id, p_type))
-
-                            # 2. Check if maxed out
-                            async with db.execute("""
-                                SELECT required_amount, current_progress 
-                                FROM field_directives
-                                WHERE user_id = ? AND objective_type = 'cull_type' AND target_variable = ? AND is_completed = 0
-                            """, (self.user_id, p_type)) as cursor:
-                                row = await cursor.fetchone()
-                                
-                            if row and row[1] == row[0]: 
-                                rewards_log += f"\n📡 **Directive Complete:** You successfully culled the invasive {p_type.capitalize()}-type population! Use `!claim` to receive your funding."
+                        # The culling tracker used to sit here. It now runs at the
+                        # knockout itself, a few hundred lines up, so that a battle with
+                        # more than one opponent credits more than one of them.
 
                         # ==========================================
                         # GEOLOGICAL ANOMALY: METEOR SHOWER

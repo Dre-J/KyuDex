@@ -2546,6 +2546,12 @@ def absorb_with_substitute(defender, damage):
     return 0, " 🪆 The substitute broke!"
 
 
+# The Life Orb bills the holder a tenth of its maximum HP for every hit that lands.
+# A divisor rather than a fraction because that is how the games state it, and how the
+# rest of the fixed-fraction recoil in this file is written.
+LIFE_ORB_RECOIL_DIVISOR = 10
+
+
 # ==========================================
 # 💢 STRUGGLE
 # ==========================================
@@ -7750,6 +7756,22 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             massive_recoil = max(1, math.floor(attacker.get('max_hp', 100) / 2))
             attacker['current_hp'] = max(0, attacker['current_hp'] - massive_recoil)
             msg += f" 💥 {attacker['name'].capitalize()} sacrificed half its max HP to unleash the attack!"
+
+    # 4. The Life Orb's price. It was charging nothing for its 30%, which made it a
+    # strictly better Choice Band with no lock - the one item in the shop with an
+    # upside and no downside at all.
+    #
+    # `damage > 0` is the whole trigger condition in the games: the orb bills for a
+    # landed hit, so a miss, an immunity and every status move are free. Read off
+    # `attacker_item` rather than the stored name so an embargoed or Magic Room orb
+    # charges nothing, exactly as it boosts nothing thirty lines up.
+    #
+    # Magic Guard walls it, as it walls every other indirect source here. Sheer Force
+    # would too, in the games - it is not in this engine, so there is nothing to check.
+    if attacker_item == 'life-orb' and damage > 0 and atk_ability != 'magic-guard':
+        orb_recoil = max(1, math.floor(attacker.get('max_hp', 100) / LIFE_ORB_RECOIL_DIVISOR))
+        attacker['current_hp'] = max(0, attacker['current_hp'] - orb_recoil)
+        msg += f" 🔮 {attacker['name'].capitalize()} was hurt by its Life Orb!"
 
     # ==========================================
     # PHASE 5: BIOLOGICAL IMMUNITY FILTER

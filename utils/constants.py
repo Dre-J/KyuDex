@@ -396,7 +396,7 @@ EQUIPMENT_CATALOG = {
     "choice-band":   {"name": "Choice Band", "price": 600, "desc": "1.5x Attack, but locks the holder into its first move.", "emoji": "🎗️", "category": "battleitems"},
     "choice-specs":  {"name": "Choice Specs", "price": 600, "desc": "1.5x Special Attack, but locks the holder into its first move.", "emoji": "🎗️", "category": "battleitems"},
     "choice-scarf":  {"name": "Choice Scarf", "price": 600, "desc": "1.5x Speed, but locks the holder into its first move.", "emoji": "🎗️", "category": "battleitems"},
-    "life-orb":      {"name": "Life Orb", "price": 600, "desc": "1.3x damage on every attack.", "emoji": "🔮", "category": "battleitems"},
+    "life-orb":      {"name": "Life Orb", "price": 600, "desc": "1.3x damage on every attack, but costs the holder 1/10 of its max HP each time one lands.", "emoji": "🔮", "category": "battleitems"},
     "focus-sash":    {"name": "Focus Sash", "price": 600, "desc": "Survives one otherwise-lethal hit on 1 HP, from full health. Single use.", "emoji": "🎀", "category": "battleitems"},
     "assault-vest":  {"name": "Assault Vest", "price": 600, "desc": "1.5x Special Defense, but the holder cannot use status moves.", "emoji": "🦺", "category": "battleitems"},
 
@@ -1220,6 +1220,104 @@ _RARITY_TIERS = (('mythical',   0.00001),
 
 HABITAT_RARITY = _RARITY_TIERS
 EXPEDITION_RARITY = _RARITY_TIERS
+
+
+# ==========================================
+# 🗺️ WHERE THINGS LIVE
+# ==========================================
+# Two separate systems, and they are not the same thing:
+#
+#   * a HABITAT is the server's own channel. Its biome is set with `!terraform` and its
+#     type pool shifts with the ecosystem score - a ruined one goes toxic, a pristine
+#     one opens up.
+#   * an EXPEDITION is a private trip, and its sectors are fixed. They are gated by
+#     visas earned off Sector Wardens, and their pools do not move.
+#
+# Both tables lived inside the functions that used them - the habitat's in two copies,
+# one in the spawner and one in `!spawn`. Nothing had gone wrong between those two yet,
+# but the rarity ladders in this same file drifted apart exactly that way, and the
+# expedition's copy had already outlived the error message beside it: it listed four
+# sectors when there were five, so anyone who mistyped `apex` was told Apex did not
+# exist.
+#
+# Kept here as real tuples rather than pre-baked SQL fragments so a command can READ
+# them - which is what `!biomes` does. `sql_type_tuple` builds the fragment at the two
+# points that still want one.
+
+HABITAT_BIOMES = {
+    'forest':  {'emoji': '🌳', 'types': ('grass', 'bug', 'ground', 'normal'),
+                'blurb': "The default. Undergrowth, burrows and canopy."},
+    'urban':   {'emoji': '🏙️', 'types': ('electric', 'steel', 'poison', 'normal'),
+                'blurb': "Set with `!terraform urban`. Wiring, scrap and runoff."},
+    'coastal': {'emoji': '🏖️', 'types': ('water', 'flying', 'ice', 'normal'),
+                'blurb': "Tideline, cliffs and open water."},
+}
+
+# What a degraded or a thriving habitat does to the pool above. A score below the first
+# threshold REPLACES the biome's types; above the second it ADDS to them. This is the
+# one place those numbers and those lists appear.
+HABITAT_DEGRADED_BELOW = 30
+HABITAT_PRISTINE_ABOVE = 70
+HABITAT_DEGRADED_TYPES = ('poison', 'dark', 'steel')
+HABITAT_PRISTINE_BONUS = ('fairy', 'dragon', 'psychic')
+
+EXPEDITION_BIOMES = {
+    'canopy': {'emoji': '🌲', 'types': ('grass', 'bug', 'poison', 'flying', 'normal'),
+               'blurb': "Layered forest. The starting sector - no visa needed."},
+    'trench': {'emoji': '🌊', 'types': ('water', 'ice'),
+               'blurb': "Cold deep water and the shelf above it."},
+    'core':   {'emoji': '🌋', 'types': ('fire', 'ground', 'rock', 'fighting'),
+               'blurb': "Volcanic rock and the tunnels under it."},
+    'sprawl': {'emoji': '🏙️', 'types': ('electric', 'steel', 'dark', 'ghost',
+                                        'psychic', 'fairy'),
+               'blurb': "Dense settlement, and whatever moved in after."},
+    'apex':   {'emoji': '🐉', 'types': ('dragon',),
+               'blurb': "The high ridge. Dragons only, and nothing else at all."},
+}
+
+# Five minutes between trips. Long enough that `!expedition` is not a button to mash,
+# short enough that a session is not spent waiting - and it is the throttle that
+# actually bites, the daily cap in utils/limits.py being the backstop behind it.
+EXPEDITION_COOLDOWN_SECONDS = 300
+
+# How near the daily cap a trip has to be before the card starts counting down.
+EXPEDITION_WARN_AT = 5
+
+
+def sql_type_tuple(types):
+    """
+    A tuple of type names as a SQL `IN` list.
+
+    Built rather than written out because a one-element tuple renders as `('dragon',)`
+    in Python and that trailing comma is a syntax error in SQL - which is why the Apex
+    entry was hand-written as `('dragon')` when it lived inside the command.
+
+    These are fixed literals from the tables above, never user input.
+    """
+    return "(" + ", ".join(f"'{t}'" for t in types) + ")"
+
+
+def habitat_types(biome, ecosystem_score=None):
+    """
+    What can appear in a habitat right now, given its biome and its health.
+
+    Returns a list, because the callers pass it straight to a parameterised query.
+
+    `ecosystem_score=None` means an untouched habitat. It is not written as a default of
+    ECOSYSTEM_BASELINE because that constant is defined further down this file and a
+    default argument is evaluated when the `def` runs, not when it is called - which
+    would be an import-time NameError rather than anything the tests would reach.
+    """
+    types = list(HABITAT_BIOMES.get(
+        biome, HABITAT_BIOMES['forest'])['types'])
+
+    if ecosystem_score is None:
+        return types
+    if ecosystem_score < HABITAT_DEGRADED_BELOW:
+        return list(HABITAT_DEGRADED_TYPES)
+    if ecosystem_score > HABITAT_PRISTINE_ABOVE:
+        types.extend(HABITAT_PRISTINE_BONUS)
+    return types
 
 
 def rarity_filter(tier, alias='s'):
