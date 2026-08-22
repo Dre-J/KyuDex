@@ -502,13 +502,10 @@ EQUIPMENT_CATALOG = {
     "micle-berry":  {"name": "Micle Berry", "price": 0, "desc": "Raises accuracy when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
     "custap-berry": {"name": "Custap Berry", "price": 0, "desc": "Allows a move to go first when HP is low.", "emoji": "🔴", "category": "berry", "purchasable": False},
     
-    # 💎 Z-CRYSTALS
-    "firium-z":     {"name": "Firium Z", "price": 0, "desc": "Upgrades Fire-type moves into Inferno Overdrive.", "emoji": "🔥", "category": "zcrystal", "purchasable": False},
-    "waterium-z":   {"name": "Waterium Z", "price": 0, "desc": "Upgrades Water-type moves into Hydro Vortex.", "emoji": "💧", "category": "zcrystal", "purchasable": False},
-    
-    # 🧬 MEGA STONES
-    "charizardite-x":{"name": "Charizardite X", "price": 0, "desc": "Allows Charizard to Mega Evolve.", "emoji": "🖤", "category": "megastone", "purchasable": False},
-    "venusaurite":  {"name": "Venusaurite", "price": 0, "desc": "Allows Venusaur to Mega Evolve.", "emoji": "🌸", "category": "megastone", "purchasable": False}
+    # 💎 Z-CRYSTALS and 🧬 MEGA STONES are built by build_phase8_stock() further down.
+    # Two crystals and two stones used to be hand-written here. They were the only four
+    # of a hundred and twenty-one, and neither the Z-Crystal nor the Mega Stone one was
+    # bound to anything the engine checked - see MEGA_STONE_SPECIES for what that cost.
 }
 
 # Define the categories for the dropdowns
@@ -1714,6 +1711,386 @@ def stock_the_berry_shelf():
 
 
 BERRIES_ON_SALE = stock_the_berry_shelf()
+
+
+# ==========================================
+# 🧬 ITEM PHASE 8: STONES, CRYSTALS, MEMORIES AND SHARDS
+# ==========================================
+# The plan called this phase "156 items of data entry that blocks nothing else". Three of
+# the four families turned out to be something other than data entry.
+#
+# THE MEGA STONES WERE NOT BOUND TO ANYTHING. `may_mega_evolve` identified a Mega Stone
+# with `'ite' in held_item`, so nothing ever checked the stone against the SPECIES. A
+# Charizard holding a White Herb - wh-ITE-herb - Mega Evolved, and a Gengar holding a
+# Venusaurite became Mega Gengar. With one stone in the catalogue that was a curiosity;
+# adding ninety-one more would have made every stone in the game universal. So the table
+# binding a stone to its species IS this phase, and the shop rows fall out of it.
+#
+# THE MEMORIES AND THE ELEMENTAL Z-CRYSTALS WERE ALREADY LIVE. The audit read all
+# forty-six as absent because it scanned PokeAPI's names - `bug-memory`,
+# `normalium-z--held` - while the engine keys them `bug-memory` (handled generically by
+# `type_from_item`, so the literal name appears nowhere) and `normalium-z` (no suffix).
+# That is the audit's "a name in the source proves nothing" caveat running backwards:
+# the ABSENCE of a name proves nothing either. These needed a price, not an engine.
+#
+# THE TERA SHARDS ARE THE ONE HONEST CASE OF THE ORIGINAL DESCRIPTION, and they stay
+# inert - see TERA_SHARD_TYPES at the bottom of this section.
+
+# Every Mega Stone, bound to the specimen it belongs to. The value is matched against a
+# specimen's full name first and its base name second, which is what lets one row cover
+# a species with many forms (`tatsugiri` reaches Tatsugiri-Curly) while another pins a
+# single one (`raichu-alola` refuses an ordinary Raichu). That two-step match is why the
+# Floette and Raichu special cases that `may_mega_evolve` used to carry in code are just
+# rows here now.
+MEGA_STONE_SPECIES = {
+    'abomasite': 'abomasnow',
+    'absolite': 'absol',
+    'absolite-z': 'absol',
+    'aerodactylite': 'aerodactyl',
+    'aggronite': 'aggron',
+    'alakazite': 'alakazam',
+    'altarianite': 'altaria',
+    'ampharosite': 'ampharos',
+    'audinite': 'audino',
+    'banettite': 'banette',
+    'barbaracite': 'barbaracle',
+    'baxcalibrite': 'baxcalibur',
+    'beedrillite': 'beedrill',
+    'blastoisinite': 'blastoise',
+    'blazikenite': 'blaziken',
+    'cameruptite': 'camerupt',
+    'chandelurite': 'chandelure',
+    'charizardite-x': 'charizard',
+    'charizardite-y': 'charizard',
+    'chesnaughtite': 'chesnaught',
+    'chimechite': 'chimecho',
+    'clefablite': 'clefable',
+    'crabominite': 'crabominable',
+    'darkranite': 'darkrai',
+    'delphoxite': 'delphox',
+    'diancite': 'diancie',
+    'dragalgite': 'dragalge',
+    'dragoninite': 'dragonite',
+    'drampanite': 'drampa',
+    'eelektrossite': 'eelektross',
+    'emboarite': 'emboar',
+    'excadrite': 'excadrill',
+    'falinksite': 'falinks',
+    'feraligite': 'feraligatr',
+    # Only the Eternal Flower Floette has a Mega Forme; the ordinary flower colours
+    # share the base name and must not match.
+    'floettite': 'floette-eternal',
+    'froslassite': 'froslass',
+    'galladite': 'gallade',
+    'garchompite': 'garchomp',
+    'garchompite-z': 'garchomp',
+    'gardevoirite': 'gardevoir',
+    'gengarite': 'gengar',
+    'glalitite': 'glalie',
+    'glimmoranite': 'glimmora',
+    'golisopite': 'golisopod',
+    'golurkite': 'golurk',
+    'greninjite': 'greninja',
+    'gyaradosite': 'gyarados',
+    'hawluchanite': 'hawlucha',
+    'heatranite': 'heatran',
+    'heracronite': 'heracross',
+    'houndoominite': 'houndoom',
+    'kangaskhanite': 'kangaskhan',
+    'latiasite': 'latias',
+    'latiosite': 'latios',
+    'lopunnite': 'lopunny',
+    'lucarionite': 'lucario',
+    'lucarionite-z': 'lucario',
+    'magearnite': 'magearna',
+    'malamarite': 'malamar',
+    'manectite': 'manectric',
+    'mawilite': 'mawile',
+    'medichamite': 'medicham',
+    'meganiumite': 'meganium',
+    'meowsticite': 'meowstic',
+    'metagrossite': 'metagross',
+    'mewtwonite-x': 'mewtwo',
+    'mewtwonite-y': 'mewtwo',
+    'pidgeotite': 'pidgeot',
+    'pinsirite': 'pinsir',
+    'pyroarite': 'pyroar',
+    # ...and only the Alolan Raichu, for the same reason as Floette.
+    'raichunite-x': 'raichu-alola',
+    'raichunite-y': 'raichu-alola',
+    'sablenite': 'sableye',
+    'salamencite': 'salamence',
+    'sceptilite': 'sceptile',
+    'scizorite': 'scizor',
+    'scolipite': 'scolipede',
+    'scovillainite': 'scovillain',
+    'scraftinite': 'scrafty',
+    'sharpedonite': 'sharpedo',
+    'skarmorite': 'skarmory',
+    'slowbronite': 'slowbro',
+    'staraptite': 'staraptor',
+    'starminite': 'starmie',
+    'steelixite': 'steelix',
+    'swampertite': 'swampert',
+    'tatsugirinite': 'tatsugiri',
+    'tyranitarite': 'tyranitar',
+    'venusaurite': 'venusaur',
+    'victreebelite': 'victreebel',
+    'zeraorite': 'zeraora',
+    'zygardite': 'zygarde',
+}
+
+# Rayquaza is deliberately absent: it Mega Evolves by KNOWING Dragon Ascent rather than
+# by holding anything, which is why `may_mega_evolve` keeps a second clause at all.
+MEGA_STONE_FREE_SPECIES = {'rayquaza'}
+
+
+def mega_stone_binds_to(species_name, held_item):
+    """
+    Whether this held item is the Mega Stone for THIS specimen.
+
+    Replaces `'ite' in held_item`, which was true of a White Herb and an Eviolite and of
+    every stone for every species. Matching the full name before the base name is what
+    lets `tatsugiri` cover all three of its forms while `raichu-alola` refuses a Kantonian
+    Raichu holding a Raichunite.
+    """
+    bound = MEGA_STONE_SPECIES.get((held_item or 'none').lower().replace(' ', '-'))
+    if not bound:
+        return False
+    name = (species_name or '').lower().strip()
+    return bound == name or bound == name.split('-')[0].strip()
+
+
+def is_mega_stone(held_item):
+    """Whether the item is a Mega Stone at all, regardless of who is holding it."""
+    return (held_item or 'none').lower().replace(' ', '-') in MEGA_STONE_SPECIES
+
+
+# ==========================================
+# 🧠 THE MEMORIES
+# ==========================================
+# Seventeen discs, one per type except Normal - Silvally IS Normal without one. Already
+# read by `type_from_item`, which matches the '<type>-memory' shape rather than a list,
+# so no Memory's name appears anywhere in the source. That generosity had a hole worth
+# closing: it answered 'banana' for a `banana-memory`, because a suffix is not a
+# vocabulary. This is the vocabulary, and it is checked against TYPE_CHART so a typo
+# cannot invent an eighteenth element.
+MEMORY_TYPES = {f'{element}-memory': element
+                for element in sorted(TYPE_CHART) if element != 'normal'}
+assert len(MEMORY_TYPES) == 17, f"expected 17 Memories, built {len(MEMORY_TYPES)}"
+
+# ==========================================
+# 💎 THE Z-CRYSTALS
+# ==========================================
+# Both tables moved here from cogs/combat.py for the reason PLATE_TYPES moved: the shop
+# now needs the same eighteen names to stock them and the same eighteen Z-Move names to
+# describe them, and a table with two readers in two files is how the two come to differ.
+# combat.py imports them and every existing reader is unchanged.
+Z_MOVE_NAMES = {
+    'normal': 'Breakneck Blitz', 'fire': 'Inferno Overdrive', 'water': 'Hydro Vortex',
+    'electric': 'Gigavolt Havoc', 'grass': 'Bloom Doom', 'ice': 'Subzero Slammer',
+    'fighting': 'All-Out Pummeling', 'poison': 'Acid Downpour', 'ground': 'Tectonic Rage',
+    'flying': 'Supersonic Skystrike', 'psychic': 'Shattered Psyche', 'bug': 'Savage Spin-Out',
+    'rock': 'Continental Crush', 'ghost': 'Never-Ending Nightmare', 'dragon': 'Devastating Drake',
+    'dark': 'Black Hole Eclipse', 'steel': 'Corkscrew Crash', 'fairy': 'Twinkle Tackle'
+}
+
+Z_CRYSTAL_TYPES = {
+    'normalium-z': 'normal', 'firium-z': 'fire', 'waterium-z': 'water',
+    'electrium-z': 'electric', 'grassium-z': 'grass', 'icium-z': 'ice',
+    'fightinium-z': 'fighting', 'poisonium-z': 'poison', 'groundium-z': 'ground',
+    'flyinium-z': 'flying', 'psychium-z': 'psychic', 'buginium-z': 'bug',
+    'rockium-z': 'rock', 'ghostium-z': 'ghost', 'dragonium-z': 'dragon',
+    'darkinium-z': 'dark', 'steelium-z': 'steel', 'fairium-z': 'fairy'
+}
+
+# What a Z-Move is worth. The engine used to add a flat +100 to the base move's power,
+# which is generous at the bottom of the range and punishing at the top: a Z-boosted
+# Tackle came out at 140 against the games' 100, and a Z-boosted Giga Impact at 250
+# against the games' 200. The second half of that mattered here, because the SIGNATURE
+# crystals below have fixed powers taken from the games - and against a flat +100 the
+# species-locked Snorlium Z came out weaker than the Normalium Z anyone can buy, which
+# would have put two items in the shop whose prices told the player the opposite of the
+# truth. This is the Gen VII table, so both halves are right for the same reason.
+Z_POWER_TABLE = (
+    (55, 100), (65, 120), (75, 140), (85, 160), (95, 175),
+    (100, 180), (110, 185), (125, 190), (130, 195),
+)
+Z_POWER_CEILING = 200
+
+# Guardian of Alola does not roll damage at all - it takes a fixed share of what the
+# target has left. Nature's Madness already resolves in the engine's fixed-damage branch
+# at one half, so the Z-Move rides the same branch with a bigger number written onto the
+# move dict rather than needing a branch of its own.
+Z_HP_FRACTION_KEY = '_z_hp_fraction'
+
+
+def z_move_power(base_power):
+    """The power a Z-Move of this base power hits for. Everything past 130 caps out."""
+    base_power = base_power or 0
+    for threshold, boosted in Z_POWER_TABLE:
+        if base_power <= threshold:
+            return boosted
+    return Z_POWER_CEILING
+
+
+# The eleven crystals that upgrade ONE move on ONE species instead of a whole element.
+# `species` is matched the same two ways MEGA_STONE_SPECIES is - full name, then base -
+# so `pikachu` covers the cap forms Pikashunium Z needs and `raichu-alola` does not cover
+# a Kantonian Raichu.
+#
+# Eevium Z is deliberately absent, on the same footing as Phase 1's Blank Plate: Extreme
+# Evoboost is the only Z-Move in the games that is a STATUS move, and the Z path refuses
+# status moves at the button. That is a mechanism this phase does not build, and an
+# unbuildable row is worse in the shop than an honest gap.
+SIGNATURE_Z_CRYSTALS = {
+    'aloraichium-z': {'species': 'raichu-alola', 'move': 'thunderbolt',
+                      'name': 'Stoked Sparksurfer', 'power': 175},
+    'decidium-z':    {'species': 'decidueye', 'move': 'spirit-shackle',
+                      'name': 'Sinister Arrow Raid', 'power': 180},
+    'incinium-z':    {'species': 'incineroar', 'move': 'darkest-lariat',
+                      'name': 'Malicious Moonsault', 'power': 180},
+    'marshadium-z':  {'species': 'marshadow', 'move': 'spectral-thief',
+                      'name': 'Soul-Stealing 7-Star Strike', 'power': 195},
+    'mewnium-z':     {'species': 'mew', 'move': 'psychic',
+                      'name': 'Genesis Supernova', 'power': 185},
+    'pikanium-z':    {'species': 'pikachu', 'move': 'volt-tackle',
+                      'name': 'Catastropika', 'power': 210},
+    'pikashunium-z': {'species': 'pikachu', 'move': 'thunderbolt',
+                      'name': '10,000,000 Volt Thunderbolt', 'power': 195},
+    'primarium-z':   {'species': 'primarina', 'move': 'sparkling-aria',
+                      'name': 'Oceanic Operetta', 'power': 195},
+    'snorlium-z':    {'species': 'snorlax', 'move': 'giga-impact',
+                      'name': 'Pulverizing Pancake', 'power': 210},
+    # Guardian of Alola takes three quarters of what the target has left rather than
+    # rolling damage, so it carries a fraction instead of a power. Nature's Madness
+    # already resolves in the engine's fixed-damage branch at one half; this is the
+    # same branch with a different number.
+    'tapunium-z':    {'species': ('tapu-koko', 'tapu-lele', 'tapu-bulu', 'tapu-fini'),
+                      'move': 'natures-madness',
+                      'name': 'Guardian of Alola', 'hp_fraction': 0.75},
+}
+
+
+def signature_z_for(species_name, held_item, move_name):
+    """
+    The signature Z-Move this crystal grants this specimen for this move, or None.
+
+    All three have to agree - the crystal, the species and the base move - which is what
+    separates a Pikanium Z from a Pikashunium Z on the same Pikachu.
+    """
+    row = SIGNATURE_Z_CRYSTALS.get((held_item or 'none').lower().replace(' ', '-'))
+    if not row:
+        return None
+    if (move_name or '').lower().replace(' ', '-') != row['move']:
+        return None
+
+    name = (species_name or '').lower().strip()
+    base = name.split('-')[0].strip()
+    wanted = row['species']
+    wanted = (wanted,) if isinstance(wanted, str) else wanted
+    return row if any(w == name or w == base for w in wanted) else None
+
+
+# ==========================================
+# 🔮 THE TERA SHARDS
+# ==========================================
+# Eighteen shards, and nothing to hook them to: Terastallization is not implemented, so
+# unlike the Memories there is no generic path already quietly reading them. They are
+# here as a NAMED, type-checked table rather than as shop rows, so that the phase that
+# builds Terastallization inherits a vocabulary instead of eighteen string literals -
+# and they are deliberately not in EQUIPMENT_CATALOG at all, because a row in the shop
+# that a specimen cannot use is the ghost this whole audit exists to count.
+TERA_SHARD_TYPES = {f'{element}-tera-shard': element for element in sorted(TYPE_CHART)}
+assert len(TERA_SHARD_TYPES) == 18, (
+    f"expected 18 Tera Shards, built {len(TERA_SHARD_TYPES)}")
+
+
+# ==========================================
+# 🧬 THE PHASE 8 SHELF
+# ==========================================
+# Three different answers to "can you buy this", each for a stated reason:
+#
+#   Mega Stones     NOT on sale - they arrive with the Mega Raids update
+#   Tera Shards     not in the catalogue at all - nothing reads them yet
+#   Z-Crystals      premium; a once-per-battle nuke, and the Z-Ring gating it is a key
+#                   item that cannot be bought either
+#   Memories        cheap, because they are Silvally's ONLY way to be anything but
+#                   Normal and pricing that out is pricing out a team slot
+MEGA_STONE_PRICE = 0            # see MEGA_STONES_ON_SALE below
+Z_CRYSTAL_PRICE = 6000          # above a premium TM, below the Ability Patch
+SIGNATURE_Z_PRICE = 9000        # species-locked, and stronger for it
+MEMORY_PRICE = 600              # the type-booster shelf's price
+
+MEGA_STONES_ON_SALE = False     # flip when Mega Raids lands
+
+
+def build_phase8_stock():
+    """
+    The Phase 8 shelf: ninety-two stones, twenty-nine crystals and seventeen Memories.
+
+    The assertion the other phases make - every implemented item has a row, every row has
+    an implementation - is made here against the tables the ENGINE reads, so a stone that
+    is spelled one way in `MEGA_STONE_SPECIES` and another in the shop cannot exist.
+
+    Tera Shards are absent on purpose and are asserted absent, so that adding them later
+    is a deliberate act rather than a copy-paste.
+    """
+    assert not (set(Z_CRYSTAL_TYPES) & set(SIGNATURE_Z_CRYSTALS)), (
+        "a crystal cannot be both elemental and signature")
+    assert not (set(MEGA_STONE_SPECIES) & set(Z_CRYSTAL_TYPES)), (
+        "a Mega Stone cannot also be a Z-Crystal")
+
+    shelf = {}
+
+    for stone, species in sorted(MEGA_STONE_SPECIES.items()):
+        shelf[stone] = {
+            "name": stone.replace('-', ' ').title(),
+            "price": MEGA_STONE_PRICE,
+            "desc": f"Allows {species.replace('-', ' ').title()} to Mega Evolve.",
+            "emoji": "🧬",
+            "category": "megastone",
+            "purchasable": MEGA_STONES_ON_SALE,
+        }
+
+    for crystal, element in sorted(Z_CRYSTAL_TYPES.items()):
+        shelf[crystal] = {
+            "name": crystal.replace('-z', ' Z').title().replace(' z', ' Z'),
+            "price": Z_CRYSTAL_PRICE,
+            "desc": f"Upgrades {element.title()}-type moves into "
+                    f"{Z_MOVE_NAMES[element]}.",
+            "emoji": TYPE_EMOJI.get(element, '💎'),
+            "category": "zcrystal",
+        }
+
+    for crystal, row in sorted(SIGNATURE_Z_CRYSTALS.items()):
+        owners = row['species']
+        owners = (owners,) if isinstance(owners, str) else owners
+        who = ' / '.join(o.replace('-', ' ').title() for o in owners)
+        shelf[crystal] = {
+            "name": crystal.replace('-z', ' Z').title().replace(' z', ' Z'),
+            "price": SIGNATURE_Z_PRICE,
+            "desc": f"Lets {who} upgrade "
+                    f"{row['move'].replace('-', ' ').title()} into {row['name']}.",
+            "emoji": "🌟",
+            "category": "zcrystal",
+        }
+
+    for memory, element in sorted(MEMORY_TYPES.items()):
+        shelf[memory] = {
+            "name": memory.replace('-', ' ').title(),
+            "price": MEMORY_PRICE,
+            "desc": f"Makes Silvally {element.title()}-type, and its Multi-Attack too.",
+            "emoji": TYPE_EMOJI.get(element, '🧠'),
+            "category": "formitems",
+        }
+
+    assert not (set(shelf) & set(TERA_SHARD_TYPES)), (
+        "Tera Shards are inert and must stay out of the shop")
+    return shelf
+
+
+EQUIPMENT_CATALOG.update(build_phase8_stock())
 
 
 # ==========================================

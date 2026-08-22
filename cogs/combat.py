@@ -12,7 +12,11 @@ from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
 from utils.constants import (TM_CATALOG, type_badges, type_icon,
-                             PVP_LEVEL_CAPS, parse_level_cap)
+                             PVP_LEVEL_CAPS, parse_level_cap,
+                             Z_MOVE_NAMES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS,
+                             signature_z_for, z_move_power,
+                             mega_stone_binds_to, is_mega_stone,
+                             MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY)
 from utils.directives import credit_cull, credit_evolution
 from utils import checks
 import aiohttp
@@ -425,23 +429,10 @@ WEATHER_MESSAGES = {
     'hail': "❄️ It started to hail!"
 }
 
-Z_MOVE_NAMES = {
-    'normal': 'Breakneck Blitz', 'fire': 'Inferno Overdrive', 'water': 'Hydro Vortex',
-    'electric': 'Gigavolt Havoc', 'grass': 'Bloom Doom', 'ice': 'Subzero Slammer',
-    'fighting': 'All-Out Pummeling', 'poison': 'Acid Downpour', 'ground': 'Tectonic Rage',
-    'flying': 'Supersonic Skystrike', 'psychic': 'Shattered Psyche', 'bug': 'Savage Spin-Out',
-    'rock': 'Continental Crush', 'ghost': 'Never-Ending Nightmare', 'dragon': 'Devastating Drake',
-    'dark': 'Black Hole Eclipse', 'steel': 'Corkscrew Crash', 'fairy': 'Twinkle Tackle'
-}
-
-Z_CRYSTAL_TYPES = {
-    'normalium-z': 'normal', 'firium-z': 'fire', 'waterium-z': 'water',
-    'electrium-z': 'electric', 'grassium-z': 'grass', 'icium-z': 'ice',
-    'fightinium-z': 'fighting', 'poisonium-z': 'poison', 'groundium-z': 'ground',
-    'flyinium-z': 'flying', 'psychium-z': 'psychic', 'buginium-z': 'bug',
-    'rockium-z': 'rock', 'ghostium-z': 'ghost', 'dragonium-z': 'dragon',
-    'darkinium-z': 'dark', 'steelium-z': 'steel', 'fairium-z': 'fairy'
-}
+# Z_MOVE_NAMES and Z_CRYSTAL_TYPES moved to utils/constants.py in Phase 8 and are
+# imported above. The shop needs the same eighteen names to stock the crystals and the
+# same eighteen Z-Move names to describe them, which is the second reader that sent
+# PLATE_TYPES the same way. Every existing use below is unchanged.
 
 TWO_TURN_MOVES = {
                             # --- Weather-skippable ---
@@ -1831,31 +1822,103 @@ def may_mega_evolve(name, held_item, moves=()):
     the Floette and Raichu exceptions duplicated in both. They had not drifted yet; this
     is the edit that would have made them, since Ash-Greninja had to be added to each.
 
-    `has_mega_stone` is a substring test for 'ite', which is how the codebase has always
-    identified a stone. It is loose - `Eviolite` is not a mega stone - but tightening it
-    is a different change from this one, and the exceptions below are checked after it.
+    `has_mega_stone` used to be `'ite' in held_item`, which is how the codebase had
+    always identified a stone. Phase 8 replaced it, because that test was true of a
+    White Herb (wh-ITE-herb) and an Eviolite, and true of EVERY stone for EVERY species -
+    a Gengar holding a Venusaurite became Mega Gengar. `mega_stone_binds_to` asks the
+    question the substring could not: is this stone THIS specimen's stone.
+
+    The Floette and Raichu exceptions that used to be written out here are rows in
+    MEGA_STONE_SPECIES now - `floettite` binds to `floette-eternal` and `raichunite-x`
+    to `raichu-alola`, which the two-step name match enforces on its own.
     """
     name = (name or '').lower().strip()
     base_name = name.split('-')[0].strip()
     held_item = (held_item or 'none').lower()
 
-    has_stone = 'ite' in held_item
-    has_dragon_ascent = (base_name == 'rayquaza'
+    has_stone = mega_stone_binds_to(name, held_item)
+    has_dragon_ascent = (base_name in MEGA_STONE_FREE_SPECIES
                          and any(m.get('name') == 'dragon-ascent' for m in (moves or [])))
-    is_eternal = name == 'floette-eternal'
-    is_raichu_alola = name == 'raichu-alola'
 
     # A form that is already a gimmick does not get a second one.
     if name in GIMMICK_LOCKED_FORMS:
         return False, False
-    # Ordinary Floettes of every flower colour cannot Mega Evolve; only Eternal can.
-    if base_name.startswith('floette') and not is_eternal:
-        has_stone = False
-    # ...and only Alolan Raichu.
-    if base_name.startswith('raichu') and not is_raichu_alola:
-        has_stone = False
 
-    return (has_stone or has_dragon_ascent or is_eternal), has_stone
+    return (has_stone or has_dragon_ascent), has_stone
+
+
+async def fetch_adaptation_forms(db, full_name):
+    """
+    The Mega and Gigantamax forms this specimen can actually reach.
+
+    Three call sites asked the database for `LIKE '<base>-mega%'`, where <base> is the
+    name up to the first hyphen. That misses every species whose forms are named BELOW
+    the base: Tatsugiri's Mega Formes are `tatsugiri-curly-mega`, so `tatsugiri-mega%`
+    matched nothing and a Tatsugiri could not Mega Evolve at all no matter what it held.
+    Magearna-Original had the same bug one step quieter - `magearna-mega%` matched, so it
+    Mega Evolved into the wrong Forme rather than failing.
+
+    The full name is asked first and the base name only as a fallback, which lets
+    `tatsugiri-curly` reach its own Forme while `raichu-alola` still falls through to
+    `raichu-mega-x`. The ORDER BY matters too: callers take `mega_forms[0]` when the
+    held stone carries no X/Y/Z suffix, and without it that default was whatever order
+    the table happened to return - which decided between `absol-mega` and `absol-mega-z`.
+    """
+    full_name = (full_name or '').lower().strip()
+    base_name = full_name.split('-')[0].strip()
+    stems = [full_name] if full_name == base_name else [full_name, base_name]
+
+    for stem in stems:
+        async with db.execute(
+                "SELECT pokedex_id, name FROM base_pokemon_species "
+                "WHERE name LIKE ? OR name LIKE ? ORDER BY name",
+                (f"{stem}-mega%", f"{stem}-gmax%")) as cursor:
+            rows = await cursor.fetchall()
+        if rows:
+            return ([f for f in rows if '-mega' in f[1]],
+                    next((f for f in rows if '-gmax' in f[1]), None))
+    return [], None
+
+
+def z_upgrade_for(species_name, held_item, move):
+    """
+    The Z-Move this crystal turns this move into, or None if it grants it none.
+
+    One answer for both crystal families and both battle modes. There were already TWO
+    answers to "how strong is a Z-Move" in this file: the PvE dashboard set a flat 175
+    and the PvP resolver added 100 to the base move's power, so the same Gigavolt Havoc
+    landed for 175 against a Warden and 220 against another trainer. A third rule for the
+    signature crystals on top of that would have made the shop's own prices meaningless -
+    a Snorlium Z is dearer than a Normalium Z and has to hit harder than one - so both
+    families ask `z_move_power` now.
+    """
+    held_item = (held_item or 'none').lower().replace(' ', '-')
+    move_name = move.get('base_name') or move.get('name') or ''
+
+    signature = signature_z_for(species_name, held_item, move_name)
+    if signature:
+        return {'name': signature['name'],
+                'power': signature.get('power'),
+                'hp_fraction': signature.get('hp_fraction')}
+
+    element = Z_CRYSTAL_TYPES.get(held_item)
+    if not element or (move.get('type') or '').lower() != element:
+        return None
+    return {'name': Z_MOVE_NAMES.get(element, 'Breakneck Blitz'),
+            'power': z_move_power(move.get('power')),
+            'hp_fraction': None}
+
+
+def holds_a_z_crystal(held_item):
+    """
+    Whether the item is a Z-Crystal of either family.
+
+    Not the same question as "ends in -z": Absolite Z, Garchompite Z and Lucarionite Z
+    are Mega Stones whose names happen to end that way, which is what the old
+    `not has_mega_stone` guard was working around.
+    """
+    held_item = (held_item or 'none').lower().replace(' ', '-')
+    return held_item in Z_CRYSTAL_TYPES or held_item in SIGNATURE_Z_CRYSTALS
 
 
 CHOICE_ITEMS = ['choice-band', 'choice-specs', 'choice-scarf']
@@ -3060,12 +3123,10 @@ class PvPMoveMenu(discord.ui.View):
                 # Encore reuses the single-move UI lock the charge system already provides
                 is_charging = is_encore['move']
                 
-            # Safely get the Z-Crystal type
-            allowed_z_type = None
-            if 'Z_CRYSTAL_TYPES' in globals():
-                allowed_z_type = Z_CRYSTAL_TYPES.get(held_item)
-            else:
-                print("⚠️ WARNING: Z_CRYSTAL_TYPES dictionary is not defined globally!")
+            # Whether this specimen is carrying a crystal of EITHER family. Which of its
+            # moves the crystal actually upgrades is asked per move further down, because
+            # a signature crystal answers for exactly one of them.
+            holding_crystal = holds_a_z_crystal(held_item)
 
             # ==========================================
             # ROW 0: ADAPTATION TOGGLES
@@ -3074,16 +3135,11 @@ class PvPMoveMenu(discord.ui.View):
             if not is_charging:
                 if not adp_state['used']:
                     # ---MEGA & G-MAX DATABASE CHECK ---
-                    base_name = self.active_poke['name'].split('-')[0].lower().strip()
                     held_item = self.active_poke.get('held_item', 'none').lower() # Ensure this is declared!
-                    
+
                     async with aiosqlite.connect(DB_FILE) as db:
-                        async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ? OR name LIKE ?", 
-                                    (f"{base_name}-mega%", f"{base_name}-gmax%")) as cursor:
-                            available_forms = await cursor.fetchall()
-                    
-                    mega_forms = [f for f in available_forms if '-mega' in f[1]]
-                    gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
+                        mega_forms, gmax_form = await fetch_adaptation_forms(
+                            db, self.active_poke['name'])
 
                     # 1. DYNAMAX / GIGANTAMAX (Primal species are locked out)
                     if key_items.get('dynamax_band') and can_dynamax(self.active_poke):
@@ -3116,10 +3172,11 @@ class PvPMoveMenu(discord.ui.View):
                         self.add_item(mega_btn)
                         
                     # 3. Z-MOVES
-                    # 🚨 FIX: Ensure Z-Mega stones don't accidentally trigger the standard elemental Z-Move button
-                    is_true_z_crystal = held_item.endswith('-z') and not has_mega_stone
-                    
-                    if key_items.get('z_ring') and allowed_z_type and is_true_z_crystal:
+                    # This used to be `endswith('-z') and not has_mega_stone`, working
+                    # around Absolite Z, Garchompite Z and Lucarionite Z - Mega Stones
+                    # whose names happen to end that way. `holds_a_z_crystal` asks the
+                    # membership question directly, so the workaround goes.
+                    if key_items.get('z_ring') and holding_crystal:
                         z_style = discord.ButtonStyle.success if self.z_toggled else discord.ButtonStyle.danger
                         z_btn = discord.ui.Button(label="Z-Power", style=z_style, emoji="💎", row=0)
                         z_btn.callback = self.z_toggle_callback
@@ -3213,8 +3270,11 @@ class PvPMoveMenu(discord.ui.View):
 
                 # --- 2. Z-MOVES ---
                 elif self.z_toggled:
-                    if not is_status and m_type == allowed_z_type:
-                        override_name = Z_MOVE_NAMES.get(m_type, 'Breakneck Blitz') if 'Z_MOVE_NAMES' in globals() else 'Breakneck Blitz'
+                    # A signature crystal upgrades ONE move rather than a whole element,
+                    # so the question is asked of the move rather than of its type.
+                    z_upgrade = z_upgrade_for(self.active_poke.get('name'), held_item, move)
+                    if not is_status and z_upgrade:
+                        override_name = z_upgrade['name']
                         label_str = f"{override_name} (Z)"
                         
                         btn = discord.ui.Button(
@@ -4563,7 +4623,7 @@ class BattleDashboard(discord.ui.View):
 
         # Properly format the string with hyphens!
         held_item = p_active.get('held_item', 'none').lower().replace(' ', '-')
-        z_crystal_type = Z_CRYSTAL_TYPES.get(held_item)
+        holding_crystal = holds_a_z_crystal(held_item)
         z_primed = state['adaptation'].get('z_toggled', False)
 
         # Set up the Choice Lock variables
@@ -4669,9 +4729,11 @@ class BattleDashboard(discord.ui.View):
                     disabled_flag = is_disabled # 🚨 Mapped!
 
                 elif z_primed:
-                    # Enforce the biological restriction!
-                    if move_element == z_crystal_type:
-                        btn_label = f"🌟 Z-{move_name.replace('-', ' ').title()}"
+                    # Enforce the biological restriction! A signature crystal upgrades
+                    # one MOVE rather than an element, so ask about the move.
+                    z_upgrade = z_upgrade_for(p_active.get('name'), held_item, move_dict)
+                    if z_upgrade:
+                        btn_label = f"🌟 {z_upgrade['name']}"
                         btn_style = discord.ButtonStyle.danger
                         custom_id = f"move_{i}_{move_name}_z"
                         disabled = False
@@ -4751,7 +4813,7 @@ class BattleDashboard(discord.ui.View):
                 gimmick_found = False
 
                 # A. Z-MOVE CHECK (Requires Z-Ring and Z-crystal)
-                if held_item.endswith('-z') and z_crystal_type and key_items.get('z_ring'):
+                if holding_crystal and key_items.get('z_ring'):
                     if state['adaptation'].get('z_toggled', False):
                         btn = discord.ui.Button(label="🔄 Cancel Z-Power", style=discord.ButtonStyle.secondary, custom_id="transform_0_zmove", row=2)
                     else:
@@ -4762,12 +4824,8 @@ class BattleDashboard(discord.ui.View):
 
                 # B. MEGA & G-MAX DATABASE CHECK
                 async with aiosqlite.connect(DB_FILE) as db:
-                    async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ? OR name LIKE ?", 
-                                (f"{base_name}-mega%", f"{base_name}-gmax%")) as cursor:
-                        available_forms = await cursor.fetchall()
-                
-                mega_forms = [f for f in available_forms if '-mega' in f[1]]
-                gmax_form = next((f for f in available_forms if '-gmax' in f[1]), None)
+                    mega_forms, gmax_form = await fetch_adaptation_forms(
+                        db, p_active['name'])
 
                 # 1. MEGA EVOLUTION (Requires Mega Bracelet + Stone OR Rayquaza + Dragon Ascent)
                 # The same shared ladder the PvE dashboard uses. The Floette, Raichu
@@ -5043,9 +5101,19 @@ class BattleDashboard(discord.ui.View):
                             p_z_display = f"Z-{move_name.replace('-', ' ').title()}"
                             combat_log += f"🌟 **{p_active['name'].capitalize()}** surrounded itself with Z-Power and fully restored its HP!\n"
                         else:
-                            p_move_stats['power'] = 175 
-                            p_move_stats['accuracy'] = 1000 
-                            p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
+                            _z = z_upgrade_for(p_active.get('name'),
+                                               p_active.get('held_item'), p_move_stats)
+                            # A crystal that grants this move nothing leaves it alone
+                            # rather than firing a nameless 175 at the old flat rate.
+                            if _z:
+                                p_move_stats['accuracy'] = 1000
+                                if _z.get('hp_fraction'):
+                                    p_move_stats[Z_HP_FRACTION_KEY] = _z['hp_fraction']
+                                else:
+                                    p_move_stats['power'] = _z['power']
+                                p_z_display = _z['name']
+                            else:
+                                p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
 
                     # Apply Dynamax & G-Max Mutator
                     if is_max_move:
@@ -8332,14 +8400,13 @@ class Combat(commands.Cog):
 
                             # 3. Apply Mega Evolution
                             elif form == 'mega':
-                                # 🚨 FIX: Clean the base name AND grab the held item!
-                                base_name = active_poke['name'].split('-')[0]
                                 held_item = active_poke.get('held_item', 'none').lower()
-                                
-                                # Query ALL mega forms for this species using the LIKE operator
-                                async with db.execute("SELECT pokedex_id, name FROM base_pokemon_species WHERE name LIKE ?", (f"{base_name}-mega%",)) as cursor:
-                                    mega_forms = await cursor.fetchall()
-                                
+
+                                # The full name before the base one, so Tatsugiri and
+                                # Magearna-Original reach their own Formes.
+                                mega_forms, _gmax = await fetch_adaptation_forms(
+                                    db, active_poke['name'])
+
                                 if mega_forms:
                                     # Default fallback to standard mega
                                     form_id, form_name = mega_forms[0] 
@@ -8740,10 +8807,24 @@ class Combat(commands.Cog):
                     # --- Z-MOVE KINETIC INJECTION ---
                     adp_state = state['p1_adaptation'] if player_tag == 'p1' else state['p2_adaptation']
                     if adp_state['active'] and adp_state['type'] == 'zmove':
-                        move['power'] = (move['power'] or 50) + 100
-                        move['accuracy'] = 1000 
-                        combat_log += f"💫 It unleashed its full-force Z-Move!\n"
-                        adp_state['active'] = False 
+                        # Was `+ 100`, which the PvE dashboard never agreed with - it set
+                        # a flat 175 - so the same Z-Move hit for two different numbers
+                        # depending on who was on the other side. Both ask z_upgrade_for
+                        # now, and it is also what tells a signature crystal apart.
+                        _z = z_upgrade_for(attacker.get('name'),
+                                           attacker.get('held_item'), move)
+                        if _z:
+                            move['accuracy'] = 1000
+                            if _z.get('hp_fraction'):
+                                move[Z_HP_FRACTION_KEY] = _z['hp_fraction']
+                            else:
+                                move['power'] = _z['power']
+                        # The Z-Move is NAMED in the log rather than written over
+                        # `move['name']`: PP deduction and the move-restriction checks
+                        # both look the move back up by that name further down.
+                        _z_name = _z['name'] if _z else 'its full-force Z-Move'
+                        combat_log += f"💫 It unleashed **{_z_name}**!\n"
+                        adp_state['active'] = False
                         
                     # --- DYNAMAX KINETIC INJECTION & SANITIZATION ---
                     is_max_move = move['name'].startswith('Max ') or move['name'].startswith('G-Max')
