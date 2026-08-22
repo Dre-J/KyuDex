@@ -8,6 +8,7 @@ import random
 import math
 import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
+                             EV_LOWERING_BERRIES, EV_BERRY_HAPPINESS, MAX_HAPPINESS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
                              STARTER_CAN_BE_SHINY, type_badges,
                              scaled_rarity, roll_shiny, ecosystem_multiplier,
@@ -4440,11 +4441,15 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def use_vitamin(self, ctx, item_name: str, box_number: str, amount: int = 1):
-        """Feed EV Vitamins to your specimens. (e.g., !use protein 4 10)"""
+        """Feed EV Vitamins or EV-lowering berries to your specimens. (e.g., !feed protein 4 10)"""
         user_id = str(ctx.author.id)
         item_name = item_name.lower()
-        
-        # 1. Define the Vitamin Mapping (+10 EVs per item)
+
+        # 1. Define the EV Mapping. Vitamins push a stat UP by 10 an item; Item Phase 7's
+        #    six berries pull it DOWN by 10. One command rather than two, because the
+        #    only thing that actually differs between the two directions is which way the
+        #    cap lies - everything else, from the inventory check to the box lookup to
+        #    the partial-consumption arithmetic, is the same work done twice.
         VITAMINS = {
             "hp-up": "ev_hp",
             "protein": "ev_attack",
@@ -4453,13 +4458,27 @@ class Ecology(commands.Cog):
             "zinc": "ev_sp_def",
             "carbos": "ev_speed"
         }
-        
-        if item_name not in VITAMINS:
-            valid_items = ", ".join([f"`{v}`" for v in VITAMINS.keys()])
-            return await ctx.send(f"⚠️ I can only process EV Vitamins right now. Valid items: {valid_items}")
-            
+
+        EV_ITEMS = {name: (column, +10) for name, column in VITAMINS.items()}
+        # Read off EV_LOWERING_BERRIES, which is itself read off consumables.json, so
+        # which berry lowers which stat is stated exactly once in the whole codebase.
+        EV_ITEMS.update({berry: (column, -step)
+                         for berry, (column, step) in EV_LOWERING_BERRIES.items()})
+
+        # `!feed pomeg 4` is what a player will type. The berries are keyed by their full
+        # name everywhere else, so accept the short form rather than making them guess.
+        if item_name not in EV_ITEMS and f"{item_name}-berry" in EV_ITEMS:
+            item_name = f"{item_name}-berry"
+
+        if item_name not in EV_ITEMS:
+            valid_items = ", ".join([f"`{v}`" for v in EV_ITEMS.keys()])
+            return await ctx.send(f"⚠️ I can only process EV Vitamins and EV-lowering berries right now. Valid items: {valid_items}")
+
+        target_stat_col, ev_step = EV_ITEMS[item_name]
+        lowering = ev_step < 0
+
         if not box_number.isdigit() or amount < 1:
-            return await ctx.send("⚠️ Usage: `!use <item> <box_number> [amount]`\nExample: `!use protein 4 10`")
+            return await ctx.send("⚠️ Usage: `!feed <item> <box_number> [amount]`\nExample: `!feed protein 4 10`")
 
         async with aiosqlite.connect(DB_FILE) as db:
             # 2. Check their Inventory
@@ -4475,7 +4494,7 @@ class Ecology(commands.Cog):
             # 3. Resolve Target (Using Soft Hide to prevent feeding deployed Pokemon!)
             async with db.execute("""
                 WITH Roster AS (
-                    SELECT cp.instance_id, s.name, cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
+                    SELECT cp.instance_id, s.name, cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, cp.happiness,
                            ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
                     FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
                     WHERE cp.user_id = ? AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
@@ -4487,58 +4506,88 @@ class Ecology(commands.Cog):
             if not target:
                 return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`. Are they deployed?")
                 
-            (instance_id, name, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, _) = target
-            
+            (instance_id, name, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, happiness, _) = target
+
             # 4. Enforce Strict EV Caps
-            target_stat_col = VITAMINS[item_name]
-            
             # Map the exact current value based on the column name
             stat_map = {"ev_hp": ev_hp, "ev_attack": ev_atk, "ev_defense": ev_def, "ev_sp_atk": ev_spa, "ev_sp_def": ev_spd, "ev_speed": ev_spe}
             current_stat_value = stat_map[target_stat_col]
             current_total_evs = sum(stat_map.values())
-            
-            # Calculate how much EV room is left overall and for this specific stat
-            overall_room = max(0, 510 - current_total_evs)
-            stat_room = max(0, 252 - current_stat_value)
-            
-            if overall_room <= 0:
-                return await ctx.send(f"🧬 **{name.capitalize()}** has reached its absolute genetic limit (510 Total EVs). It cannot consume any more vitamins.")
-            if stat_room <= 0:
-                return await ctx.send(f"💪 **{name.capitalize()}** has already maxed out its {item_name.title()} potential (252 EVs).")
-                
+            stat_label = target_stat_col.replace("ev_", "").upper()
+
+            # Calculate how much room there is in the direction this item pushes.
+            if lowering:
+                # The only floor on the way down is zero. The 510 total cannot be
+                # breached by SUBTRACTING from it, so there is no second cap here -
+                # which is the whole reason a berry can rescue a mis-trained specimen
+                # that a vitamin has already walled in at the top.
+                stat_room = overall_room = current_stat_value
+                if stat_room <= 0:
+                    return await ctx.send(f"🌱 **{name.capitalize()}** has no {stat_label} EVs left to shed.")
+            else:
+                overall_room = max(0, 510 - current_total_evs)
+                stat_room = max(0, 252 - current_stat_value)
+
+                if overall_room <= 0:
+                    return await ctx.send(f"🧬 **{name.capitalize()}** has reached its absolute genetic limit (510 Total EVs). It cannot consume any more vitamins.")
+                if stat_room <= 0:
+                    return await ctx.send(f"💪 **{name.capitalize()}** has already maxed out its {item_name.title()} potential (252 EVs).")
+
             # 5. Calculate ACTUAL consumption
-            # Each vitamin gives 10 EVs. How many vitamins fit in the remaining room?
+            # Each item moves the stat by 10. How many of them fit in the room left?
             import math
-            max_vitamins_for_stat = math.ceil(stat_room / 10.0)
-            max_vitamins_for_total = math.ceil(overall_room / 10.0)
-            
+            ev_stride = abs(ev_step)
+            max_vitamins_for_stat = math.ceil(stat_room / float(ev_stride))
+            max_vitamins_for_total = math.ceil(overall_room / float(ev_stride))
+
             # The bottleneck is the lowest of: What they asked to use, what they own, stat cap, or total cap
             vitamins_to_consume = min(target_amount, max_vitamins_for_stat, max_vitamins_for_total)
-            
-            # The actual EV gain might be slightly less than (vitamins * 10) if they hit the hard cap
-            # e.g., if they have 248 EVs, 1 vitamin gives +4, not +10.
-            actual_ev_gain = min(vitamins_to_consume * 10, stat_room, overall_room)
-            
+
+            # The actual EV change might be slightly less than (items * 10) if they hit
+            # the hard cap - e.g. at 248 EVs one vitamin gives +4, not +10, and at 4 EVs
+            # one berry takes -4, not -10.
+            actual_ev_gain = min(vitamins_to_consume * ev_stride, stat_room, overall_room)
+
             # 6. Execute the Updates
-            await db.execute(f"UPDATE caught_pokemon SET {target_stat_col} = {target_stat_col} + ? WHERE instance_id = ?", (actual_ev_gain, instance_id))
-            
+            await db.execute(f"UPDATE caught_pokemon SET {target_stat_col} = {target_stat_col} + ? WHERE instance_id = ?",
+                             (-actual_ev_gain if lowering else actual_ev_gain, instance_id))
+
+            # The berries are bitter, and putting up with one is a favour. Happiness is
+            # read by the evolution triggers, so this is not decoration - it is a second
+            # reason to feed one.
+            happiness_gain = 0
+            if lowering:
+                happiness_gain = max(0, min(EV_BERRY_HAPPINESS * vitamins_to_consume,
+                                            MAX_HAPPINESS - (happiness or 0)))
+                if happiness_gain:
+                    await db.execute("UPDATE caught_pokemon SET happiness = happiness + ? WHERE instance_id = ?", (happiness_gain, instance_id))
+
             # Deduct the vitamins from inventory (If it hits 0, delete the row to keep the DB clean)
             if owned_amount - vitamins_to_consume <= 0:
                 await db.execute("DELETE FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, item_name))
             else:
                 await db.execute("UPDATE user_inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?", (vitamins_to_consume, user_id, item_name))
-                
+
             await db.commit()
-            
+
             # 7. UI Output
-            stat_label = target_stat_col.replace("ev_", "").upper()
-            embed = discord.Embed(title="💊 Nutritional Supplement Administered", color=discord.Color.green())
-            embed.description = f"**{name.capitalize()}** consumed **{vitamins_to_consume}x `{item_name.title()}`**!"
-            embed.add_field(name="Stat Increase", value=f"⬆️ +{actual_ev_gain} {stat_label} EVs")
-            
+            embed = discord.Embed(
+                title="🫐 Bitter Berry Administered" if lowering else "💊 Nutritional Supplement Administered",
+                color=discord.Color.purple() if lowering else discord.Color.green())
+            embed.description = f"**{name.capitalize()}** consumed **{vitamins_to_consume}x `{item_name.replace('-', ' ').title()}`**!"
+
+            if lowering:
+                embed.add_field(name="Stat Reduction", value=f"⬇️ -{actual_ev_gain} {stat_label} EVs")
+                if happiness_gain:
+                    embed.add_field(name="Bond", value=f"❤️ +{happiness_gain} happiness")
+            else:
+                embed.add_field(name="Stat Increase", value=f"⬆️ +{actual_ev_gain} {stat_label} EVs")
+
             if vitamins_to_consume < amount:
-                embed.set_footer(text="Notice: Consumption was halted early to prevent exceeding genetic stat caps.")
-                
+                embed.set_footer(text="Notice: Consumption was halted early to prevent exceeding genetic stat caps."
+                                      if not lowering else
+                                      "Notice: Consumption was halted early - the stat reached zero.")
+
             await ctx.send(embed=embed)
 
     @commands.command(name="deploy")
