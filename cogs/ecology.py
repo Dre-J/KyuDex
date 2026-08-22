@@ -28,7 +28,9 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              HABITAT_DEGRADED_BELOW, HABITAT_PRISTINE_ABOVE,
                              HABITAT_DEGRADED_TYPES, HABITAT_PRISTINE_BONUS,
                              ball_icon, BALL_FALLBACK, trait_badges, is_alpha_size,
-                             GMAX_ICON, ALPHA_ICON)
+                             GMAX_ICON, ALPHA_ICON,
+                             MAX_SOUP, MAX_SOUP_COST, MAX_MUSHROOMS,
+                             MAX_SOUP_MUSHROOMS)
 from utils.limits import (EXPEDITION, EXPEDITION_DAILY_CAP, check_cap,
                           record_use, describe_reset)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
@@ -4438,9 +4440,16 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def use_vitamin(self, ctx, item_name: str, box_number: str, amount: int = 1):
-        """Feed EV Vitamins or EV-lowering berries to your specimens. (e.g., !feed protein 4 10)"""
+        """Feed EV Vitamins, EV-lowering berries or Max Soup to your specimens. (e.g., !feed protein 4 10)"""
         user_id = str(ctx.author.id)
         item_name = item_name.lower()
+
+        # ITEM PHASE 11: Max Soup is fed rather than deployed, so it belongs to this
+        # command and not to `!use` - `!use` acts on the SERVER (it is where the Purifier
+        # lives) and has no specimen to act on. Handed off before the EV mapping, because
+        # the soup moves no EV and shares none of the cap arithmetic below.
+        if item_name in (MAX_SOUP, 'soup', 'maxsoup', 'max_soup'):
+            return await self._serve_max_soup(ctx, box_number)
 
         # 1. Define the EV Mapping. Vitamins push a stat UP by 10 an item; Item Phase 7's
         #    six berries pull it DOWN by 10. One command rather than two, because the
@@ -4586,6 +4595,110 @@ class Ecology(commands.Cog):
                                       "Notice: Consumption was halted early - the stat reached zero.")
 
             await ctx.send(embed=embed)
+
+    async def _serve_max_soup(self, ctx, box_number: str):
+        """
+        ITEM PHASE 11. A bowl of Max Soup, and the Gigantamax factor it awakens.
+
+        The bowl is spent LAST and only once the change is known to be possible, which is
+        the same order `!capsule` and `!patch` use: a soup served to a species with no
+        Gigantamax form, or to one that already has the factor, tells the player so and
+        stays in the pack.
+
+        Whether a species HAS a Gigantamax form is asked of the database rather than of a
+        hand-written list, because the database is what the battle engine itself asks when
+        it decides whether the transformation button says Gigantamax or merely Dynamax. A
+        list here could drift out of step with that; a query cannot.
+        """
+        user_id = str(ctx.author.id)
+
+        if not box_number.isdigit():
+            return await ctx.send("⚠️ Usage: `!feed max-soup <box number>`")
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT quantity FROM user_inventory "
+                    "WHERE user_id = ? AND item_name = ?",
+                    (user_id, MAX_SOUP)) as cursor:
+                bowl = await cursor.fetchone()
+
+            if not bowl or bowl[0] < 1:
+                return await ctx.send(
+                    f"🍲 You have no Max Soup. Refine {MAX_SOUP_MUSHROOMS}x "
+                    f"`Max Mushrooms` with `!refine max soup` first.")
+
+            # Same Roster shape the vitamins use, so a deployed or deposited specimen is
+            # hidden from the soup for exactly the reasons it is hidden from a Protein.
+            async with db.execute("""
+                WITH Roster AS (
+                    SELECT cp.instance_id, cp.gmax_factor, s.name,
+                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                ) SELECT instance_id, gmax_factor, name FROM Roster WHERE box_number = ?
+            """, (user_id, int(box_number))) as cursor:
+                target = await cursor.fetchone()
+
+            if not target:
+                return await ctx.send(
+                    f"❌ Could not find a specimen in Box `#{box_number}`. Are they deployed?")
+
+            instance_id, gmax_factor, species = target
+            pretty = species.replace('-', ' ').title()
+
+            if gmax_factor:
+                return await ctx.send(
+                    f"🍲 **{pretty}** already carries the Gigantamax factor. "
+                    f"The soup would be wasted, so it stays in your pack.")
+
+            # Full name first, base name second - the same order fetch_adaptation_forms
+            # uses, so a form named below the base (toxtricity-amped) still finds
+            # toxtricity-gmax instead of failing.
+            stems = [species]
+            if '-' in species:
+                stems.append(species.split('-')[0])
+
+            gmax_form = None
+            for stem in stems:
+                async with db.execute(
+                        "SELECT name FROM base_pokemon_species WHERE name LIKE ? "
+                        "ORDER BY name LIMIT 1", (f"{stem}-gmax%",)) as cursor:
+                    row = await cursor.fetchone()
+                if row:
+                    gmax_form = row[0]
+                    break
+
+            if not gmax_form:
+                return await ctx.send(
+                    f"🍲 **{pretty}** has no Gigantamax form to awaken. "
+                    f"The soup stays in your pack - pick a species that has one.")
+
+            await db.execute(
+                "UPDATE caught_pokemon SET gmax_factor = 1 WHERE instance_id = ?",
+                (instance_id,))
+            if bowl[0] - 1 <= 0:
+                await db.execute(
+                    "DELETE FROM user_inventory WHERE user_id = ? AND item_name = ?",
+                    (user_id, MAX_SOUP))
+            else:
+                await db.execute(
+                    "UPDATE user_inventory SET quantity = quantity - 1 "
+                    "WHERE user_id = ? AND item_name = ?", (user_id, MAX_SOUP))
+            await db.commit()
+
+        embed = discord.Embed(
+            title="🍲 Gigantamax Factor Awakened",
+            description=f"**{pretty}** ate the whole bowl of Max Soup and began to glow "
+                        f"with Galar particles.",
+            color=discord.Color.magenta())
+        embed.add_field(name="Awakened Form", value=gmax_form.replace('-', ' ').title())
+        embed.set_footer(
+            text="It will now Gigantamax rather than Dynamax in battle, "
+                 "provided you carry a Dynamax Band.")
+        await ctx.send(embed=embed)
 
     async def _apply_ability_item(self, ctx, item_name, target, decide):
         """
@@ -4790,10 +4903,25 @@ class Ecology(commands.Cog):
             },
             # --- Z-RING BLUEPRINT ---
             'z-ring': {
-                'cost': 1500, 
+                'cost': 1500,
                 'material': 'sparkling-stone',
-                'material_qty': 2, 
+                'material_qty': 2,
                 'display': '🌟 Z-Ring'
+            },
+            # --- ITEM PHASE 11: MAX SOUP ---
+            # The one recipe here whose output is not a key item. The other three
+            # permanently authorize a bypass in the battle UI; this one comes out of the
+            # pot as a bowl of soup and is eaten by a single specimen, which is why it
+            # carries its own closing line rather than the shared one.
+            MAX_SOUP: {
+                'cost': MAX_SOUP_COST,
+                'material': MAX_MUSHROOMS,
+                'material_qty': MAX_SOUP_MUSHROOMS,
+                'display': '🍲 Max Soup',
+                'flavour': ("A bowl of it will awaken one specimen's Gigantamax factor "
+                            "for good.\n\nServe it with `!feed max-soup <box number>`. "
+                            "Only species that have a Gigantamax form can be awakened, "
+                            "and the bowl is not spent if you pick one that cannot."),
             }
         }
         
@@ -4838,9 +4966,14 @@ class Ecology(commands.Cog):
                 
                 await db.commit()
                 
+                closing = recipe.get(
+                    'flavour',
+                    "The mechanical bypass in your battle UI has been permanently "
+                    "authorized.")
                 embed = discord.Embed(
-                    title="⚙️ Synthesis Complete", 
-                    description=f"You successfully refined the raw geological materials into a **{recipe['display']}**!\n\nThe mechanical bypass in your battle UI has been permanently authorized.",
+                    title="⚙️ Synthesis Complete",
+                    description=f"You successfully refined the raw materials into a "
+                                f"**{recipe['display']}**!\n\n{closing}",
                     color=discord.Color.purple()
                 )
                 await ctx.send(embed=embed)

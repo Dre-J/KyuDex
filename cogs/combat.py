@@ -7,11 +7,12 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, shrugs_off_weather_chip, ignores_hazards, species_form_for, true_species_name, roll_gender, declared_gender, expire_action_markers
+from utils.formulas import apply_item_sustenance, apply_bag_item, bag_item_is_useless, calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, shrugs_off_weather_chip, ignores_hazards, species_form_for, true_species_name, roll_gender, declared_gender, expire_action_markers
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
-from utils.constants import (TM_CATALOG, type_badges, type_icon,
+from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL,
+                             TM_CATALOG, type_badges, type_icon,
                              PVP_LEVEL_CAPS, parse_level_cap,
                              Z_MOVE_NAMES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS,
                              signature_z_for, z_move_power,
@@ -4298,28 +4299,23 @@ class ItemSelect(discord.ui.View):
         self.ctx = ctx
         self.main_battle_view = main_battle_view # We need this to return to the battle!
         
-        # Build the dropdown dynamically based on what they actually own
+        # Build the dropdown dynamically based on what they actually own. ITEM PHASE 11:
+        # the descriptions come off BATTLE_BAG_ITEMS rather than a second copy of the same
+        # seven rows that had been rebuilt on every pass of this loop. Medical supplies
+        # first, so the bag still opens on what an emergency needs.
         options = []
-        for item_name, qty in items:
-            item_data = {
-                'potion': {'desc': 'Restores 20 HP.', 'emoji': '💊'},
-                'super-potion': {'desc': 'Restores 50 HP.', 'emoji': '🧪'},
-                'hyper-potion': {'desc': 'Restores 200 HP.', 'emoji': '🧴'},
-                'max-potion': {'desc': 'Restores all HP.', 'emoji': '💖'},
-                'full-restore': {'desc': 'Restores all HP and cures status.', 'emoji': '🌟'},
-                'revive': {'desc': 'Revives a fainted specimen to 50% HP.', 'emoji': '👼'},
-                'full-heal': {'desc': 'Cures all status conditions.', 'emoji': '🌿'}
-            }
-            
-            data = item_data.get(item_name, {'desc': 'A medical supply.', 'emoji': '📦'})
+        for item_name, qty in sorted(
+                items, key=lambda row: (row[0] not in BATTLE_BAG_MEDICAL, row[0])):
+            data = BATTLE_BAG_ITEMS.get(
+                item_name, {'desc': 'A field supply.', 'emoji': '📦'})
             options.append(discord.SelectOption(
-                label=f"{item_name.replace('-', ' ').title()} (x{qty})", 
-                value=item_name, 
-                description=data['desc'], 
+                label=f"{item_name.replace('-', ' ').title()} (x{qty})",
+                value=item_name,
+                description=data['desc'],
                 emoji=data['emoji']
             ))
 
-        select_menu = discord.ui.Select(placeholder="Select a medical supply to deploy...", min_values=1, max_values=1, options=options)
+        select_menu = discord.ui.Select(placeholder="Select a field supply to deploy...", min_values=1, max_values=1, options=options)
         select_menu.callback = self.use_item_callback
         self.add_item(select_menu)
         
@@ -4337,64 +4333,25 @@ class ItemSelect(discord.ui.View):
         selected_item = interaction.data['values'][0]
         state = self.cog.active_battles[self.user_id]
         p_active = state['player_team'][state['active_player_index']]
-        
+        own_side = state.get('player_hazards')
+
         # --- 1. BIOLOGICAL VALIDATION ---
-        # Prevent wasting items if they aren't needed!
-        if selected_item in ['potion', 'super-potion', 'hyper-potion', 'max-potion'] and p_active['current_hp'] == p_active['max_hp']:
-            return await interaction.followup.send("That specimen is already at maximum health!", ephemeral=True)
-            
-        if selected_item == 'full-heal' and p_active.get('status_condition') is None and 'confusion' not in p_active.get('volatile_statuses', {}):
-            return await interaction.followup.send("That specimen is not suffering from any status conditions!", ephemeral=True)
-            
-        if selected_item == 'revive' and p_active['current_hp'] > 0:
-             return await interaction.followup.send("You can only use a Revive on a fainted specimen!", ephemeral=True)
-             
-        if selected_item != 'revive' and p_active['current_hp'] <= 0:
-            return await interaction.followup.send("You cannot use that item on a fainted specimen! Use a Revive.", ephemeral=True)
+        # ITEM PHASE 11: one shared question rather than four hand-written ones. Asked
+        # BEFORE anything is spent, because opening the bag costs a turn and a wasted turn
+        # is worse than a wasted item - the old chain screened four of the seven items it
+        # carried, so a Full Restore on a healthy specimen was simply thrown away.
+        refusal = bag_item_is_useless(selected_item, p_active, own_side)
+        if refusal:
+            return await interaction.followup.send(refusal, ephemeral=True)
 
         # --- 2. CONSUME THE ITEM ---
         async with aiosqlite.connect(DB_FILE) as db:
             await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (self.user_id, selected_item))
             await db.commit()
 
-        # --- 3. APPLY THE MEDICAL EFFECT ---
+        # --- 3. APPLY THE EFFECT ---
         combat_log = f"**Turn {state['turn_number']}** begins!\n\n"
-        
-        if selected_item == 'potion':
-            heal_amount = 20
-            p_active['current_hp'] = min(p_active['max_hp'], p_active['current_hp'] + heal_amount)
-            combat_log += f"💊 You sprayed a Potion! **{p_active['name'].capitalize()}** recovered HP.\n"
-            
-        elif selected_item == 'super-potion':
-            heal_amount = 50
-            p_active['current_hp'] = min(p_active['max_hp'], p_active['current_hp'] + heal_amount)
-            combat_log += f"🧪 You deployed a Super Potion! **{p_active['name'].capitalize()}** recovered HP.\n"
-            
-        elif selected_item == 'hyper-potion':
-            heal_amount = 200
-            p_active['current_hp'] = min(p_active['max_hp'], p_active['current_hp'] + heal_amount)
-            combat_log += f"🧴 You deployed a Hyper Potion! **{p_active['name'].capitalize()}** recovered HP.\n"
-            
-        elif selected_item == 'max-potion':
-            p_active['current_hp'] = p_active['max_hp']
-            combat_log += f"💖 You deployed a Max Potion! **{p_active['name'].capitalize()}**'s HP was fully restored.\n"
-            
-        elif selected_item == 'full-heal':
-            p_active['status_condition'] = None
-            if 'confusion' in p_active.get('volatile_statuses', {}):
-                del p_active['volatile_statuses']['confusion']
-            combat_log += f"🌿 You used a Full Heal! **{p_active['name'].capitalize()}** was cured of all ailments.\n"
-            
-        elif selected_item == 'full-restore':
-            p_active['current_hp'] = p_active['max_hp']
-            p_active['status_condition'] = None
-            if 'confusion' in p_active.get('volatile_statuses', {}):
-                del p_active['volatile_statuses']['confusion']
-            combat_log += f"🌟 You used a Full Restore! **{p_active['name'].capitalize()}** is fully healed and cured.\n"
-            
-        elif selected_item == 'revive':
-            p_active['current_hp'] = max(1, math.floor(p_active['max_hp'] * 0.5))
-            combat_log += f"👼 You used a Revive! **{p_active['name'].capitalize()}** was resuscitated.\n"
+        combat_log += apply_bag_item(selected_item, p_active, own_side)
 
         # --- 4. PASS THE TURN TO THE NPC ---
         await self.main_battle_view.execute_npc_retaliation(interaction, combat_log)
@@ -5097,25 +5054,29 @@ class BattleDashboard(discord.ui.View):
             view=ForfeitConfirm(self), ephemeral=True)
 
     async def open_bag(self, interaction: discord.Interaction):
-        """Queries the user's inventory for medical supplies and opens the Dropdown UI."""
+        """Queries the user's inventory for deployable field supplies and opens the Dropdown UI."""
         if str(interaction.user.id) != self.user_id:
             return await interaction.response.send_message("⚠️ This is not your field expedition!", ephemeral=True)
-        
-        # Fetch any items classified as medical supplies that the user actually owns
-        medical_items = ('potion', 'super-potion', 'hyper-potion', 'max-potion', 'full-restore', 'revive', 'full-heal')
-        placeholders = ','.join('?' * len(medical_items))
-        
+
+        # ITEM PHASE 11: the shelf is BATTLE_BAG_ITEMS rather than a tuple written out
+        # here. It used to be a hard-coded seven, copied again in the dropdown and a third
+        # time in the callback - three lists that had to be edited together, which is why
+        # the X-items sat unimplemented for so long behind a note claiming there was no
+        # bag at all.
+        deployable = tuple(sorted(BATTLE_BAG_ITEMS))
+        placeholders = ','.join('?' * len(deployable))
+
         query = f"SELECT item_name, quantity FROM user_inventory WHERE user_id = ? AND item_name IN ({placeholders}) AND quantity > 0"
         async with aiosqlite.connect(DB_FILE) as db:
-            async with db.execute(query, (self.user_id, *medical_items)) as cursor:
+            async with db.execute(query, (self.user_id, *deployable)) as cursor:
                 inventory_data = await cursor.fetchall()
-        
+
         if not inventory_data:
-            return await interaction.response.send_message("🎒 Your medical pouch is empty! Requisition supplies from the `!market`.", ephemeral=True)
-            
+            return await interaction.response.send_message("🎒 Your field pack is empty! Requisition supplies from the `!market`.", ephemeral=True)
+
         # Spawn the Bag UI and pass the inventory data to it
         bag_view = ItemSelect(self.cog, self.user_id, self.ctx, main_battle_view=self, items=inventory_data)
-        
+
         await interaction.response.edit_message(view=bag_view)
 
     async def handle_move(self, interaction: discord.Interaction):
@@ -6891,30 +6852,13 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             # 2.5 Biological Sustenance
             # ==========================================
+            # ITEM PHASE 11: one shared payout. This block used to be written out here
+            # AND in the PvP resolver, byte-identical apart from a comment, and the Sticky
+            # Barb would have made a third copy of each.
+            magic_room = state.get('field', {}).get('magic_room', 0) > 0
             for combatant, owner_str in [(p_active, "Your"), (n_active, "The rival's")]:
                 if combatant['current_hp'] > 0:
-                    item = get_active_item(combatant, state.get('field', {}).get('magic_room', 0) > 0)
-                    max_hp = combatant.get('max_hp', 100)
-                    
-                    if item == 'leftovers':
-                        # 🚨 FIX: Only trigger if they are missing HP!
-                        if combatant['current_hp'] < max_hp:
-                            heal_qty = max(1, math.floor(max_hp / 16))
-                            combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
-                            combat_log += f"🍎 **{owner_str} {combatant['name'].capitalize()}** restored a little HP using its Leftovers! (+{heal_qty})\n"
-
-                    elif item == 'black-sludge':
-                        if 'poison' in combatant.get('types', []):
-                            # 🚨 FIX: Only heal Poison types if they are missing HP!
-                            if combatant['current_hp'] < max_hp:
-                                heal_qty = max(1, math.floor(max_hp / 16))
-                                combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
-                                combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** restored HP via its Black Sludge! (+{heal_qty})\n"
-                        else:
-                            # Damages non-poison types regardless of current HP
-                            sludge_dmg = max(1, math.floor(max_hp / 8))
-                            combatant['current_hp'] = max(0, combatant['current_hp'] - sludge_dmg)
-                            combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** is buffeted by its Black Sludge! (-{sludge_dmg})\n"
+                    combat_log += apply_item_sustenance(combatant, owner_str, magic_room)
             # ==========================================
 
             # --- TRIPWIRE 2: Check the biological hosts! ---
@@ -9738,30 +9682,13 @@ class Combat(commands.Cog):
                         combatant['current_hp'] = max(0, combatant['current_hp'] - psn_dmg)
                         combat_log += f"☣️ {owner_str} **{combatant['name'].capitalize()}** was hurt by the poison! (-{psn_dmg} HP)\n"
 
-            # 2.5 Biological Sustenance (Held Items: Leftovers, Black Sludge)
+            # 2.5 Biological Sustenance (Held Items: Leftovers, Black Sludge, Sticky Barb)
+            # ITEM PHASE 11: the same shared payout the PvE turn-end calls. These two
+            # loops were byte-identical copies of one rule; now they are two callers.
+            magic_room = state.get('field', {}).get('magic_room', 0) > 0
             for combatant, _, owner_str in combatants:
                 if combatant['current_hp'] > 0:
-                    item = get_active_item(combatant, state.get('field', {}).get('magic_room', 0) > 0)
-                    max_hp = combatant.get('max_hp', 100)
-                    
-                    if item == 'leftovers':
-                        # 🚨 FIX: Only trigger if they are missing HP!
-                        if combatant['current_hp'] < max_hp:
-                            heal_qty = max(1, math.floor(max_hp / 16))
-                            combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
-                            combat_log += f"🍎 **{owner_str} {combatant['name'].capitalize()}** restored a little HP using its Leftovers! (+{heal_qty})\n"
-                            
-                    elif item == 'black-sludge':
-                        if 'poison' in combatant.get('types', []):
-                            # 🚨 FIX: Only heal Poison types if they are missing HP!
-                            if combatant['current_hp'] < max_hp:
-                                heal_qty = max(1, math.floor(max_hp / 16))
-                                combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
-                                combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** restored HP via its Black Sludge! (+{heal_qty})\n"
-                        else:
-                            sludge_dmg = max(1, math.floor(max_hp / 8))
-                            combatant['current_hp'] = max(0, combatant['current_hp'] - sludge_dmg)
-                            combat_log += f"🧪 **{owner_str} {combatant['name'].capitalize()}** is buffeted by its Black Sludge! (-{sludge_dmg})\n"
+                    combat_log += apply_item_sustenance(combatant, owner_str, magic_room)
 
 
             # ==========================================

@@ -2664,6 +2664,235 @@ EQUIPMENT_CATALOG.update(build_phase10_stock())
 
 
 # ==========================================
+# 🎒 ITEM PHASE 11: THE BAG, AND THE FOUR HELD ITEMS THAT NEEDED A HOOK
+# ==========================================
+# The audit excluded nine items on the grounds that "KyuDex has no in-battle bag". That
+# was simply wrong: BattleDashboard.open_bag, ItemSelect and use_item_callback have been
+# there the whole time, wired to a button, spending real inventory. What the bag had was
+# not an absence but a CLOSED LIST - one hard-coded tuple of seven medical items in the
+# query, a second copy of the same seven in the dropdown's descriptions, and a third as
+# an if/elif chain in the callback. Three lists that had to be edited together to add one
+# item, which is why nobody ever did.
+#
+# So the bag becomes a table, the way every other shelf here already is. One row per item
+# drives the inventory query, the dropdown, the validation and the effect, and adding an
+# item is a row rather than three edits in three places that can drift apart.
+
+# --- The two held items -------------------------------------------------------------
+STICKY_BARB = 'sticky-barb'
+STICKY_BARB_DIVISOR = 8      # of max HP, to the holder, every turn
+
+UTILITY_UMBRELLA = 'utility-umbrella'
+# The two ORDINARY skies. A primordial sky is deliberately left alone, for the same
+# reason personal_weather leaves it alone: those three are the ones an ordinary weather
+# setter is already refused, and an umbrella does not get to do what a setter cannot.
+SHELTERED_SKIES = frozenset({'sun', 'rain'})
+
+DESTINY_KNOT = 'destiny-knot'
+
+# --- The end-of-turn item payout ----------------------------------------------------
+# Leftovers and Black Sludge were written out TWICE - once in the PvE turn-end and once
+# in the PvP one, byte-identical apart from a comment. Adding the Sticky Barb would have
+# made a third copy of each. The duplication is not hypothetically dangerous either: the
+# grounding check next door was duplicated the same way, the two copies drifted, and an
+# Air Balloon silently stopped lifting its holder over Spikes for as long as that lasted.
+#
+#   heal        - divisor of max HP restored, but only when HP is actually missing
+#   hurt        - divisor of max HP taken, whatever the current HP
+#   heal_types  - present means the row is CONDITIONAL: hold one of these elements and
+#                 the row heals, hold none and it hurts instead. Black Sludge's rule.
+END_OF_TURN_ITEMS = {
+    'leftovers':    {'heal': 16, 'emoji': '🍎',
+                     'heal_msg': "restored a little HP using its Leftovers!"},
+    'black-sludge': {'heal': 16, 'hurt': 8, 'heal_types': ('poison',), 'emoji': '🧪',
+                     'heal_msg': "restored HP via its Black Sludge!",
+                     'hurt_msg': "is buffeted by its Black Sludge!"},
+    STICKY_BARB:    {'hurt': STICKY_BARB_DIVISOR, 'emoji': '🌵',
+                     'hurt_msg': "was pricked by its Sticky Barb!"},
+}
+
+# --- The bag ------------------------------------------------------------------------
+# `kind` picks the effect, and every kind is answered by machinery that ALREADY EXISTS
+# rather than by a new one:
+#
+#   heal      - amount in HP, or ALL_STATS' cousin None for "all of it"
+#   cure      - clears the major status and confusion
+#   revive    - a fainted specimen only, back at half
+#   stages    - enqueued through resolve_stat_stages, so an X Attack meets Clear Body,
+#               Mirror Armor, Defiant and Opportunist exactly as Swords Dance does
+#   crit      - the `focus_energy` volatile, which is what Focus Energy, a Lansat Berry
+#               and Z-Focus Energy all already set
+#   side      - a timed side condition. Guard Spec is Mist, which SIDE_SCREEN_MOVES has
+#               carried and side_is_guarded has read since long before this phase
+#
+# `needs` is the validation: an item that cannot do anything is refused BEFORE it is
+# spent, because the bag costs a turn and a wasted turn is worse than a wasted item.
+BATTLE_BAG_ITEMS = {
+    'potion':        {'kind': 'heal', 'amount': 20, 'needs': 'hurt', 'emoji': '💊',
+                      'desc': 'Restores 20 HP.',
+                      'log': "💊 You sprayed a Potion! **{name}** recovered HP."},
+    'super-potion':  {'kind': 'heal', 'amount': 50, 'needs': 'hurt', 'emoji': '🧪',
+                      'desc': 'Restores 50 HP.',
+                      'log': "🧪 You deployed a Super Potion! **{name}** recovered HP."},
+    'hyper-potion':  {'kind': 'heal', 'amount': 200, 'needs': 'hurt', 'emoji': '🧴',
+                      'desc': 'Restores 200 HP.',
+                      'log': "🧴 You deployed a Hyper Potion! **{name}** recovered HP."},
+    'max-potion':    {'kind': 'heal', 'amount': None, 'needs': 'hurt', 'emoji': '💖',
+                      'desc': 'Restores all HP.',
+                      'log': "💖 You deployed a Max Potion! **{name}**'s HP was fully "
+                             "restored."},
+    'full-heal':     {'kind': 'cure', 'needs': 'status', 'emoji': '🌿',
+                      'desc': 'Cures all status conditions.',
+                      'log': "🌿 You used a Full Heal! **{name}** was cured of all "
+                             "ailments."},
+    'full-restore':  {'kind': 'heal', 'amount': None, 'cure': True,
+                      'needs': 'hurt_or_status', 'emoji': '🌟',
+                      'desc': 'Restores all HP and cures status.',
+                      'log': "🌟 You used a Full Restore! **{name}** is fully healed "
+                             "and cured."},
+    'revive':        {'kind': 'revive', 'needs': 'fainted', 'emoji': '👼',
+                      'desc': 'Revives a fainted specimen to 50% HP.',
+                      'log': "👼 You used a Revive! **{name}** was resuscitated."},
+
+    'x-attack':      {'kind': 'stages', 'stats': {'attack': 1}, 'emoji': '⚔️',
+                      'desc': 'Raises Attack by one stage.',
+                      'log': "⚔️ You applied an X Attack to **{name}**!"},
+    'x-defense':     {'kind': 'stages', 'stats': {'defense': 1}, 'emoji': '🛡️',
+                      'desc': 'Raises Defense by one stage.',
+                      'log': "🛡️ You applied an X Defense to **{name}**!"},
+    'x-sp-atk':      {'kind': 'stages', 'stats': {'special-attack': 1}, 'emoji': '🔮',
+                      'desc': 'Raises Sp. Atk by one stage.',
+                      'log': "🔮 You applied an X Sp. Atk to **{name}**!"},
+    'x-sp-def':      {'kind': 'stages', 'stats': {'special-defense': 1}, 'emoji': '🔰',
+                      'desc': 'Raises Sp. Def by one stage.',
+                      'log': "🔰 You applied an X Sp. Def to **{name}**!"},
+    'x-speed':       {'kind': 'stages', 'stats': {'speed': 1}, 'emoji': '💨',
+                      'desc': 'Raises Speed by one stage.',
+                      'log': "💨 You applied an X Speed to **{name}**!"},
+    'x-accuracy':    {'kind': 'stages', 'stats': {'accuracy': 1}, 'emoji': '🎯',
+                      'desc': 'Raises accuracy by one stage.',
+                      'log': "🎯 You applied an X Accuracy to **{name}**!"},
+    'dire-hit':      {'kind': 'crit', 'needs': 'not_focused', 'emoji': '🥊',
+                      'desc': 'Raises the critical hit ratio.',
+                      'log': "🥊 You used a Dire Hit! **{name}** is fired up - its "
+                             "critical hit ratio rose!"},
+    'guard-spec':    {'kind': 'side', 'condition': 'mist', 'turns': 5,
+                      'needs': 'no_mist', 'emoji': '🌫️',
+                      'desc': 'A white mist stops your stats being lowered, 5 turns.',
+                      'log': "🌫️ You used a Guard Spec! A white mist stopped your "
+                             "team losing any stats."},
+}
+
+# The bag is a PvE fixture: open_bag hangs off BattleDashboard, which is the PvE view,
+# and the PvP resolver has no equivalent. So the eight battle items below are honestly
+# labelled PvE-only in the shop rather than sold as though they worked everywhere.
+BAG_MEDICAL_KINDS = frozenset({'heal', 'cure', 'revive'})
+BATTLE_BAG_MEDICAL = frozenset(
+    k for k, v in BATTLE_BAG_ITEMS.items() if v['kind'] in BAG_MEDICAL_KINDS)
+BATTLE_BAG_PVE_ONLY = frozenset(BATTLE_BAG_ITEMS) - BATTLE_BAG_MEDICAL
+
+# --- Max Soup -----------------------------------------------------------------------
+# Max Mushrooms do not act on their own. They are the MATERIAL for Max Soup, which is
+# refined at the lab beside the Mega Bracelet and the Z-Ring, and the soup is what a
+# specimen is actually fed. Two steps rather than one because a species either has a
+# Gigantamax form or it does not, and the check belongs at the bowl rather than at the
+# shop counter - the mushrooms are worth buying before you have decided who eats them.
+MAX_MUSHROOMS = 'max-mushrooms'
+MAX_SOUP = 'max-soup'
+MAX_SOUP_MUSHROOMS = 3
+MAX_SOUP_COST = 2000        # lab time, on top of the mushrooms
+
+# --- Prices -------------------------------------------------------------------------
+PHASE11_HELD_PRICE = 400    # the two held items: affordable, meant to be experimented with
+BAG_ITEM_PRICE = 300        # spent every time they are used, so cheaper again
+# Premium, deliberately. A Destiny Knot's real job is passing IVs down, and that belongs
+# to a breeding update that does not exist yet - pricing it as an ordinary battle item now
+# would make it worthless later.
+DESTINY_KNOT_PRICE = 8000
+# Premium in aggregate rather than per mushroom: three of them plus the lab's fee is
+# 11,000, which is Gigantamax access and should feel like it.
+MAX_MUSHROOMS_PRICE = 3000
+
+PHASE11_DESCRIPTIONS = {
+    STICKY_BARB:      ("Pricks the holder for 1/8 its HP each turn, and sticks to any "
+                       "empty-handed attacker that touches it.",
+                       PHASE11_HELD_PRICE, 'battleitems', '🌵'),
+    UTILITY_UMBRELLA: ("Shelters the holder from rain and harsh sunlight.",
+                       PHASE11_HELD_PRICE, 'battleitems', '☂️'),
+    DESTINY_KNOT:     ("If the holder is infatuated, whoever charmed it falls in love "
+                       "right back.", DESTINY_KNOT_PRICE, 'battleitems', '💞'),
+    MAX_MUSHROOMS:    (f"Raw material for Max Soup. Refine {MAX_SOUP_MUSHROOMS} of them "
+                       f"at the lab with `!refine max soup`.",
+                       MAX_MUSHROOMS_PRICE, 'general', '🍄'),
+}
+
+# The five medical items the bag has always been able to USE but the shop never sold.
+# Scaled off the two that were already priced: a Potion is 100 for 20 HP, a Revive 250.
+PHASE11_MEDICAL = {
+    'super-potion': ("Restores 50 HP to one specimen.", 300, '🧪'),
+    'hyper-potion': ("Restores 200 HP to one specimen.", 900, '🧴'),
+    'max-potion':   ("Fully restores one specimen's HP.", 1500, '💖'),
+    'full-heal':    ("Cures every status condition.", 300, '🌿'),
+    'full-restore': ("Fully restores HP and cures every status condition.", 2500, '🌟'),
+}
+
+
+def build_phase11_stock():
+    """
+    The Phase 11 shelf: two held items, the Destiny Knot, the mushrooms, the bag.
+
+    Three assertions, because this phase is the one where a shop entry and an
+    implementation can most easily part company:
+
+      - every bag row that is not medical must be for sale, or it can never be bought
+      - every bag row must be reachable by the effect resolver, which is what `kind`
+        names, so a typo in `kind` is caught here rather than at the dropdown
+      - Max Soup itself is NOT on the shelf. It is refined, like the Mega Bracelet and
+        the Z-Ring, and a soup that could simply be bought would make the mushrooms
+        pointless.
+    """
+    known_kinds = {'heal', 'cure', 'revive', 'stages', 'crit', 'side'}
+    unknown = {k: v['kind'] for k, v in BATTLE_BAG_ITEMS.items()
+               if v['kind'] not in known_kinds}
+    assert not unknown, f"bag rows with an unreachable kind: {unknown}"
+
+    assert MAX_SOUP not in PHASE11_DESCRIPTIONS, "Max Soup is refined, not sold"
+
+    stock = {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE11_DESCRIPTIONS[item][1],
+            "desc": PHASE11_DESCRIPTIONS[item][0],
+            "emoji": PHASE11_DESCRIPTIONS[item][3],
+            "category": PHASE11_DESCRIPTIONS[item][2],
+        }
+        for item in sorted(PHASE11_DESCRIPTIONS)
+    }
+
+    for item in sorted(PHASE11_MEDICAL):
+        desc, price, emoji = PHASE11_MEDICAL[item]
+        stock[item] = {"name": item.replace('-', ' ').title(), "price": price,
+                       "desc": desc, "emoji": emoji, "category": "medicine"}
+
+    for item in sorted(BATTLE_BAG_PVE_ONLY):
+        row = BATTLE_BAG_ITEMS[item]
+        stock[item] = {
+            "name": item.replace('-', ' ').title(),
+            "price": BAG_ITEM_PRICE,
+            "desc": f"{row['desc']} Used from the battle bag; PvE only.",
+            "emoji": row['emoji'],
+            "category": "battleitems",
+        }
+
+    unbuyable = set(BATTLE_BAG_ITEMS) - set(stock) - set(EQUIPMENT_CATALOG)
+    assert not unbuyable, f"bag items nobody can buy: {sorted(unbuyable)}"
+    return stock
+
+
+EQUIPMENT_CATALOG.update(build_phase11_stock())
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a

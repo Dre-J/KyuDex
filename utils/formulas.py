@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, SPECIES_STAT_ITEMS, SPECIES_CRIT_ITEMS, SPECIES_TYPE_BOOST_ITEMS, SPECIES_ORB_MULTIPLIER, SPECIES_FORM_ITEMS, BERRY_HIT_REACTIONS, LANSAT_MARKER, MICLE_MARKER, CUSTAP_MARKER, LANSAT_CRIT_STAGES, MICLE_ACCURACY_MULTIPLIER, CUSTAP_TIER, STARF_STATS, ACTION_MARKER_FRESH, Z_HP_FRACTION_KEY, MEGA_STONE_SPECIES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS, MEMORY_TYPES, FLAT_DAMAGE_ITEMS, FLAT_DAMAGE_BOOST, WEIGHT_ITEMS, GROUNDING_ITEMS, IRON_BALL, IRON_BALL_SPEED, pierces_own_immunity, ADRENALINE_ORB, ADRENALINE_ORB_STAGES, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, SPECIES_STAT_ITEMS, SPECIES_CRIT_ITEMS, SPECIES_TYPE_BOOST_ITEMS, SPECIES_ORB_MULTIPLIER, SPECIES_FORM_ITEMS, BERRY_HIT_REACTIONS, LANSAT_MARKER, MICLE_MARKER, CUSTAP_MARKER, LANSAT_CRIT_STAGES, MICLE_ACCURACY_MULTIPLIER, CUSTAP_TIER, STARF_STATS, ACTION_MARKER_FRESH, Z_HP_FRACTION_KEY, MEGA_STONE_SPECIES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS, MEMORY_TYPES, FLAT_DAMAGE_ITEMS, FLAT_DAMAGE_BOOST, WEIGHT_ITEMS, GROUNDING_ITEMS, IRON_BALL, IRON_BALL_SPEED, pierces_own_immunity, ADRENALINE_ORB, ADRENALINE_ORB_STAGES, END_OF_TURN_ITEMS, STICKY_BARB, STICKY_BARB_DIVISOR, UTILITY_UMBRELLA, SHELTERED_SKIES, DESTINY_KNOT, BATTLE_BAG_ITEMS, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -1631,9 +1631,32 @@ def personal_weather(attacker, weather):
     """
     if weather in UNOVERRIDABLE_SKIES:
         return weather
+    # ITEM PHASE 11. The umbrella is read BEFORE the ability, so a Mega Sol carrying one
+    # still gets its own sun: the umbrella keeps the SKY off its holder, and a personal
+    # sun is not the sky. Everything downstream then follows for free, which is the whole
+    # reason this function exists.
+    weather = sheltered_weather(attacker, weather)
     if get_active_ability(attacker) in PERSONAL_SUN_ABILITIES:
         return PERSONAL_SUN_WEATHER
     return weather
+
+
+def sheltered_weather(pokemon, weather, magic_room=False):
+    """
+    Sun and rain, as a specimen under a Utility Umbrella reads them: not there at all.
+
+    Deliberately built as a READING rather than as a pile of special cases, because
+    personal_weather had already proved the shape works - hand one specimen a different
+    weather string and the elemental multipliers, Weather Ball, the solar charge, Thunder's
+    accuracy and the weather-gated abilities all answer correctly without being told.
+
+    Only the two ORDINARY skies are sheltered. A primordial sky is left alone for exactly
+    the reason personal_weather leaves it alone, and the hail and sandstorm chip damage is
+    not the umbrella's business either - it is an umbrella, not a tent.
+    """
+    if get_active_item(pokemon, magic_room) != UTILITY_UMBRELLA:
+        return weather
+    return 'none' if weather in SHELTERED_SKIES else weather
 
 
 def battle_bond_form_for(pokemon):
@@ -4227,6 +4250,135 @@ def resolve_stat_stages(pending, prefix="", foe_of=None):
 
     return log
 
+
+# ==========================================
+# 🎒 BLOCK 11: THE END-OF-TURN ITEM PAYOUT, AND THE BAG
+# ==========================================
+
+def apply_item_sustenance(combatant, owner_str="Your", magic_room=False):
+    """
+    What a held item does to its holder at the end of a turn. One function, both engines.
+
+    This block existed TWICE - once in the PvE turn-end and once in the PvP one,
+    byte-identical apart from a comment and some trailing whitespace. Two copies of a rule
+    is not a tidiness complaint here: the grounding check a few sections over was
+    duplicated in exactly the same way, the copies drifted, and an Air Balloon quietly
+    stopped lifting its holder over Spikes until the two were merged. Adding the Sticky
+    Barb would have made a third copy of each.
+
+    A fainted holder is skipped by the CALLER, not here, because the caller is the one
+    that knows whether the specimen has already been swapped out.
+    """
+    row = END_OF_TURN_ITEMS.get(get_active_item(combatant, magic_room))
+    if not row:
+        return ""
+
+    name = combatant['name'].capitalize()
+    max_hp = combatant.get('max_hp', 100)
+
+    # A conditional row heals the elements it names and hurts everybody else. Black
+    # Sludge's rule, and the only reason `heal` and `hurt` can both be on one row.
+    heals = 'heal' in row
+    if row.get('heal_types') is not None:
+        heals = any(t in (combatant.get('types') or []) for t in row['heal_types'])
+
+    if heals:
+        # Only when HP is actually missing. A Leftovers announcing itself at full health
+        # every turn was the bug the two copies were both patched for.
+        if combatant['current_hp'] >= max_hp:
+            return ""
+        heal_qty = max(1, math.floor(max_hp / row['heal']))
+        combatant['current_hp'] = min(max_hp, combatant['current_hp'] + heal_qty)
+        return f"{row['emoji']} **{owner_str} {name}** {row['heal_msg']} (+{heal_qty})\n"
+
+    hurt_qty = max(1, math.floor(max_hp / row['hurt']))
+    combatant['current_hp'] = max(0, combatant['current_hp'] - hurt_qty)
+    return f"{row['emoji']} **{owner_str} {name}** {row['hurt_msg']} (-{hurt_qty})\n"
+
+
+def bag_item_is_useless(item, specimen, side_conditions=None):
+    """
+    Why this bag item would do nothing right now, as a sentence, or None if it would.
+
+    Asked BEFORE the item is spent and before the turn is passed, because using the bag
+    costs a turn: a wasted turn is worse than a wasted item, and the old callback checked
+    only four of the seven cases it carried.
+    """
+    row = BATTLE_BAG_ITEMS.get(item)
+    if not row:
+        return "That is not something you can deploy in the field."
+
+    fainted = specimen.get('current_hp', 0) <= 0
+    if row['kind'] == 'revive':
+        return None if fainted else "You can only use a Revive on a fainted specimen!"
+    if fainted:
+        return "You cannot use that item on a fainted specimen! Use a Revive."
+
+    needs = row.get('needs')
+    hurt = specimen['current_hp'] < specimen.get('max_hp', 100)
+    ailing = bool(specimen.get('status_condition')) or 'confusion' in (
+        specimen.get('volatile_statuses') or {})
+
+    if needs == 'hurt' and not hurt:
+        return "That specimen is already at maximum health!"
+    if needs == 'status' and not ailing:
+        return "That specimen is not suffering from any status conditions!"
+    if needs == 'hurt_or_status' and not (hurt or ailing):
+        return "That specimen is already in perfect condition!"
+    if needs == 'not_focused' and (specimen.get('volatile_statuses') or {}).get(
+            'focus_energy'):
+        return "That specimen is already fired up!"
+    if needs == 'no_mist' and (side_conditions or {}).get('mist', 0) > 0:
+        return "A white mist is already protecting your team!"
+    return None
+
+
+def apply_bag_item(item, specimen, side_conditions=None, prefix=""):
+    """
+    Spend a bag item on a specimen and report what happened.
+
+    Every `kind` here is answered by machinery that already existed. `stages` in
+    particular goes through resolve_stat_stages rather than writing a stage by hand, so
+    an X Attack meets Clear Body, Mirror Armor, Defiant and Opportunist on exactly the
+    terms Swords Dance does - which is the whole reason the resolver is shared.
+    """
+    row = BATTLE_BAG_ITEMS[item]
+    log = row['log'].format(name=specimen['name'].capitalize()) + "\n"
+    kind = row['kind']
+
+    if kind in ('heal', 'revive', 'cure'):
+        if kind == 'revive':
+            specimen['current_hp'] = max(1, math.floor(specimen.get('max_hp', 100) * 0.5))
+        elif kind == 'heal':
+            max_hp = specimen.get('max_hp', 100)
+            amount = row['amount']
+            specimen['current_hp'] = (max_hp if amount is None
+                                      else min(max_hp, specimen['current_hp'] + amount))
+        if kind == 'cure' or row.get('cure'):
+            specimen['status_condition'] = None
+            (specimen.get('volatile_statuses') or {}).pop('confusion', None)
+        return log
+
+    if kind == 'stages':
+        # No `source`, so the change is the specimen's own doing and nothing screens it -
+        # correct for an item the trainer applied rather than an enemy's Growl.
+        pending = [(specimen, stat, change, None)
+                   for stat, change in row['stats'].items()]
+        return log + resolve_stat_stages(pending, prefix)
+
+    if kind == 'crit':
+        specimen.setdefault('volatile_statuses', {})['focus_energy'] = True
+        return log
+
+    if kind == 'side':
+        if side_conditions is None:
+            return log
+        side_conditions[row['condition']] = row['turns']
+        return log
+
+    return log
+
+
 # ==========================================
 # 🚨 OFFENSIVE / DEFENSIVE STAT OVERRIDES
 # ==========================================
@@ -5148,6 +5300,12 @@ def battle_speed(pokemon, has_tailwind=False, weather='none', terrain='none', ma
 
     raw = (pokemon.get('stats') or {}).get('speed', 50)
     speed = apply_stat_stage(raw, (pokemon.get('stat_stages') or {}).get('speed', 0))
+
+    # ITEM PHASE 11: the sky as THIS specimen reads it, so a Utility Umbrella holder gets
+    # no Swift Swim in rain and no Chlorophyll in sun. Applied here rather than inside
+    # stat_multiplier_for, because that function is also asked about the specimen
+    # OPPOSITE, and an umbrella shelters its own holder rather than the whole field.
+    weather = sheltered_weather(pokemon, weather, magic_room)
 
     speed *= stat_multiplier_for(pokemon, 'speed', weather, terrain,
                                  magic_room=magic_room)
@@ -8003,6 +8161,25 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
                     skin_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 8))
                     attacker['current_hp'] = max(0, attacker['current_hp'] - skin_dmg)
                     msg += f" 💥 {attacker['name'].capitalize()} was hurt by {defender['name'].capitalize()}'s {def_ability.replace('-', ' ').title()}!"
+
+                # ITEM PHASE 11: a Sticky Barb sticks to whoever touched it, but only if
+                # that attacker's hands are EMPTY - it moves into a gap, it never swaps
+                # with something. Beside the Rocky Helmet because it answers the same
+                # event; the barb's own end-of-turn prick is the shared item payout's job.
+                #
+                # Read through get_stored_item rather than get_active_item, and asked of
+                # BOTH sides: this is a physical move of an item, so an embargoed barb is
+                # still a barb, and Sticky Hold both refuses to let go of one and refuses
+                # to be handed one.
+                if (get_stored_item(defender) == STICKY_BARB
+                        and makes_contact(move, attacker)
+                        and get_stored_item(attacker) == 'none'
+                        and not item_is_stuck(defender) and not item_is_stuck(attacker)):
+                    defender['held_item'] = 'none'
+                    attacker['held_item'] = STICKY_BARB
+                    defender_item = 'none'
+                    msg += (f" 🌵 The Sticky Barb latched onto "
+                            f"{attacker['name'].capitalize()}!")
                     
             # --- G. LETHALITY CHECK ---
             if simulated_hp <= 0:
@@ -8099,6 +8276,22 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         else:
             defender.setdefault('volatile_statuses', {})['infatuation'] = True
             msg += f" 💘 {defender['name'].capitalize()} fell head over heels in love!"
+
+            # ITEM PHASE 11: the Destiny Knot ties the feeling back the other way. It
+            # hangs off the branch where infatuation actually LANDED, so a knot on a
+            # specimen that Oblivious or the gender check just spared stays quiet - the
+            # knot answers being charmed, not being aimed at.
+            #
+            # The return trip is screened exactly as the outward one was, which is what
+            # stops two Destiny Knots, or a knot facing an Aroma Veil, doing anything odd.
+            if (get_active_item(defender) == DESTINY_KNOT
+                    and not is_infatuated(attacker)
+                    and not infatuation_blocked_by(attacker)
+                    and can_be_infatuated(defender, attacker)):
+                attacker.setdefault('volatile_statuses', {})['infatuation'] = True
+                msg += (f" 💞 {defender['name'].capitalize()}'s Destiny Knot charmed "
+                        f"{attacker['name'].capitalize()} right back!")
+
             # Carried as a volatile, so it does not occupy the major-status slot.
             inflicted_status = None
 
