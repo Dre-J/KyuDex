@@ -17,6 +17,7 @@ from utils.constants import (TM_CATALOG, type_badges, type_icon,
                              signature_z_for, z_move_power,
                              mega_stone_binds_to, is_mega_stone,
                              MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY,
+                             ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
                              z_status_effect_for, expand_z_stats)
 from utils.directives import credit_cull, credit_evolution
 from utils import checks
@@ -2624,6 +2625,17 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             combat_log += f"💢 **{owner_str.strip()} {name}**'s Intimidate glares at {opp_name}!\n"
             combat_log += resolve_stat_stages(
                 [(opponent, 'attack', -1, entering_combatant)])
+
+        # ITEM PHASE 10: the Adrenaline Orb. Outside the branch on purpose - it answers
+        # being GLARED AT, not being cowed, so it fires whether the Attack drop landed,
+        # was refused by Clear Body or was turned around by Guard Dog. Spent either way.
+        if get_active_item(opponent) == ADRENALINE_ORB:
+            combat_log += (f"🧪 **{opp_name}**'s Adrenaline Orb "
+                           f"answered the glare!\n")
+            combat_log += resolve_stat_stages(
+                [(opponent, 'speed', ADRENALINE_ORB_STAGES, None)],
+                foe_of=foe_finder(entering_combatant, opponent))
+            spend_item(opponent, ADRENALINE_ORB)
 
     # ==========================================
     # 1b. THE ARRIVAL'S OWN BOOST (Intrepid Sword, Dauntless Shield)

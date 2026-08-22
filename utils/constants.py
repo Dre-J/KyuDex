@@ -1416,6 +1416,11 @@ SPECIES_TYPE_BOOST_ITEMS = {
     'adamant-orb':  {'species': 'dialga',   'types': {'dragon', 'steel'}},
     'lustrous-orb': {'species': 'palkia',   'types': {'dragon', 'water'}},
     'griseous-orb': {'species': 'giratina', 'types': {'dragon', 'ghost'}},
+    # ITEM PHASE 10: Ogerpon's three masks. `types: None` means EVERY element, which the
+    # Orbs never needed - a mask lifts all of Ogerpon's moves rather than two of them.
+    'cornerstone-mask': {'species': 'ogerpon', 'types': None},
+    'hearthflame-mask': {'species': 'ogerpon', 'types': None},
+    'wellspring-mask':  {'species': 'ogerpon', 'types': None},
 }
 SPECIES_ORB_MULTIPLIER = 1.2
 
@@ -1433,6 +1438,37 @@ SPECIES_FORM_ITEMS = {
                       'flavour': "drank deep and danced the Pa'u style"},
     'purple-nectar': {'species': 'oricorio', 'form': 'oricorio-sensu',
                       'flavour': 'drank deep and danced the Sensu style'},
+    # ITEM PHASE 10: the masks are the Griseous Orb's shape exactly - each one reshapes
+    # its holder AND lifts its damage - so they are rows in this table and the one above
+    # rather than a mechanism of their own.
+    'cornerstone-mask': {'species': 'ogerpon', 'form': 'ogerpon-cornerstone-mask',
+                         'flavour': 'donned the Cornerstone Mask'},
+    'hearthflame-mask': {'species': 'ogerpon', 'form': 'ogerpon-hearthflame-mask',
+                         'flavour': 'donned the Hearthflame Mask'},
+    'wellspring-mask':  {'species': 'ogerpon', 'form': 'ogerpon-wellspring-mask',
+                         'flavour': 'donned the Wellspring Mask'},
+}
+
+# ==========================================
+# 🎭 ITEM PHASE 10: THE UNPHASED SHELF, PART TWO
+# ==========================================
+# The Adrenaline Orb answers Intimidate the way the Guard Dog ability does, one step
+# further along: Guard Dog turns the glare into an Attack stage, this turns it into a
+# Speed one and is spent doing it. It rides the shared Intimidate hook rather than a new
+# one, which is what keeps it agreeing with Clear Body and Mirror Armor about whether the
+# glare landed at all.
+ADRENALINE_ORB = 'adrenaline-orb'
+ADRENALINE_ORB_STAGES = 1
+
+PHASE10_DESCRIPTIONS = {
+    'cornerstone-mask': ("Ogerpon takes its Cornerstone form, and all its moves do 20% "
+                         "more damage.", 450, '🪨'),
+    'hearthflame-mask': ("Ogerpon takes its Hearthflame form, and all its moves do 20% "
+                         "more damage.", 450, '🔥'),
+    'wellspring-mask':  ("Ogerpon takes its Wellspring form, and all its moves do 20% "
+                         "more damage.", 450, '💧'),
+    ADRENALINE_ORB:     ("Raises the holder's Speed by one stage when it is Intimidated. "
+                         "Single use.", 400, '🧪'),
 }
 
 PHASE6_PRICE = 450
@@ -1473,8 +1509,13 @@ def build_phase6_stock():
     Same assertion as Phases 2 to 5. The Griseous Orb is deliberately in two of the
     source tables and must still appear exactly once on the shelf.
     """
-    implemented = (set(SPECIES_STAT_ITEMS) | set(SPECIES_CRIT_ITEMS)
-                   | set(SPECIES_TYPE_BOOST_ITEMS) | set(SPECIES_FORM_ITEMS))
+    # Phase 10's masks join the same two species tables - they are the Griseous Orb's
+    # shape - so they are subtracted here rather than being given a second home. This
+    # assertion is about Phase 6's OWN shelf, and folding them in would have made it
+    # quietly stop meaning that.
+    implemented = ((set(SPECIES_STAT_ITEMS) | set(SPECIES_CRIT_ITEMS)
+                    | set(SPECIES_TYPE_BOOST_ITEMS) | set(SPECIES_FORM_ITEMS))
+                   - set(PHASE10_DESCRIPTIONS))
     missing = implemented - set(PHASE6_DESCRIPTIONS)
     assert not missing, f"Phase 6 items with no shop entry: {sorted(missing)}"
     extra = set(PHASE6_DESCRIPTIONS) - implemented
@@ -2587,6 +2628,39 @@ def build_phase9_stock():
 
 
 EQUIPMENT_CATALOG.update(build_phase9_stock())
+
+
+def build_phase10_stock():
+    """
+    The Phase 10 shelf: Ogerpon's three masks and the Adrenaline Orb.
+
+    The masks are checked against BOTH species tables, because a mask that reshaped its
+    holder without lifting its damage - or the other way round - would be a half-item,
+    and half-items are exactly what the audit's "it cannot see a HALF-implemented item"
+    caveat says a name-scan will never catch.
+    """
+    masks = {m for m in PHASE10_DESCRIPTIONS if m.endswith('-mask')}
+    assert masks <= set(SPECIES_FORM_ITEMS), (
+        f"masks with no form: {sorted(masks - set(SPECIES_FORM_ITEMS))}")
+    assert masks <= set(SPECIES_TYPE_BOOST_ITEMS), (
+        f"masks with no damage boost: {sorted(masks - set(SPECIES_TYPE_BOOST_ITEMS))}")
+    # The orb is SPENT when it fires, which ONE_USE_ITEMS records - but that set lives in
+    # formulas.py, which imports this file rather than the reverse. Pinned in the suite
+    # instead, where both halves can be seen at once.
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE10_DESCRIPTIONS[item][1],
+            "desc": PHASE10_DESCRIPTIONS[item][0],
+            "emoji": PHASE10_DESCRIPTIONS[item][2],
+            "category": "battleitems",
+        }
+        for item in sorted(PHASE10_DESCRIPTIONS)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase10_stock())
 
 
 # ==========================================
