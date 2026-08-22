@@ -1960,44 +1960,93 @@ def z_move_power(base_power):
 # all: it boosts all five of Eevee's stats by two and deals nothing. Now that the status
 # Z-Moves below have a mechanism, it is a row like the rest - it simply carries `boost`
 # where the others carry `power`.
+# The wildcard a stat list uses to mean 'every stat'. Block 8's protection sets are
+# its other reader; it lives here because this is the first place the file needs it.
+ALL_STATS = '*'
+
+# `element` is the crystal's own type, which is what the shelf reads for its icon - the
+# eighteen elemental crystals wear their type's emoji and these wore a shared star, so a
+# bag of them was seventeen identical rows. It is NOT decoration: a test asserts every
+# element against the base move's type in the database, which is the one thing that
+# would catch a row copied from its neighbour and half-edited.
+#
+# Mimikium Z is the row that proves the check is worth having. It is a FAIRY crystal -
+# Let's Snuggle Forever is Fairy, off Play Rough - while Mimikyu itself is Ghost, so the
+# obvious guess from the species is the wrong one.
 SIGNATURE_Z_CRYSTALS = {
     'aloraichium-z': {'species': 'raichu-alola', 'move': 'thunderbolt',
+                      'element': 'electric',
                       'name': 'Stoked Sparksurfer', 'power': 175},
     'decidium-z':    {'species': 'decidueye', 'move': 'spirit-shackle',
+                      'element': 'ghost',
                       'name': 'Sinister Arrow Raid', 'power': 180},
     # The odd one out: Last Resort is a physical move, and its Z-Move deals no damage.
     # `boost` is what turns the move into a status one at resolution time.
     'eevium-z':      {'species': 'eevee', 'move': 'last-resort',
+                      'element': 'normal',
                       'name': 'Extreme Evoboost',
                       'boost': [('attack', 2), ('defense', 2), ('special-attack', 2),
                                 ('special-defense', 2), ('speed', 2)]},
     'incinium-z':    {'species': 'incineroar', 'move': 'darkest-lariat',
+                      'element': 'dark',
                       'name': 'Malicious Moonsault', 'power': 180},
+    # Clangorous Soulblaze is the only signature Z-Move that hits AND boosts, which is
+    # why `self_boost` is a separate key from `boost`: `boost` means the move stops
+    # dealing damage, and this one very much does not.
+    'kommonium-z':   {'species': ('kommo-o', 'kommo-o-totem'), 'move': 'clanging-scales',
+                      'element': 'dragon',
+                      'name': 'Clangorous Soulblaze', 'power': 185,
+                      'self_boost': [(ALL_STATS, 1)]},
+    # Lunala and Dawn Wings Necrozma share Moongeist Beam, so they share the crystal.
+    'lunalium-z':    {'species': ('lunala', 'necrozma-dawn'), 'move': 'moongeist-beam',
+                      'element': 'ghost',
+                      'name': 'Menacing Moonraze Maelstrom', 'power': 200},
+    'lycanium-z':    {'species': 'lycanroc', 'move': 'stone-edge',
+                      'element': 'rock',
+                      'name': 'Splintered Stormshards', 'power': 190},
     'marshadium-z':  {'species': 'marshadow', 'move': 'spectral-thief',
+                      'element': 'ghost',
                       'name': 'Soul-Stealing 7-Star Strike', 'power': 195},
     'mewnium-z':     {'species': 'mew', 'move': 'psychic',
+                      'element': 'psychic',
                       'name': 'Genesis Supernova', 'power': 185},
+    'mimikium-z':    {'species': 'mimikyu', 'move': 'play-rough',
+                      'element': 'fairy',
+                      'name': "Let's Snuggle Forever", 'power': 190},
     'pikanium-z':    {'species': 'pikachu', 'move': 'volt-tackle',
+                      'element': 'electric',
                       'name': 'Catastropika', 'power': 210},
     'pikashunium-z': {'species': 'pikachu', 'move': 'thunderbolt',
+                      'element': 'electric',
                       'name': '10,000,000 Volt Thunderbolt', 'power': 195},
     'primarium-z':   {'species': 'primarina', 'move': 'sparkling-aria',
+                      'element': 'water',
                       'name': 'Oceanic Operetta', 'power': 195},
     'snorlium-z':    {'species': 'snorlax', 'move': 'giga-impact',
+                      'element': 'normal',
                       'name': 'Pulverizing Pancake', 'power': 210},
+    # ...and Solgaleo with Dusk Mane Necrozma, for the same reason as Lunala above.
+    'solganium-z':   {'species': ('solgaleo', 'necrozma-dusk'), 'move': 'sunsteel-strike',
+                      'element': 'steel',
+                      'name': 'Searing Sunraze Smash', 'power': 200},
     # Guardian of Alola takes three quarters of what the target has left rather than
     # rolling damage, so it carries a fraction instead of a power. Nature's Madness
     # already resolves in the engine's fixed-damage branch at one half; this is the
     # same branch with a different number.
     'tapunium-z':    {'species': ('tapu-koko', 'tapu-lele', 'tapu-bulu', 'tapu-fini'),
                       'move': 'natures-madness',
+                      'element': 'fairy',
                       'name': 'Guardian of Alola', 'hp_fraction': 0.75},
+    # The fused Formes are listed beside Ultra Necrozma because they are what a trainer
+    # actually holds the crystal on - in the games it is the crystal that takes them the
+    # rest of the way, and Photon Geyser is a move all three know.
+    'ultranecrozium-z': {'species': ('necrozma-ultra', 'necrozma-dusk', 'necrozma-dawn'),
+                         'move': 'photon-geyser',
+                         'element': 'psychic',
+                         'name': 'Light That Burns the Sky', 'power': 200},
 }
 
 
-# The wildcard a stat list uses to mean 'every stat'. Block 8's protection sets are
-# its other reader; it lives here because this is the first place the file needs it.
-ALL_STATS = '*'
 
 # ==========================================
 # 🌟 THE STATUS Z-MOVES
@@ -2005,39 +2054,280 @@ ALL_STATS = '*'
 # A status move used through a Z-Crystal still does its own job - Swords Dance still
 # raises Attack, Substitute still costs a quarter - and gains a Z-Power effect ON TOP.
 # The engine used to give every one of them the same blanket full heal, which is right
-# for Belly Drum and wrong for the other eighty-odd status moves in the game.
+# for Belly Drum and exactly wrong for the two hundred and thirty-one others.
 #
-# The effect is per-move, and these are the ones pinned to their actual Gen VII values:
+# GENERATED from z_move_table.md rather than transcribed, and every key was checked to
+# exist in base_moves AND to be a status move before it was written here. The table's
+# twenty-four damaging rows are deliberately absent: a damaging move takes the elemental
+# Z-Move path and never asks this table anything.
 #
-#   splash      the joke move that finally does something - Attack up three stages
-#   celebrate   likewise, spread across every stat
-#   conversion  the reason Porygon-Z ever saw a battle
-#   geomancy    a Speed stage on top of the charge, so the turn is not pure loss
-#   belly-drum  restores HP first, so the half the Drum costs is paid back
+# The effects, and what each one means:
 #
-# ORDER MATTERS on that last one and it is the reason `heal` is applied BEFORE the move
-# rather than after: a Belly Drum that healed afterwards would undo its own cost AND
-# leave the user at full HP, which is a different and much stronger item.
+#   stats             raise the USER's stages, ALL_STATS meaning all five at once
+#   reset             clear the user's LOWERED stages, leaving its boosts alone
+#   heal              restore the user to full
+#   crit              two crit stages, which is Focus Energy's own volatile
+#   replacement_heal  bank a Healing Wish for whoever takes the vacated slot
+#   redirect          draw in the turn's attacks - inert in singles, see below
+#   NO_Z_EFFECT       the games give this one no bonus at all
 #
-# Everything not named here takes Z_STATUS_DEFAULT. That is a deliberate stand-in, not a
-# guess dressed up as data: "reset the user's lowered stages" is a real Gen VII Z-Power
-# effect, it is useful without being strong, and it cannot be absurd on any move the way
-# an invented +3 to a random stat could be. Filling in eighty rows from memory is how a
-# table becomes confidently wrong, so the rest wait for a reference.
+# ORDER MATTERS and is the reason the effect is paid out BEFORE the move rather than
+# after: Z-Belly Drum heals so that the half the Drum then costs is paid back, and
+# healing afterwards would refund the cost AND leave the user at full HP - a different
+# and much stronger item than the one the shop sells.
+NO_Z_EFFECT = {}
+
 Z_STATUS_EFFECTS = {
-    'splash':     {'stats': [('attack', 3)]},
-    'celebrate':  {'stats': [(ALL_STATS, 1)]},
-    'conversion': {'stats': [(ALL_STATS, 1)]},
-    'geomancy':   {'stats': [('speed', 1)]},
-    'belly-drum': {'heal': True},
+    'acid-armor':      {'reset': True},
+    'acupressure':     {'crit': 2},
+    'after-you':       {'stats': [('speed', 1)]},
+    'agility':         {'reset': True},
+    'ally-switch':     {'stats': [('speed', 2)]},
+    'amnesia':         {'reset': True},
+    'aqua-ring':       {'stats': [('defense', 1)]},
+    'aromatherapy':    {'heal': True},
+    'aromatic-mist':   {'stats': [('special-defense', 2)]},
+    'assist':          NO_Z_EFFECT,
+    'attract':         {'reset': True},
+    'aurora-veil':     {'stats': [('speed', 1)]},
+    'autotomize':      {'reset': True},
+    'baby-doll-eyes':  {'stats': [('defense', 1)]},
+    'baneful-bunker':  {'stats': [('defense', 1)]},
+    'barrier':         {'reset': True},
+    'baton-pass':      {'reset': True},
+    'belly-drum':      {'heal': True},
+    'bestow':          {'stats': [('speed', 2)]},
+    'block':           {'stats': [('defense', 1)]},
+    'bulk-up':         {'stats': [('attack', 1)]},
+    'calm-mind':       {'reset': True},
+    'camouflage':      {'stats': [('evasion', 1)]},
+    'captivate':       {'stats': [('special-defense', 2)]},
+    'celebrate':       {'stats': [(ALL_STATS, 1)]},
+    'charge':          {'stats': [('special-defense', 1)]},
+    'charm':           {'stats': [('defense', 1)]},
+    'coil':            {'reset': True},
+    'confide':         {'stats': [('special-defense', 1)]},
+    'confuse-ray':     {'stats': [('special-attack', 1)]},
+    'conversion':      {'stats': [(ALL_STATS, 1)]},
+    'conversion-2':    {'heal': True},
+    'copycat':         {'stats': [('accuracy', 1)]},
+    'cosmic-power':    {'stats': [('special-defense', 1)]},
+    'cotton-guard':    {'reset': True},
+    'crafty-shield':   {'stats': [('special-defense', 1)]},
+    'curse':           {'stats': [('attack', 1)]},
+    'dark-void':       {'reset': True},
+    'defend-order':    {'stats': [('defense', 1)]},
+    'defense-curl':    {'stats': [('accuracy', 1)]},
+    'defog':           {'stats': [('accuracy', 1)]},
+    'destiny-bond':    {'redirect': True},
+    'detect':          {'stats': [('evasion', 1)]},
+    'disable':         {'reset': True},
+    'double-team':     {'reset': True},
+    'dragon-dance':    {'reset': True},
+    'eerie-impulse':   {'stats': [('special-defense', 1)]},
+    'electric-terrain':{'stats': [('speed', 1)]},
+    'electrify':       {'stats': [('special-attack', 1)]},
+    'embargo':         {'stats': [('special-attack', 1)]},
+    'encore':          {'stats': [('speed', 1)]},
+    'endure':          {'reset': True},
+    'entrainment':     {'stats': [('special-defense', 1)]},
+    'fairy-lock':      {'stats': [('defense', 1)]},
+    'fake-tears':      {'stats': [('special-attack', 1)]},
+    'feather-dance':   {'stats': [('defense', 1)]},
+    'flash':           {'stats': [('evasion', 1)]},
+    'flatter':         {'stats': [('special-defense', 1)]},
+    'floral-healing':  {'reset': True},
+    'flower-shield':   {'stats': [('defense', 1)]},
+    'focus-energy':    {'stats': [('accuracy', 1)]},
+    'follow-me':       {'reset': True},
+    'foresight':       NO_Z_EFFECT,
+    'forests-curse':   {'stats': [(ALL_STATS, 1)]},
+    'gastro-acid':     {'stats': [('speed', 1)]},
+    'gear-up':         {'stats': [('special-attack', 1)]},
+    'geomancy':        {'stats': [(ALL_STATS, 1)]},
+    'glare':           {'stats': [('special-defense', 1)]},
+    'grassy-terrain':  {'stats': [('defense', 1)]},
+    'gravity':         {'stats': [('special-attack', 1)]},
+    'growl':           {'stats': [('defense', 1)]},
+    'growth':          {'stats': [('special-attack', 1)]},
+    'grudge':          NO_Z_EFFECT,
+    'guard-split':     {'stats': [('speed', 1)]},
+    'guard-swap':      {'stats': [('speed', 1)]},
+    'hail':            {'stats': [('speed', 1)]},
+    'happy-hour':      {'stats': [(ALL_STATS, 1)]},
+    'harden':          {'stats': [('defense', 1)]},
+    'haze':            {'heal': True},
+    'heal-bell':       {'heal': True},
+    'heal-block':      {'stats': [('special-attack', 2)]},
+    'heal-order':      {'reset': True},
+    'heal-pulse':      {'reset': True},
+    'healing-wish':    NO_Z_EFFECT,
+    'heart-swap':      {'crit': 2},
+    'helping-hand':    NO_Z_EFFECT,
+    'hold-hands':      {'stats': [(ALL_STATS, 1)]},
+    'hone-claws':      {'stats': [('attack', 1)]},
+    'howl':            {'stats': [('attack', 1)]},
+    'hypnosis':        {'stats': [('speed', 1)]},
+    'imprison':        {'stats': [('special-defense', 2)]},
+    'ingrain':         {'stats': [('special-defense', 1)]},
+    'instruct':        {'stats': [('special-attack', 1)]},
+    'ion-deluge':      {'stats': [('special-attack', 1)]},
+    'iron-defense':    {'reset': True},
+    'kinesis':         {'stats': [('evasion', 1)]},
+    'kings-shield':    {'reset': True},
+    'laser-focus':     {'stats': [('attack', 1)]},
+    'leech-seed':      {'reset': True},
+    'leer':            {'stats': [('attack', 1)]},
+    'light-screen':    {'stats': [('special-defense', 1)]},
+    'lock-on':         {'stats': [('speed', 1)]},
+    'lovely-kiss':     {'stats': [('speed', 1)]},
+    'lucky-chant':     {'stats': [('evasion', 1)]},
+    'lunar-dance':     NO_Z_EFFECT,
+    'magic-coat':      {'stats': [('special-defense', 2)]},
+    'magic-room':      {'stats': [('special-defense', 1)]},
+    'magnet-rise':     {'stats': [('evasion', 1)]},
+    'magnetic-flux':   {'stats': [('special-defense', 1)]},
+    'mat-block':       {'stats': [('defense', 1)]},
+    'me-first':        {'stats': [('speed', 2)]},
+    'mean-look':       {'stats': [('special-defense', 1)]},
+    'memento':         {'replacement_heal': True},
+    'metal-sound':     {'stats': [('special-attack', 1)]},
+    'metronome':       NO_Z_EFFECT,
+    'milk-drink':      {'reset': True},
+    'mimic':           {'stats': [('accuracy', 1)]},
+    'mind-reader':     {'stats': [('special-attack', 1)]},
+    'minimize':        {'reset': True},
+    'miracle-eye':     {'stats': [('special-attack', 1)]},
+    'mirror-move':     {'stats': [('attack', 2)]},
+    'misty-terrain':   {'stats': [('special-defense', 1)]},
+    'moonlight':       {'reset': True},
+    'morning-sun':     {'reset': True},
+    'nasty-plot':      {'reset': True},
+    'nature-power':    NO_Z_EFFECT,
+    'noble-roar':      {'stats': [('defense', 1)]},
+    'odor-sleuth':     {'stats': [('attack', 1)]},
+    'pain-split':      {'stats': [('defense', 1)]},
+    'parting-shot':    {'replacement_heal': True},
+    'perish-song':     {'reset': True},
+    'play-nice':       {'stats': [('defense', 1)]},
+    'poison-gas':      {'stats': [('defense', 1)]},
+    'poison-powder':   {'stats': [('defense', 1)]},
+    'powder':          {'stats': [('special-defense', 2)]},
+    'power-split':     {'stats': [('speed', 1)]},
+    'power-swap':      {'stats': [('speed', 1)]},
+    'power-trick':     {'stats': [('attack', 1)]},
+    'protect':         {'reset': True},
+    'psych-up':        {'heal': True},
+    'psychic-terrain': {'stats': [('special-attack', 1)]},
+    'psycho-shift':    {'stats': [('special-attack', 2)]},
+    'purify':          {'stats': [(ALL_STATS, 1)]},
+    'quash':           {'stats': [('speed', 1)]},
+    'quick-guard':     {'stats': [('defense', 1)]},
+    'quiver-dance':    {'reset': True},
+    'rage-powder':     {'reset': True},
+    'rain-dance':      {'stats': [('speed', 1)]},
+    'recover':         {'reset': True},
+    'recycle':         {'stats': [('speed', 2)]},
+    'reflect':         {'stats': [('defense', 1)]},
+    'reflect-type':    {'stats': [('special-attack', 1)]},
+    'refresh':         {'heal': True},
+    'rest':            {'reset': True},
+    'roar':            {'stats': [('defense', 1)]},
+    'rock-polish':     {'reset': True},
+    'role-play':       {'stats': [('speed', 1)]},
+    'roost':           {'reset': True},
+    'rototiller':      {'stats': [('attack', 1)]},
+    'safeguard':       {'stats': [('speed', 1)]},
+    'sand-attack':     {'stats': [('evasion', 1)]},
+    'sandstorm':       {'stats': [('speed', 1)]},
+    'scary-face':      {'stats': [('speed', 1)]},
+    'screech':         {'stats': [('attack', 1)]},
+    'sharpen':         {'stats': [('attack', 1)]},
+    'shell-smash':     {'reset': True},
+    'shift-gear':      {'reset': True},
+    'shore-up':        {'reset': True},
+    'simple-beam':     {'stats': [('special-attack', 1)]},
+    'sing':            {'stats': [('speed', 1)]},
+    'sketch':          {'stats': [(ALL_STATS, 1)]},
+    'skill-swap':      {'stats': [('speed', 1)]},
+    'slack-off':       {'reset': True},
+    'sleep-powder':    {'stats': [('speed', 1)]},
+    'sleep-talk':      {'crit': 2},
+    'smokescreen':     {'stats': [('evasion', 1)]},
+    'snatch':          {'stats': [('speed', 2)]},
+    'soak':            {'stats': [('special-attack', 1)]},
+    'soft-boiled':     {'reset': True},
+    'speed-swap':      {'stats': [('speed', 1)]},
+    'spider-web':      {'stats': [('defense', 1)]},
+    'spikes':          {'stats': [('defense', 1)]},
+    'spiky-shield':    {'stats': [('defense', 1)]},
+    'spite':           {'heal': True},
+    'splash':          {'stats': [('attack', 3)]},
+    'spore':           {'reset': True},
+    'spotlight':       {'stats': [('special-defense', 1)]},
+    'stealth-rock':    {'stats': [('defense', 1)]},
+    'sticky-web':      {'stats': [('speed', 1)]},
+    'stockpile':       {'heal': True},
+    'strength-sap':    {'stats': [('defense', 1)]},
+    'string-shot':     {'stats': [('speed', 1)]},
+    'stun-spore':      {'stats': [('special-defense', 1)]},
+    'substitute':      {'reset': True},
+    'sunny-day':       {'stats': [('speed', 1)]},
+    'supersonic':      {'stats': [('speed', 1)]},
+    'swagger':         {'reset': True},
+    'swallow':         {'reset': True},
+    'sweet-scent':     {'stats': [('evasion', 1)]},
+    'switcheroo':      {'stats': [('speed', 2)]},
+    'swords-dance':    {'reset': True},
+    'synthesis':       {'reset': True},
+    'tail-glow':       {'reset': True},
+    'tail-whip':       {'stats': [('attack', 1)]},
+    'tailwind':        {'crit': 2},
+    'taunt':           {'stats': [('attack', 1)]},
+    'tearful-look':    {'stats': [('defense', 1)]},
+    'teeter-dance':    {'stats': [('special-attack', 1)]},
+    'telekinesis':     {'stats': [('special-attack', 1)]},
+    'teleport':        {'heal': True},
+    'thunder-wave':    {'stats': [('special-defense', 1)]},
+    'tickle':          {'stats': [('defense', 1)]},
+    'topsy-turvy':     {'stats': [('attack', 1)]},
+    'torment':         {'stats': [('defense', 1)]},
+    'toxic':           {'stats': [('defense', 1)]},
+    'toxic-spikes':    {'stats': [('defense', 1)]},
+    'toxic-thread':    {'stats': [('speed', 1)]},
+    'transform':       {'heal': True},
+    'trick':           {'stats': [('speed', 2)]},
+    'trick-or-treat':  {'stats': [(ALL_STATS, 1)]},
+    'trick-room':      {'stats': [('accuracy', 1)]},
+    'venom-drench':    {'stats': [('defense', 1)]},
+    'water-sport':     {'stats': [('special-defense', 1)]},
+    'whirlwind':       {'stats': [('special-defense', 1)]},
+    'wide-guard':      {'stats': [('defense', 1)]},
+    'will-o-wisp':     {'stats': [('attack', 1)]},
+    'wish':            {'stats': [('special-defense', 1)]},
+    'withdraw':        {'stats': [('defense', 1)]},
+    'wonder-room':     {'stats': [('special-defense', 1)]},
+    'work-up':         {'stats': [('attack', 1)]},
+    'worry-seed':      {'stats': [('speed', 1)]},
+    'yawn':            {'stats': [('speed', 1)]},
 }
 
-# The stand-in described above. Named rather than inlined so that the day a reference
-# turns up, the thing to delete is obvious.
-Z_STATUS_DEFAULT = {'reset': True}
+# Nothing in this table means "no bonus", and that is now the honest default: Z-Moves are
+# a Gen VII mechanic, so a status move introduced after them never had a Z-Power effect
+# to have. This replaces a stand-in that reset the user's stages, which was the right
+# guess to make while the real table was missing and the wrong one to keep once it
+# arrived - Swords Dance really does reset stats, but Toxic really does raise Defense.
+Z_STATUS_DEFAULT = NO_Z_EFFECT
 
-# The five stats ALL_STATS expands to in a Z-Power effect. Deliberately not accuracy or
-# evasion, which is the same ruling the Starf Berry gets and for the same reason.
+# Destiny Bond's Z-effect draws in every attack aimed at the user's side for the turn.
+# KyuDex is a singles game, so there is no ally to draw anything away from and the effect
+# has nothing to do - the same ruling DOUBLES_ONLY_ABILITIES already gets. Named so the
+# gap is a decision rather than a hole.
+Z_REDIRECT_IS_INERT_IN_SINGLES = True
+
+# The five stats ALL_STATS expands to in a Z-Power effect. Accuracy and evasion are named
+# individually by the moves that raise them - Z-Smokescreen, Z-Defense Curl - and are
+# deliberately not swept up by "raises every stat".
 Z_BOOSTABLE_STATS = ('attack', 'defense', 'special-attack', 'special-defense', 'speed')
 
 
@@ -2157,13 +2447,17 @@ def build_phase8_stock():
     for crystal, row in sorted(SIGNATURE_Z_CRYSTALS.items()):
         owners = row['species']
         owners = (owners,) if isinstance(owners, str) else owners
-        who = ' / '.join(o.replace('-', ' ').title() for o in owners)
+        # Hyphens kept rather than spaced out: 'kommo-o' reads as Kommo-O and not as
+        # "Kommo O", and the regional and Forme names keep their shape too.
+        who = ' / '.join(o.title() for o in owners)
         shelf[crystal] = {
             "name": crystal.replace('-z', ' Z').title().replace(' z', ' Z'),
             "price": SIGNATURE_Z_PRICE,
             "desc": f"Lets {who} upgrade "
                     f"{row['move'].replace('-', ' ').title()} into {row['name']}.",
-            "emoji": "🌟",
+            # Its own type's icon, the same as the eighteen elemental crystals. These all
+            # wore one shared star before, which made a bag of seventeen unreadable.
+            "emoji": TYPE_EMOJI.get(row['element'], '💎'),
             "category": "zcrystal",
         }
 

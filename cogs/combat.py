@@ -1902,7 +1902,11 @@ def z_upgrade_for(species_name, held_item, move):
                 'power': signature.get('power'),
                 'hp_fraction': signature.get('hp_fraction'),
                 # Extreme Evoboost is the one signature Z-Move that deals no damage.
-                'boost': signature.get('boost')}
+                'boost': signature.get('boost'),
+                # ...and Clangorous Soulblaze the one that damages AND boosts, which is
+                # why the two are different keys rather than one.
+                'status_effect': ({'stats': signature['self_boost']}
+                                  if signature.get('self_boost') else None)}
 
     element = Z_CRYSTAL_TYPES.get(held_item)
     if not element or (move.get('type') or '').lower() != element:
@@ -1950,7 +1954,7 @@ def apply_z_mutation(move, upgrade):
     return move
 
 
-def apply_z_status_effect(user, upgrade, foe=None, prefix=""):
+def apply_z_status_effect(user, upgrade, foe=None, prefix="", state=None):
     """
     Pay out a Z-Power effect. Returns the log line, or ''.
 
@@ -1988,6 +1992,26 @@ def apply_z_status_effect(user, upgrade, foe=None, prefix=""):
         if lowered:
             log += (f"{prefix}✨ **{user['name'].capitalize()}**'s Z-Power washed away "
                     f"its lowered stats!\n")
+
+    if effect.get('crit'):
+        # Two crit stages is exactly Focus Energy, so it rides Focus Energy's own
+        # volatile rather than growing a second one the crit stage would have to learn.
+        user.setdefault('volatile_statuses', {})['focus_energy'] = True
+        log += (f"{prefix}🔥 **{user['name'].capitalize()}**'s Z-Power sharpened its "
+                f"focus! Its critical hit ratio rose!\n")
+
+    if effect.get('replacement_heal'):
+        # Z-Memento and Z-Parting Shot leave a Healing Wish behind for whoever takes the
+        # slot, which is machinery the entry hook already has - the same bank Healing
+        # Wish and Lunar Dance use. False means "HP only", the Healing Wish half.
+        side = side_of(state, user) if state is not None else None
+        if side is not None:
+            state[f"{side}_sacrifice"] = False
+            log += (f"{prefix}💫 **{user['name'].capitalize()}**'s Z-Power left a "
+                    f"blessing for whoever comes next!\n")
+
+    # `redirect` - Destiny Bond's Z-effect - is deliberately inert. See
+    # Z_REDIRECT_IS_INERT_IN_SINGLES: there is no ally to draw attacks away from.
 
     stats = expand_z_stats(effect.get('stats'))
     if stats:
@@ -5200,7 +5224,7 @@ class BattleDashboard(discord.ui.View):
                             apply_z_mutation(p_move_stats, _z)
                             # Paid out BEFORE the move runs - see apply_z_status_effect.
                             combat_log += apply_z_status_effect(
-                                p_active, _z, foe=n_active)
+                                p_active, _z, foe=n_active, state=state)
                         else:
                             p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
 
@@ -8916,7 +8940,8 @@ class Combat(commands.Cog):
                         _z_name = _z['name'] if _z else 'its full-force Z-Move'
                         combat_log += f"💫 It unleashed **{_z_name}**!\n"
                         # Paid out BEFORE the move runs - see apply_z_status_effect.
-                        combat_log += apply_z_status_effect(attacker, _z, foe=defender)
+                        combat_log += apply_z_status_effect(attacker, _z, foe=defender,
+                                                            state=state)
                         adp_state['active'] = False
                         
                     # --- DYNAMAX KINETIC INJECTION & SANITIZATION ---
