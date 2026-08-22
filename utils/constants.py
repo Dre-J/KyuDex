@@ -340,6 +340,20 @@ NATURE_MULTIPLIERS = {
 # A quick list of natures for genetic diversity
 NATURES = ["Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish", "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful", "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky"]
 
+# ==========================================
+# 💊 THE TWO ABILITY ITEMS
+# ==========================================
+# A Capsule swaps a specimen between the two STANDARD abilities its species has. A Patch
+# reaches the hidden one, which is a different thing entirely: a hidden ability is the
+# scarce end of the roster, and the whole point of a future breeding update is that
+# earning one is work. So the Patch is priced as the shortcut it is - expensive enough
+# that breeding for a hidden ability stays the sensible route and this stays the
+# impatient one - and it is deliberately ONE-WAY. A Capsule cannot walk a specimen back
+# off a hidden ability, exactly as in the games, which is what stops the pair being used
+# to flip freely between all three.
+ABILITY_CAPSULE_PRICE = 2500
+ABILITY_PATCH_PRICE = 12000
+
 EQUIPMENT_CATALOG = {
     # CAPTURE GEAR
     "greatball": {"name": "Great Ball", "price": 100, "desc": "2.5x Capture Rate", "emoji": "🔵", "category": "capture"},
@@ -425,13 +439,24 @@ EQUIPMENT_CATALOG = {
 
     # GENERAL FIELD SUPPLIES
     "purifier":  {"name": "Purifier", "price": 50, "desc": "Instantly removes pollution from a server", "emoji": "🫧", "category": "general"},
+    # The Patch is deliberately expensive - see ABILITY_PATCH_PRICE below for why.
+    "ability-capsule": {"name": "Ability Capsule", "price": ABILITY_CAPSULE_PRICE, "desc": "Switches a specimen between its two standard abilities.", "emoji": "💊", "category": "general"},
+    "ability-patch":   {"name": "Ability Patch", "price": ABILITY_PATCH_PRICE, "desc": "Unlocks a specimen's HIDDEN ability. Cannot be reversed by a Capsule.", "emoji": "🩹", "category": "general"},
     
     # MEDICINE & BATTLE
     "potion":    {"name": "Potion", "price": 100, "desc": "Restore 20 HP in battle", "emoji": "🧪", "category": "medicine"},
     "revive":    {"name": "Revive", "price": 250, "desc": "Revive a fainted specimen", "emoji": "💠", "category": "medicine"},
     
     # VITAMINS
+    # All six, one per stat. Protein and Carbos were the only two on the shelf, which
+    # made Attack and Speed the only two EVs a trainer could buy their way into - so
+    # every other spread had to be earned through training missions while those two
+    # could be bought. `!feed` has always understood all six.
+    "hp-up":     {"name": "HP Up", "price": 500, "desc": "+10 HP EVs", "emoji": "❤️", "category": "vitamin"},
     "protein":   {"name": "Protein", "price": 500, "desc": "+10 Attack EVs", "emoji": "💪", "category": "vitamin"},
+    "iron":      {"name": "Iron", "price": 500, "desc": "+10 Defense EVs", "emoji": "🛡️", "category": "vitamin"},
+    "calcium":   {"name": "Calcium", "price": 500, "desc": "+10 Sp. Atk EVs", "emoji": "🔮", "category": "vitamin"},
+    "zinc":      {"name": "Zinc", "price": 500, "desc": "+10 Sp. Def EVs", "emoji": "🌟", "category": "vitamin"},
     "carbos":    {"name": "Carbos", "price": 500, "desc": "+10 Speed EVs", "emoji": "👟", "category": "vitamin"},
 
     # BERRIES
@@ -1585,6 +1610,110 @@ def build_phase7_stock():
 
 
 EQUIPMENT_CATALOG.update(build_phase7_stock())
+
+
+# ==========================================
+# 🌟 THE FOUR PINCH BERRIES THAT ONLY LOOKED FINISHED
+# ==========================================
+# Starf, Lansat, Micle and Custap all carried the SAME placeholder row in
+# consumables.json - attack, one stage - so all four raised Attack and all four read as
+# "live" to every scan that counts mentions. That is the item audit's own caveat, "it
+# cannot see a HALF-implemented item", biting four berries at once.
+#
+# Apicot and Petaya were the same defect one step quieter: both were implemented as
+# their PHYSICAL twin (Defense and Attack) while their shop entries promised Sp. Def and
+# Sp. Atk. Nothing in the codebase compared the two, so the shop had been lying about
+# them for as long as they had existed.
+#
+# What makes these four different from the other five pinch berries is WHEN they are
+# spent. A Liechi Berry banks a stat stage on the spot. These hand out a marker that a
+# LATER moment reads - the crit stage, the accuracy roll, the turn order - so each one
+# needs a name that both the berry and that moment agree on.
+LANSAT_MARKER = 'lansat_crit'
+MICLE_MARKER = 'micle_accuracy'
+CUSTAP_MARKER = 'custap_priority'
+
+BERRY_SHELF_OPEN = True         # see stock_the_berry_shelf below
+
+LANSAT_CRIT_STAGES = 2          # the same two stages Focus Energy is worth
+MICLE_ACCURACY_MULTIPLIER = 1.2  # the Gen V+ figure, not Gen IV's perfect accuracy
+CUSTAP_TIER = 1                 # the front of its bracket, where Quick Claw sits
+
+# Every stat a Starf Berry can land on. Deliberately the five BATTLE stats: the games
+# exclude accuracy and evasion, and rolling one of those would make the berry's best
+# outcome and its worst outcome much further apart than they should be.
+STARF_STATS = ('attack', 'defense', 'sp_atk', 'sp_def', 'speed')
+
+# Micle and Custap are spent on ONE later action, so they need to expire. Lansat does
+# not: like Focus Energy it lasts until its holder leaves the field, which the volatile
+# wipe on withdrawal already handles - so it is marked `lasting` in consumables.json and
+# the sweep below leaves it alone.
+#
+# The expiry uses the charge lifecycle's trick, because it has the same problem: a marker
+# handed out DURING a turn must survive that turn's own end-of-turn sweep, or a berry
+# eaten at 1/4 HP would be swept away before the move it was bought for. So the first
+# sweep clears the freshness and the second removes the marker.
+ACTION_MARKER_FRESH = '_fresh'
+
+
+# ==========================================
+# 🫐 OPENING THE BERRY SHELF
+# ==========================================
+# Every berry has been `purchasable: False` since there were berries, because the plan
+# was always that you GROW them. There is no farming yet, and until there is, the only
+# way to get one is a 40% roll on a catch against a pool of fifty-two - so a trainer who
+# wants a particular berry for a particular specimen is looking at a long wait and no way
+# to shorten it. Selling them is the stopgap.
+#
+# When farming lands, this is the switch to turn back off: flip BERRY_SHELF_OPEN and
+# every berry goes back to being drop-only, without touching fifty-two rows.
+#
+# Prices come from the BEHAVIOUR the engine reads rather than from a hand-typed number
+# per berry, for the same reason the type-booster shelf does: fifty-two hand-typed prices
+# is fifty-two chances to sell a Lum Berry for the price of an Oran, and a berry added
+# later would arrive with no price at all.
+BERRY_PRICES = {
+    'cure_status':   150,   # one status, and only if it lands on you
+    'restore_pp':    150,
+    'heal_flat':     150,
+    'heal_pct':      200,
+    'resist_damage': 200,   # a single super-effective hit, halved, once
+    'ev_lower':      200,   # the vitamins' twin, and priced under them
+    'stat_boost':    250,   # the pinch berries, which need you to be losing first
+    'random_boost':  250,
+    'volatile_boost': 250,
+    'hit_reaction':  250,
+}
+BERRY_DEFAULT_PRICE = 200
+
+
+def stock_the_berry_shelf():
+    """
+    Put every berry the botanical database grows on sale, priced by what it does.
+
+    Returns how many were stocked, so the caller can assert it is not zero - a silent
+    no-op here would leave the shelf exactly as shut as it was before, and nothing else
+    in the file would notice.
+    """
+    if not BERRY_SHELF_OPEN:
+        return 0
+
+    stocked = 0
+    for berry, meta in EQUIPMENT_CATALOG.items():
+        if meta.get('category') != 'berry':
+            continue
+        behaviour = (CONSUMABLE_DATABASE.get(berry) or {}).get('type')
+        meta['price'] = BERRY_PRICES.get(behaviour, BERRY_DEFAULT_PRICE)
+        meta['purchasable'] = True
+        stocked += 1
+
+    assert stocked == len(CONSUMABLE_DATABASE), (
+        f"stocked {stocked} berries but the database grows "
+        f"{len(CONSUMABLE_DATABASE)}")
+    return stocked
+
+
+BERRIES_ON_SALE = stock_the_berry_shelf()
 
 
 # ==========================================
