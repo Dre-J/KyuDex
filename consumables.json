@@ -233,5 +233,61 @@
         "stat": "attack",
         "value": 1,
         "icon": "\ud83d\udd34"
+    },
+    "enigma-berry": {
+        "type": "hit_reaction",
+        "icon": "\ud83c\udf00"
+    },
+    "jaboca-berry": {
+        "type": "hit_reaction",
+        "icon": "\ud83e\uded0"
+    },
+    "rowap-berry": {
+        "type": "hit_reaction",
+        "icon": "\ud83c\udf47"
+    },
+    "kee-berry": {
+        "type": "hit_reaction",
+        "icon": "\ud83c\udf4f"
+    },
+    "maranga-berry": {
+        "type": "hit_reaction",
+        "icon": "\ud83e\udd5d"
+    },
+    "pomeg-berry": {
+        "type": "ev_lower",
+        "stat": "ev_hp",
+        "value": 10,
+        "icon": "\ud83c\udf4e"
+    },
+    "kelpsy-berry": {
+        "type": "ev_lower",
+        "stat": "ev_attack",
+        "value": 10,
+        "icon": "\ud83e\udd6c"
+    },
+    "qualot-berry": {
+        "type": "ev_lower",
+        "stat": "ev_defense",
+        "value": 10,
+        "icon": "\ud83c\udf51"
+    },
+    "hondew-berry": {
+        "type": "ev_lower",
+        "stat": "ev_sp_atk",
+        "value": 10,
+        "icon": "\ud83c\udf48"
+    },
+    "grepa-berry": {
+        "type": "ev_lower",
+        "stat": "ev_sp_def",
+        "value": 10,
+        "icon": "\ud83c\udf47"
+    },
+    "tamato-berry": {
+        "type": "ev_lower",
+        "stat": "ev_speed",
+        "value": 10,
+        "icon": "\ud83c\udf45"
     }
 }

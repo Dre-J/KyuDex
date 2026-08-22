@@ -1,6 +1,6 @@
 import math
 import random
-from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, SPECIES_STAT_ITEMS, SPECIES_CRIT_ITEMS, SPECIES_TYPE_BOOST_ITEMS, SPECIES_ORB_MULTIPLIER, SPECIES_FORM_ITEMS, get_species_weight, get_species_base_attack
+from utils.constants import TYPE_CHART, NATURE_MULTIPLIERS, BIOLOGICAL_TRAITS, CONSUMABLE_DATABASE, MULTI_STRIKE_MOVES, STATUS_IMMUNE_ABILITIES, ALL_STATUSES, WEIGHT_MULTIPLIER_ABILITIES, ACCURACY_MULTIPLIER_ABILITIES, EVASION_MULTIPLIER_ABILITIES, WONDER_SKIN_ACCURACY, CRIT_STAGE_ABILITIES, VOLATILE_IMMUNE_ABILITIES, BULLET_MOVES, POWDER_MOVES, EXPLOSIVE_MOVES, MOVE_FAMILY_IMMUNE_ABILITIES, STATUS_MOVE_IMMUNE_ABILITIES, MAGIC_BOUNCE_ABILITIES, EXPLOSION_BLOCKING_ABILITIES, PRIORITY_BLOCKING_ABILITIES, QUICK_DRAW_CHANCE, LAST_IN_BRACKET_ABILITIES, GALE_WINGS_REQUIRES_FULL_HP, TRIAGE_PRIORITY, DANCE_MOVES, TYPE_REWRITE_ABILITIES, PROTEAN_ABILITIES, MIMICRY_TYPES, GHOST_PIERCING_ABILITIES, EVASION_IGNORING_ABILITIES, NO_CONTACT_ABILITIES, PROTECT_PIERCING_ABILITIES, CORROSIVE_ABILITIES, SECONDARY_CHANCE_ABILITIES, SECONDARY_IMMUNE_ABILITIES, FLINCH_ON_HIT_ABILITIES, PARENTAL_BOND_SECOND_HIT, TOXIC_CHAIN_CHANCE, POISON_CONFUSION_ABILITIES, ADAPTABILITY_STAB, ALL_STATS, STAT_DROP_IMMUNE_ABILITIES, STAT_DROP_IMMUNE_TYPE_GATE, STAT_DROP_REFLECTING_ABILITIES, STAT_DROP_RETALIATION_ABILITIES, INTIMIDATE_IMMUNE_ABILITIES, STAT_STAGE_KEYS, HAZARD_SOURCE, AURA_ABILITIES, AURA_MULTIPLIER, AURA_BREAK_ABILITIES, AURA_BREAK_MULTIPLIER, TERA_SHELL_ABILITIES, TERA_SHELL_MULTIPLIER, RUIN_ABILITIES, RUIN_MULTIPLIER, BERRY_BLOCKING_ABILITIES, PARADOX_ABILITIES, PARADOX_BOOST, PARADOX_SPEED_BOOST, PARADOX_STAT_ORDER, BOOSTER_SPENT_MARKER, CRIT_DAMAGE_MULTIPLIER, CRIT_MULTIPLIER_ABILITIES, PRANKSTER_ABILITIES, PRANKSTER_PRIORITY, PRANKSTER_BLOCKED_BY, SLICING_MOVES, SWITCH_OUT_HEAL_FRACTION, SWITCH_OUT_CURE_ABILITIES, TRAPPING_ABILITIES, FORCED_SWITCH_IMMUNE_ABILITIES, INTIMIDATE_REVERSING_ABILITIES, BAIL_OUT_ABILITIES, BAIL_OUT_THRESHOLD, BAIL_OUT_MARKER, ON_HIT_REACTIONS, CHARGE_VOLATILE, CHARGE_MULTIPLIER, WIND_MOVES, WIND_IMMUNE_ABILITIES, WIND_RIDER_BOOST, HP_FORM_FLIPS, BROKEN_BY_A_HIT, STANCE_CHANGE_ABILITIES, STANCE_BLADE, STANCE_SHIELD, STANCE_SHIELD_MOVES, HUNGER_SWITCH_ABILITIES, HUNGER_PAIRS, ZERO_TO_HERO_ABILITIES, ZERO_TO_HERO_PAIRS, ZERO_TO_HERO_MARKER, GULP_MISSILE_ABILITIES, GULP_TRIGGER_MOVES, GULP_BASE_FORM, GULP_HEALTHY_FORM, GULP_HURT_FORM, GULP_HURT_THRESHOLD, GULP_RECOIL_FRACTION, GULP_PAYLOADS, FORM_FLIP_REQUEST, HP_THRESHOLD_REACTIONS, HP_THRESHOLD, HP_THRESHOLD_MARKER, FLINCH_REACTIONS, ABILITY_PAINT_ON_CONTACT, ABILITY_SWAP_ON_CONTACT, ITEM_THIEF_ON_CONTACT, ITEM_THIEF_ON_ATTACK, RETALIATORY_BURN_ABILITIES, SYNCHRONIZE_ABILITIES, SYNCHRONIZE_STATUSES, CURSED_BODY_ABILITIES, CURSED_BODY_CHANCE, CURSED_BODY_TURNS, PERISH_BODY_ABILITIES, PERISH_BODY_COUNT, LIQUID_OOZE_ABILITIES, SYNCHRONIZE_ABILITIES, AFTERMATH_ABILITIES, AFTERMATH_FRACTION, INNARDS_OUT_ABILITIES, TARGET_ATTACKER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, LEVITATION_ABILITIES, KNOCKOUT_BOOST_ABILITIES, KNOCKOUT_BEST_STAT, KNOCKOUT_BOOST_STAGES, STAGE_NAME_FOR_STAT, MOURNING_ABILITIES, MOURNING_STAGES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, SUPREME_OVERLORD_PER_FALLEN, SUPREME_OVERLORD_MAX_FALLEN, SUPREME_OVERLORD_STATS, WEATHER_FORM_ABILITIES, WEATHER_FORMS, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, GLUTTONY_THRESHOLD, RIPEN_ABILITIES, RIPEN_MULTIPLIER, CHEEK_POUCH_ABILITIES, CHEEK_POUCH_FRACTION, HARVEST_ABILITIES, HARVEST_CHANCE, HARVEST_SUN_CHANCE, HARVEST_SUN, CUD_CHEW_ABILITIES, CUD_CHEW_DELAY, PICKUP_ABILITIES, LAST_BERRY_MARKER, CUD_CHEW_MARKER, ITEM_SPENT_MARKER, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, UNAWARE_DEFENSIVE_STATS, UNAWARE_OFFENSIVE_STATS, PERSONAL_SUN_ABILITIES, PERSONAL_SUN_WEATHER, UNOVERRIDABLE_SKIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, BATTLE_BOND_SHURIKEN, BATTLE_BOND_SHURIKEN_POWER, BATTLE_BOND_SHURIKEN_HITS, WEATHER_ACCURACY_MOVES, STARTER_PERFECT_IVS, STARTER_IV_FLOOR, STARTER_IV_CEILING, TYPE_BOOST_MULTIPLIER, TYPE_ENHANCER_ITEMS, TYPE_GEM_MULTIPLIER, TYPE_GEMS, INERT_PLATES, PLATE_TYPES, ITEM_HIT_REACTIONS, TERRAIN_SEED_ITEMS, THROAT_SPRAY_BOOST, BLUNDER_POLICY_BOOST, ROOM_SERVICE_DROP, MENTAL_HERB_CURES, EJECT_ITEMS, PIVOT_REQUEST, RANDOM_REPLACEMENT_ITEMS, SHED_SHELL, ITEM_ACCURACY_MULTIPLIERS, ZOOM_LENS_MULTIPLIER, ITEM_ACCURACY_AGAINST_HOLDER, ITEM_FLINCH_CHANCE, QUICK_CLAW_ODDS, LAST_IN_BRACKET_ITEMS, SECONDARY_IMMUNE_ITEMS, STAT_DROP_IMMUNE_ITEMS, COPIES_BOOSTS_ITEMS, POWDER_IMMUNE_ITEMS, WEATHER_CHIP_IMMUNE_ITEMS, NO_CONTACT_ITEMS, PUNCH_MOVES, PUNCHING_GLOVE_BOOST, EVIOLITE_MULTIPLIER, EVIOLITE_STATS, UNEVOLVED_SPECIES, FOCUS_BAND_ODDS, SHELL_BELL_FRACTION, BIG_ROOT_DRAIN_BONUS, BINDING_BAND_MULTIPLIER, GRIP_CLAW_TURNS, LOADED_DICE_MIN_HITS, HEAVY_DUTY_BOOTS, ABILITY_SHIELD, SPECIES_STAT_ITEMS, SPECIES_CRIT_ITEMS, SPECIES_TYPE_BOOST_ITEMS, SPECIES_ORB_MULTIPLIER, SPECIES_FORM_ITEMS, BERRY_HIT_REACTIONS, get_species_weight, get_species_base_attack
 from datetime import datetime, timezone
 
 
@@ -880,7 +880,8 @@ def spend_stockpile(pokemon):
 # more, but a berry that cannot be obtained here would only be dead weight.
 #
 # Powers are the Gen VI values: the status and resist berries throw for 80, the stat
-# berries for 100. (The 90-power middle tier is all berries this game does not stock.)
+# berries and the five that answer a hit for 100, and the six EV-lowering berries for
+# the 90-power middle tier - which was empty until Item Phase 7 planted them.
 NATURAL_GIFT_BERRIES = {
     # --- Status-curing berries ---
     'cheri-berry': ('fire', 80),     'chesto-berry': ('water', 80),
@@ -909,6 +910,16 @@ NATURAL_GIFT_BERRIES = {
     'apicot-berry': ('ground', 100), 'lansat-berry': ('flying', 100),
     'starf-berry': ('psychic', 100), 'micle-berry': ('rock', 100),
     'custap-berry': ('ghost', 100),
+
+    # --- Item Phase 7: the five that answer a hit, which throw just as hard ---
+    'enigma-berry': ('bug', 100),    'jaboca-berry': ('dragon', 100),
+    'rowap-berry': ('dark', 100),    'kee-berry': ('fairy', 100),
+    'maranga-berry': ('dark', 100),
+
+    # --- ...and the six that lower an EV, the whole of the 90-power tier ---
+    'pomeg-berry': ('ice', 90),      'kelpsy-berry': ('fighting', 90),
+    'qualot-berry': ('poison', 90),  'hondew-berry': ('ground', 90),
+    'grepa-berry': ('flying', 90),   'tamato-berry': ('grass', 90),
 }
 
 # Present is a gamble: four in ten it is a feeble tap, two in ten it HEALS the target
@@ -3159,6 +3170,37 @@ def apply_berry_effect(pokemon, item, ignore_threshold=False, owner_str=""):
     return note
 
 
+def swallow_berry(pokemon, item):
+    """
+    The bookkeeping of a berry going down, for every route that eats one.
+
+    Extracted from _resolve_berry when Item Phase 7 added the five berries that answer a
+    HIT rather than a threshold. Those five never reach the threshold sweep, and a second
+    hand-written copy of this would have been a second place to forget Harvest.
+
+    Only empties the slot when the berry actually came off THIS specimen. Bug Bite,
+    Pluck and a flung berry feed someone else's berry to the eater, and must not take the
+    eater's own item with it.
+    """
+    if pokemon is None:
+        return
+    item = (item or '').lower().replace(' ', '-')
+
+    if get_stored_item(pokemon) == item:
+        pokemon['held_item'] = 'none'
+        mark_item_consumed(pokemon, item)
+        # Block 19. Both of these answer for a berry that came out of this specimen's
+        # OWN slot, which is also what stops the second helping arming a third: by the
+        # time Cud Chew re-eats, the slot is already empty.
+        pokemon[LAST_BERRY_MARKER] = item
+        if get_active_ability(pokemon) in CUD_CHEW_ABILITIES:
+            pokemon[CUD_CHEW_MARKER] = [item, CUD_CHEW_DELAY]
+
+    # Belch needs to know this happened, and it has to outlive a switch, so it lives on
+    # the specimen rather than in the volatiles that get wiped on withdrawal.
+    pokemon['_ate_berry'] = True
+
+
 def _resolve_berry(pokemon, item, ignore_threshold=False, owner_str=""):
     """The berry itself. Wrapped by apply_berry_effect, which pays Cheek Pouch after."""
     item = (item or '').lower().replace(' ', '-')
@@ -3175,21 +3217,7 @@ def _resolve_berry(pokemon, item, ignore_threshold=False, owner_str=""):
     label = item.replace('-', ' ').title()
 
     def eaten():
-        # Only empty the slot when the berry actually came off THIS specimen. Bug Bite,
-        # Pluck and a flung berry feed someone else's berry to the eater, and must not
-        # take the eater's own item with it.
-        if get_stored_item(pokemon) == item:
-            pokemon['held_item'] = 'none'
-            mark_item_consumed(pokemon, item)
-            # Block 19. Both of these answer for a berry that came out of this
-            # specimen's OWN slot, which is also what stops the second helping arming a
-            # third: by the time Cud Chew re-eats, the slot is already empty.
-            pokemon[LAST_BERRY_MARKER] = item
-            if get_active_ability(pokemon) in CUD_CHEW_ABILITIES:
-                pokemon[CUD_CHEW_MARKER] = [item, CUD_CHEW_DELAY]
-        # Belch needs to know this happened, and it has to outlive a switch, so it lives
-        # on the specimen rather than in the volatiles that get wiped on withdrawal.
-        pokemon['_ate_berry'] = True
+        swallow_berry(pokemon, item)
 
     if behavior == 'heal_flat' and (ignore_threshold or hp_pct <= berry_threshold(pokemon, data.get('threshold', 0.5))):
         if not ignore_threshold or current_hp < max_hp:
@@ -4239,6 +4267,53 @@ def item_hit_reaction(defender, move, damage, type_multiplier=1.0, magic_room=Fa
         return None
 
     return item, list(row['self'])
+
+
+# ==========================================
+# ITEM PHASE 7: THE BERRIES THAT ANSWER A HIT
+# ==========================================
+# Kee, Maranga, Jaboca, Rowap and Enigma. Deliberately NOT rows in ITEM_HIT_REACTIONS
+# above, even though four of the five are the same sentence as a Weakness Policy, because
+# a policy is SPENT and a berry is EATEN - and eating is the thing Unnerve blocks, Ripen
+# doubles, Cheek Pouch pays for and Belch, Harvest and Cud Chew all remember. Filing them
+# with the policies would have made five berries that behaved correctly and were not
+# berries.
+
+def berry_hit_reaction(defender, attacker, move, damage, type_multiplier=1.0,
+                       magic_room=False, move_class=None):
+    """
+    Which berry the defender eats in answer to the hit it just took, and its row.
+
+    Returns `(berry, row)`, or None. Like `item_hit_reaction` this only ASKS - nothing is
+    eaten, healed or hurt here, so a test or the AI can ask without a berry vanishing.
+
+    `move_class` is the class the move actually RESOLVED as, so a physical Photon Geyser
+    is answered by a Kee Berry rather than a Maranga. The caller passes it because only
+    the damage resolver knows; the move's own class is the fallback.
+    """
+    if defender is None or damage <= 0:
+        return None
+    if (move or {}).get('class') == 'status':
+        return None
+
+    berry = get_active_item(defender, magic_room)
+    row = BERRY_HIT_REACTIONS.get(berry)
+    if not row:
+        return None
+
+    # Unnerve, asked of the specimen standing opposite. Same question check_consumables
+    # asks, for the same reason: a berry that cannot be eaten cannot do anything.
+    if berries_are_blocked(attacker):
+        return None
+
+    trigger = row['trigger']
+    if trigger == 'super_effective':
+        if type_multiplier <= 1.0:
+            return None
+    elif (move_class or (move or {}).get('class')) != trigger:
+        return None
+
+    return berry, row
 
 
 # ==========================================
@@ -7269,6 +7344,13 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         # handed back in the same breath the power is taken.
         stat_changes.extend(spend_stockpile(attacker)[1])
 
+    # Bound HERE rather than only inside the branch below, because the reaction hooks at
+    # the bottom of this function read it and there are damaging paths that never enter
+    # the branch - a fixed-damage move with no stored power, for one. Reading it there
+    # would be an UnboundLocalError on exactly those moves. The stored category is the
+    # honest fallback: nothing recategorised it, so it resolved as what it says it is.
+    effective_class = move_class
+
     if move.get('class') != 'status' and (move.get('power', 0) > 0 or dynamic_power):
         level = attacker.get('level', 50)
         
@@ -8095,6 +8177,11 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         msg += (f" \U0001f4a5 {defender['name'].capitalize()}'s "
                 f"{_policy.replace('-', ' ').title()} kicked in!")
 
+    # Item Phase 7's five berries answer a hit too, and would sit naturally here beside
+    # the policies - but they are resolved much further down, immediately after the
+    # Substitute. See HOOK 3c-ii for why: they are the only reaction on this list that
+    # needs the FINAL damage figure rather than this provisional one.
+
     # ==========================================
     # HOOK 3d: ITEM PHASE 3 - THE EJECTORS THAT ANSWER A HIT
     # ==========================================
@@ -8712,6 +8799,75 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
 
         inflicted_status = None
         stat_changes = [c for c in stat_changes if c[0] != 'defender']
+
+    # ==========================================
+    # HOOK 3c-ii: ITEM PHASE 7 - THE BERRIES THAT ANSWER A HIT
+    # ==========================================
+    # Kee, Maranga, Jaboca, Rowap and Enigma. Their natural home is HOOK 3c beside the
+    # Weakness Policy - same moment, same sentence - and they are HERE instead for one
+    # reason: they are the only reaction on that list that needs to know the FINAL
+    # damage. Between there and here, Focus Sash, Sturdy, Focus Band and Endure can all
+    # cap a lethal hit, and a Substitute can absorb it outright.
+    #
+    # That matters twice over. A berry must not answer a blow its holder did not
+    # survive, and the Enigma Berry's helping has to be measured against the HP the
+    # holder will actually be left with. Resolved up there, an Enigma Berry would have
+    # revived a fainting specimen and healed the wrong amount besides.
+    #
+    # Separate from the policies for a second reason as well: a policy is SPENT, and a
+    # berry is EATEN. `swallow_berry` is what pays Harvest, Cud Chew and Belch, and
+    # `cheek_pouch_refill` is what pays Cheek Pouch.
+    #
+    # `effective_class` rather than the move's stored category, so a physical Photon
+    # Geyser is answered by a Kee Berry and not a Maranga.
+    _survivor_hp = defender.get('current_hp', 0) - damage
+    if _survivor_hp > 0:
+        _berry_reaction = berry_hit_reaction(defender, attacker, move, damage,
+                                             type_multiplier, magic_room,
+                                             move_class=effective_class)
+    else:
+        _berry_reaction = None
+
+    if _berry_reaction:
+        _berry, _row = _berry_reaction
+        _label = _berry.replace('-', ' ').title()
+        _who = defender['name'].capitalize()
+
+        # Ripen doubles what a berry is worth, and it is worth something different in
+        # each of the three shapes below - so the doubling is applied to the FIGURE in
+        # all three rather than to any one of them.
+        if _row.get('self'):
+            for _stat, _stages in _row['self']:
+                stat_changes.append((TARGET_DEFENDER_SELF, _stat,
+                                     int(ripened(defender, _stages))))
+            msg += f" \U0001fad0 {_who} ate its {_label}!"
+
+        if _row.get('heal'):
+            # The damage has NOT been taken off current_hp yet - this function returns it
+            # for the engines to apply - so the heal is measured against what the holder
+            # will be left with and then expressed as an adjustment to the figure the
+            # engine will subtract from. Healing current_hp directly would overheal a
+            # holder near full, because the cap would be tested against the wrong number.
+            _restored = max(1, math.floor(defender.get('max_hp', 100)
+                                          * ripened(defender, _row['heal'])))
+            _gained = min(defender.get('max_hp', 100),
+                          _survivor_hp + _restored) - _survivor_hp
+            defender['current_hp'] += _gained
+            msg += (f" \U0001f300 {_who} ate its {_label} and recovered "
+                    f"{_gained} HP!")
+
+        if _row.get('recoil'):
+            # Written straight to the attacker's HP, the way Rocky Helmet a thousand
+            # lines above does, and for the same reason: healing_amount is the ATTACKER's
+            # drain channel and a negative on it would be read as Liquid Ooze.
+            _bite = max(1, math.floor(attacker.get('max_hp', 100)
+                                      * ripened(defender, _row['recoil'])))
+            attacker['current_hp'] = max(0, attacker['current_hp'] - _bite)
+            msg += (f" \U0001fad0 {_who}'s {_label} bit "
+                    f"{attacker['name'].capitalize()} back!")
+
+        swallow_berry(defender, _berry)
+        msg += cheek_pouch_refill(defender)
 
     # ==========================================
     # BLOCK 16: WHAT THROWING THE MOVE DID TO THE THROWER

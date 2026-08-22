@@ -1474,6 +1474,120 @@ EQUIPMENT_CATALOG.update(build_phase6_stock())
 
 
 # ==========================================
+# 🫐 ITEM PHASE 7: THE ELEVEN BERRIES THAT WERE NEVER PLANTED
+# ==========================================
+# The berry layer is the best-served corner of the item shelf - Block 19 gave it Ripen,
+# Gluttony, Harvest, Cud Chew, Cheek Pouch and Belch - which made these eleven easy to
+# miss: they are not half-implemented, they were simply never in the botanical database
+# at all, and a database that does not know a berry cannot drop it, throw it or eat it.
+#
+# They split into two groups that share nothing except the word berry:
+#
+#   five ANSWER A HIT   - the only berries whose trigger is being struck rather than
+#                         getting low, which is why check_consumables walks past them
+#   six LOWER AN EV     - not a battle effect at all. Fed from the bag between battles,
+#                         which is the vitamin command's job, in the opposite direction
+#
+# The five are deliberately NOT rows in ITEM_HIT_REACTIONS beside the Weakness Policy,
+# even though four of them are the same "when hit, take a stat stage" sentence. A policy
+# is spent through `spend_item`; a berry is EATEN, and eating is what Unnerve blocks,
+# Ripen doubles, Cheek Pouch pays for and Belch, Harvest and Cud Chew all remember.
+# Filing these with the policies would have produced five items that looked right in
+# every test that asked what they do, and were wrong about what they ARE.
+BERRY_HIT_REACTIONS = {
+    # Stat names are the RESOLVER's vocabulary - 'special-defense', not 'sp_def' -
+    # for the same reason ITEM_HIT_REACTIONS uses it: STAT_STAGE_KEYS translates with a
+    # .get that silently skips anything it does not recognise, so the storage spelling
+    # would produce no error, no log line and no boost.
+    'kee-berry':     {'trigger': 'physical', 'self': [('defense', 1)]},
+    'maranga-berry': {'trigger': 'special',  'self': [('special-defense', 1)]},
+
+    # The two that hurt whoever threw the punch. A fraction of the ATTACKER's max HP,
+    # which is what makes them worth holding against a wall rather than a glass cannon.
+    'jaboca-berry':  {'trigger': 'physical', 'recoil': 1.0 / 8.0},
+    'rowap-berry':   {'trigger': 'special',  'recoil': 1.0 / 8.0},
+
+    # The only one that reads effectiveness rather than damage class, and the only one
+    # that heals. Its trigger is Weakness Policy's; its payload is a Sitrus Berry's.
+    'enigma-berry':  {'trigger': 'super_effective', 'heal': 0.25},
+}
+
+# Derived rather than retyped, so consumables.json stays the single source of truth for
+# which berry lowers which EV. A hand-written copy here would be a second place to get
+# `ev_sp_atk` wrong, and the two would drift the first time one was edited alone.
+EV_LOWERING_BERRIES = {
+    berry: (row['stat'], row.get('value', 10))
+    for berry, row in sorted(CONSUMABLE_DATABASE.items())
+    if row.get('type') == 'ev_lower'
+}
+
+# What a berry is worth to a specimen's opinion of you. The games pay this for the same
+# reason they let the berry lower an EV: the berry is bitter, and putting up with it is
+# a favour. Happiness is read by the evolution triggers, so this is not decoration.
+EV_BERRY_HAPPINESS = 10
+MAX_HAPPINESS = 255
+
+# Berries are not merchandise - none of the forty-one already here is purchasable, and
+# these eleven are not either. They arrive the way every other berry does, as a catch
+# drop rolled against CONSUMABLE_DATABASE, which is precisely why adding them to that
+# file was the first half of this block. These rows exist so the bag can render a name
+# and an icon instead of a slug.
+PHASE7_BERRY_CATALOG = {
+    "enigma-berry":  {"name": "Enigma Berry",  "desc": "Restores 1/4 max HP when struck by a super-effective attack.", "emoji": "🌀"},
+    "jaboca-berry":  {"name": "Jaboca Berry",  "desc": "Hurts the attacker for 1/8 its max HP when struck by a physical attack.", "emoji": "🫐"},
+    "rowap-berry":   {"name": "Rowap Berry",   "desc": "Hurts the attacker for 1/8 its max HP when struck by a special attack.", "emoji": "🍇"},
+    "kee-berry":     {"name": "Kee Berry",     "desc": "Raises Defense when struck by a physical attack.", "emoji": "🍏"},
+    "maranga-berry": {"name": "Maranga Berry", "desc": "Raises Sp. Def when struck by a special attack.", "emoji": "🥝"},
+    "pomeg-berry":   {"name": "Pomeg Berry",   "desc": "Lowers HP EVs by 10 and raises happiness.", "emoji": "🍎"},
+    "kelpsy-berry":  {"name": "Kelpsy Berry",  "desc": "Lowers Attack EVs by 10 and raises happiness.", "emoji": "🥬"},
+    "qualot-berry":  {"name": "Qualot Berry",  "desc": "Lowers Defense EVs by 10 and raises happiness.", "emoji": "🍑"},
+    "hondew-berry":  {"name": "Hondew Berry",  "desc": "Lowers Sp. Atk EVs by 10 and raises happiness.", "emoji": "🍈"},
+    "grepa-berry":   {"name": "Grepa Berry",   "desc": "Lowers Sp. Def EVs by 10 and raises happiness.", "emoji": "🍇"},
+    "tamato-berry":  {"name": "Tamato Berry",  "desc": "Lowers Speed EVs by 10 and raises happiness.", "emoji": "🍅"},
+}
+
+
+def build_phase7_stock():
+    """
+    The Phase 7 berries, checked against the botanical database that drives them.
+
+    The assertion Phases 2 to 6 make is "nothing on the shelf is unimplemented". Here it
+    is the tighter one the berry layer actually needs: the catalog and the botanical
+    database must name the SAME berries, in both directions. A berry in the database
+    with no catalog row renders in the bag as a raw slug; a catalog row with no database
+    entry is a berry that can never drop, which is a shop listing for something that
+    does not exist.
+    """
+    reactive = {b for b, r in CONSUMABLE_DATABASE.items()
+                if r.get('type') == 'hit_reaction'}
+    assert reactive == set(BERRY_HIT_REACTIONS), (
+        f"hit_reaction berries and BERRY_HIT_REACTIONS disagree: "
+        f"{sorted(reactive ^ set(BERRY_HIT_REACTIONS))}")
+
+    assert len(EV_LOWERING_BERRIES) == 6, (
+        f"expected six EV-lowering berries, found {sorted(EV_LOWERING_BERRIES)}")
+    columns = {column for column, _ in EV_LOWERING_BERRIES.values()}
+    assert len(columns) == 6, f"two berries lower the same EV: {sorted(columns)}"
+
+    stock = {
+        berry: dict(meta, price=0, category="berry", purchasable=False)
+        for berry, meta in PHASE7_BERRY_CATALOG.items()
+    }
+
+    catalogued = {k for k, v in EQUIPMENT_CATALOG.items()
+                  if v.get('category') == 'berry'} | set(stock)
+    missing = set(CONSUMABLE_DATABASE) - catalogued
+    assert not missing, f"berries with no catalog row: {sorted(missing)}"
+    orphaned = catalogued - set(CONSUMABLE_DATABASE)
+    assert not orphaned, f"catalog berries the database does not grow: {sorted(orphaned)}"
+
+    return stock
+
+
+EQUIPMENT_CATALOG.update(build_phase7_stock())
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a
