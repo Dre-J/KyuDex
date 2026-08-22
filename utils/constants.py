@@ -2440,7 +2440,7 @@ def build_phase8_stock():
             "price": Z_CRYSTAL_PRICE,
             "desc": f"Upgrades {element.title()}-type moves into "
                     f"{Z_MOVE_NAMES[element]}.",
-            "emoji": TYPE_EMOJI.get(element, '💎'),
+            "emoji": type_icon(element),
             "category": "zcrystal",
         }
 
@@ -2457,7 +2457,7 @@ def build_phase8_stock():
                     f"{row['move'].replace('-', ' ').title()} into {row['name']}.",
             # Its own type's icon, the same as the eighteen elemental crystals. These all
             # wore one shared star before, which made a bag of seventeen unreadable.
-            "emoji": TYPE_EMOJI.get(row['element'], '💎'),
+            "emoji": type_icon(row['element']),
             "category": "zcrystal",
         }
 
@@ -2466,7 +2466,7 @@ def build_phase8_stock():
             "name": memory.replace('-', ' ').title(),
             "price": MEMORY_PRICE,
             "desc": f"Makes Silvally {element.title()}-type, and its Multi-Attack too.",
-            "emoji": TYPE_EMOJI.get(element, '🧠'),
+            "emoji": type_icon(element),
             "category": "formitems",
         }
 
@@ -2476,6 +2476,117 @@ def build_phase8_stock():
 
 
 EQUIPMENT_CATALOG.update(build_phase8_stock())
+
+
+# ==========================================
+# 🧰 ITEM PHASE 9: THE UNPHASED SHELF, PART ONE
+# ==========================================
+# The forty-seven items that never fitted a phase, started at the end that shares hooks.
+# These five split cleanly into three: two multiply damage, one changes what a specimen
+# WEIGHS, and two argue with what the type chart is allowed to refuse.
+#
+# The two damage ones are worth naming, because they are the last of their kind: the
+# Muscle Band and the Wise Glasses have been the only two entries on
+# test_shop_catalog's KNOWN_GHOSTS list since Item Phase 5 cleared the rest. They were
+# named in FLING_POWER and an NPC's item_pool - a weight and a rumour - and nothing read
+# either as an effect. With these two live, the audit's ghost column reaches zero.
+
+# A flat multiplier on one damage class, which is what separates these from the type
+# boosters: a Muscle Band does not care what element the move is, only how it is thrown.
+FLAT_DAMAGE_ITEMS = {
+    'muscle-band':  'physical',
+    'wise-glasses': 'special',
+}
+FLAT_DAMAGE_BOOST = 1.1
+
+# What a specimen counts as weighing, for Grass Knot, Low Kick, Heat Crash and Heavy
+# Slam. Read beside Heavy Metal and Light Metal, which is the same question asked of an
+# ability instead of an item.
+WEIGHT_ITEMS = {'float-stone': 0.5}
+
+# Iron Ball drags its holder down to the field: half Speed, and Ground-type moves reach
+# it even through a Flying type or Levitate. The grounding half is the interesting one,
+# because `is_grounded` is also what hazards and terrain read - so an Iron Ball holder
+# eats Spikes and stands in a Grassy Terrain too, exactly as it should.
+IRON_BALL = 'iron-ball'
+IRON_BALL_SPEED = 0.5
+
+# Items that pull a specimen onto the ground it would otherwise be floating above.
+GROUNDING_ITEMS = {IRON_BALL}
+
+# ...and the two ways a held item lets the chart's zeroes through. They are NOT the same
+# rule, which is why this is a mapping rather than a set:
+#
+#   ring-target  every immunity the holder has, whatever the element
+#   iron-ball    Ground only - it grounds its holder, it does not make a Gengar
+#                vulnerable to Normal moves
+#
+# The value is the elements the item opens up, or ALL_STATS' cousin `None` for "all".
+IMMUNITY_PIERCING_ITEMS = {
+    'ring-target': None,
+    IRON_BALL:     ('ground',),
+}
+
+
+def pierces_own_immunity(held_item, move_type):
+    """
+    Whether the DEFENDER's held item lets a move through an immunity it would refuse.
+
+    Asked at the one place the type chart produces a zero, so Ring Target and the Iron
+    Ball cannot disagree with each other about what an immunity is.
+    """
+    opens = IMMUNITY_PIERCING_ITEMS.get(
+        (held_item or 'none').lower().replace(' ', '-'), False)
+    if opens is False:
+        return False
+    return opens is None or (move_type or '').lower() in opens
+
+
+PHASE9_PRICE = 400
+PHASE9_SET_PRICE = 600      # the two that define a set rather than answering a matchup
+
+PHASE9_DESCRIPTIONS = {
+    'muscle-band':   ("Physical moves from the holder do 10% more damage.",
+                      PHASE9_SET_PRICE, '🎽'),
+    'wise-glasses':  ("Special moves from the holder do 10% more damage.",
+                      PHASE9_SET_PRICE, '👓'),
+    'float-stone':   ("Halves the holder's weight, against Grass Knot and Low Kick.",
+                      PHASE9_PRICE, '🪶'),
+    'iron-ball':     ("Halves the holder's Speed and drags it to the ground, where "
+                      "Ground moves and hazards can reach it.", PHASE9_PRICE, '🔗'),
+    'ring-target':   ("The holder loses its own type immunities.",
+                      PHASE9_PRICE, '🎯'),
+}
+
+
+def build_phase9_stock():
+    """
+    The Phase 9 shelf, checked against the tables the engine reads.
+
+    Same assertion the other phases make, in both directions. The Iron Ball is
+    deliberately in two of the source tables - it grounds AND it pierces - and must
+    still appear exactly once on the shelf.
+    """
+    implemented = (set(FLAT_DAMAGE_ITEMS) | set(WEIGHT_ITEMS) | set(GROUNDING_ITEMS)
+                   | set(IMMUNITY_PIERCING_ITEMS))
+    missing = implemented - set(PHASE9_DESCRIPTIONS)
+    assert not missing, f"Phase 9 items with no shop entry: {sorted(missing)}"
+    extra = set(PHASE9_DESCRIPTIONS) - implemented
+    assert not extra, f"Phase 9 shop entries with no implementation: {sorted(extra)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": PHASE9_DESCRIPTIONS[item][1],
+            "desc": PHASE9_DESCRIPTIONS[item][0],
+            "emoji": PHASE9_DESCRIPTIONS[item][2],
+            "category": "battleitems",
+        }
+        for item in sorted(implemented)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_phase9_stock())
 
 
 # ==========================================
