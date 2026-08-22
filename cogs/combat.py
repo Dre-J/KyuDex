@@ -16,7 +16,8 @@ from utils.constants import (TM_CATALOG, type_badges, type_icon,
                              Z_MOVE_NAMES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS,
                              signature_z_for, z_move_power,
                              mega_stone_binds_to, is_mega_stone,
-                             MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY)
+                             MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY,
+                             z_status_effect_for, expand_z_stats)
 from utils.directives import credit_cull, credit_evolution
 from utils import checks
 import aiohttp
@@ -1899,14 +1900,103 @@ def z_upgrade_for(species_name, held_item, move):
     if signature:
         return {'name': signature['name'],
                 'power': signature.get('power'),
-                'hp_fraction': signature.get('hp_fraction')}
+                'hp_fraction': signature.get('hp_fraction'),
+                # Extreme Evoboost is the one signature Z-Move that deals no damage.
+                'boost': signature.get('boost')}
 
     element = Z_CRYSTAL_TYPES.get(held_item)
     if not element or (move.get('type') or '').lower() != element:
         return None
+
+    # A status move keeps its own name under Z-Power - there is no "Z-Bloom Doom" for a
+    # Swords Dance - and carries a Z-Power effect instead of a power.
+    if (move.get('class') or '').lower() == 'status':
+        return {'name': f"Z-{(move_name or '').replace('-', ' ').title()}",
+                'power': None, 'hp_fraction': None, 'boost': None,
+                'status_effect': z_status_effect_for(move_name)}
+
     return {'name': Z_MOVE_NAMES.get(element, 'Breakneck Blitz'),
             'power': z_move_power(move.get('power')),
-            'hp_fraction': None}
+            'hp_fraction': None, 'boost': None}
+
+
+def apply_z_mutation(move, upgrade):
+    """
+    Rewrite a move payload into the Z-Move it becomes. Returns the move.
+
+    Both engines did this inline and neither could be driven by a test, which is how a
+    negative control that made Extreme Evoboost ALSO deal Last Resort's damage escaped
+    every suite. The three shapes a Z-Move comes in are decided here, once.
+    """
+    if not move or not upgrade:
+        return move
+
+    if upgrade.get('boost'):
+        # Extreme Evoboost upgrades a PHYSICAL move into one that deals nothing, so the
+        # class is rewritten before the engine reads it rather than the damage being
+        # zeroed afterwards - a 0-power physical move is still a contact move that can
+        # trigger Rough Skin, and this one never touches its target.
+        move['class'] = 'status'
+        move['power'] = 0
+        move['target'] = 'user'
+    elif upgrade.get('hp_fraction'):
+        move['accuracy'] = 1000
+        move[Z_HP_FRACTION_KEY] = upgrade['hp_fraction']
+    elif upgrade.get('power'):
+        move['accuracy'] = 1000
+        move['power'] = upgrade['power']
+    # A status move keeps its power (zero) and its accuracy: a Z-boosted Toxic can still
+    # miss, exactly as an ordinary one can.
+    return move
+
+
+def apply_z_status_effect(user, upgrade, foe=None, prefix=""):
+    """
+    Pay out a Z-Power effect. Returns the log line, or ''.
+
+    Applied BEFORE the move it accompanies, which is not cosmetic: Z-Belly Drum heals
+    the user so that the half the Drum then costs is paid back, and healing afterwards
+    would both undo the cost and leave it at full HP - a strictly stronger item than the
+    one the shop sells.
+
+    The move itself is NOT replaced. A Z-boosted Swords Dance still raises Attack; the
+    Z-Power effect lands on top of whatever the move was already going to do.
+    """
+    if user is None or not upgrade:
+        return ""
+
+    # A signature crystal carries its boosts directly - Extreme Evoboost is the only one -
+    # and everything else looks its effect up by move.
+    effect = ({'stats': upgrade['boost']} if upgrade.get('boost')
+              else upgrade.get('status_effect'))
+    if not effect:
+        return ""
+
+    log = ""
+    if effect.get('heal'):
+        missing = user.get('max_hp', 0) - user.get('current_hp', 0)
+        if missing > 0:
+            user['current_hp'] = user['max_hp']
+            log += (f"{prefix}💖 **{user['name'].capitalize()}**'s Z-Power "
+                    f"restored it to full health!\n")
+
+    if effect.get('reset'):
+        stages = user.setdefault('stat_stages', {})
+        lowered = [s for s, v in stages.items() if v < 0]
+        for stat in lowered:
+            stages[stat] = 0
+        if lowered:
+            log += (f"{prefix}✨ **{user['name'].capitalize()}**'s Z-Power washed away "
+                    f"its lowered stats!\n")
+
+    stats = expand_z_stats(effect.get('stats'))
+    if stats:
+        # Through resolve_stat_stages rather than written straight onto the block, so a
+        # Z-Power boost is seen by Opportunist and the rest exactly like any other.
+        log += resolve_stat_stages(
+            [(user, stat, stages_up, None) for stat, stages_up in stats],
+            prefix=prefix, foe_of=foe)
+    return log
 
 
 def holds_a_z_crystal(held_item):
@@ -3272,8 +3362,13 @@ class PvPMoveMenu(discord.ui.View):
                 elif self.z_toggled:
                     # A signature crystal upgrades ONE move rather than a whole element,
                     # so the question is asked of the move rather than of its type.
+                    #
+                    # `not is_status` used to be part of this test, which locked every
+                    # status move out of Z-Power entirely - a Z-Splash or a Z-Geomancy
+                    # could not be selected at all. A status move keeps its own name and
+                    # takes a Z-Power effect instead of a power, so it belongs here.
                     z_upgrade = z_upgrade_for(self.active_poke.get('name'), held_item, move)
-                    if not is_status and z_upgrade:
+                    if z_upgrade:
                         override_name = z_upgrade['name']
                         label_str = f"{override_name} (Z)"
                         
@@ -5095,25 +5190,19 @@ class BattleDashboard(discord.ui.View):
                     # Apply Z-Move Mutator if triggered
                     if is_z_move:
                         state['adaptation']['used'] = True
-                        state['adaptation']['z_toggled'] = False 
-                        if p_move_stats['class'] == 'status':
-                            p_active['current_hp'] = p_active['max_hp']
-                            p_z_display = f"Z-{move_name.replace('-', ' ').title()}"
-                            combat_log += f"🌟 **{p_active['name'].capitalize()}** surrounded itself with Z-Power and fully restored its HP!\n"
+                        state['adaptation']['z_toggled'] = False
+                        _z = z_upgrade_for(p_active.get('name'),
+                                           p_active.get('held_item'), p_move_stats)
+                        # A crystal that grants this move nothing leaves it alone
+                        # rather than firing a nameless 175 at the old flat rate.
+                        if _z:
+                            p_z_display = _z['name']
+                            apply_z_mutation(p_move_stats, _z)
+                            # Paid out BEFORE the move runs - see apply_z_status_effect.
+                            combat_log += apply_z_status_effect(
+                                p_active, _z, foe=n_active)
                         else:
-                            _z = z_upgrade_for(p_active.get('name'),
-                                               p_active.get('held_item'), p_move_stats)
-                            # A crystal that grants this move nothing leaves it alone
-                            # rather than firing a nameless 175 at the old flat rate.
-                            if _z:
-                                p_move_stats['accuracy'] = 1000
-                                if _z.get('hp_fraction'):
-                                    p_move_stats[Z_HP_FRACTION_KEY] = _z['hp_fraction']
-                                else:
-                                    p_move_stats['power'] = _z['power']
-                                p_z_display = _z['name']
-                            else:
-                                p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
+                            p_z_display = Z_MOVE_NAMES.get(p_move_stats['type'], 'Maximum Overdrive')
 
                     # Apply Dynamax & G-Max Mutator
                     if is_max_move:
@@ -5643,8 +5732,12 @@ class BattleDashboard(discord.ui.View):
                                            f"forbade the priority move!\n")
                             continue
 
-                        is_status_gimmick = (is_z_action or is_max_action) and move_stats['class'] == 'status'
-                        
+                        # A status MAX move is still swallowed - Max Guard announces
+                        # itself. A status Z-Move is not: it is a real move with a real
+                        # name now, and suppressing the line left a Z-Splash looking
+                        # like nothing had happened at all.
+                        is_status_gimmick = is_max_action and move_stats['class'] == 'status'
+
                         if not is_status_gimmick:
                             if is_player and is_z_action:
                                 combat_log += f"🌟 Your **{attacker['name'].capitalize()}** unleashed its full-force Z-Move, `{z_disp}`!\n"
@@ -8789,7 +8882,10 @@ class Combat(commands.Cog):
                     adp_state = state[f"{player_tag}_adaptation"]
                     attacker_is_maxed = is_dynamax_active(adp_state)
 
-                    is_status_gimmick = (adp_state['active'] and adp_state['type'] in ['zmove', 'dynamax']) and move.get('class') == 'status'
+                    # Same ruling as the PvE resolver: a status DYNAMAX move is swallowed
+                    # because Max Guard announces itself, a status Z-Move is announced.
+                    is_status_gimmick = (adp_state['active'] and adp_state['type'] == 'dynamax'
+                                         and move.get('class') == 'status')
                     
                     if not is_status_gimmick:
                         if adp_state['active'] and adp_state['type'] == 'zmove':
@@ -8813,17 +8909,14 @@ class Combat(commands.Cog):
                         # now, and it is also what tells a signature crystal apart.
                         _z = z_upgrade_for(attacker.get('name'),
                                            attacker.get('held_item'), move)
-                        if _z:
-                            move['accuracy'] = 1000
-                            if _z.get('hp_fraction'):
-                                move[Z_HP_FRACTION_KEY] = _z['hp_fraction']
-                            else:
-                                move['power'] = _z['power']
+                        apply_z_mutation(move, _z)
                         # The Z-Move is NAMED in the log rather than written over
                         # `move['name']`: PP deduction and the move-restriction checks
                         # both look the move back up by that name further down.
                         _z_name = _z['name'] if _z else 'its full-force Z-Move'
                         combat_log += f"💫 It unleashed **{_z_name}**!\n"
+                        # Paid out BEFORE the move runs - see apply_z_status_effect.
+                        combat_log += apply_z_status_effect(attacker, _z, foe=defender)
                         adp_state['active'] = False
                         
                     # --- DYNAMAX KINETIC INJECTION & SANITIZATION ---
