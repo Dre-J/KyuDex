@@ -1215,7 +1215,7 @@ class Social(commands.Cog):
             print(f"Inbox Error: {e}")
             await ctx.send("❌ A database error occurred while accessing your inbox.")
 
-    @commands.command(name="profile", aliases=["impact"])
+    @commands.command(name="profile", aliases=["impact", "bal"])
     @checks.has_started()
     @checks.is_authorized()
     async def profile(self, ctx):

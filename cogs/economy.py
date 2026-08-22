@@ -2352,7 +2352,7 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
             print(f"Transaction Error in !buy: {e}")
             await ctx.send("❌ A critical database error occurred. The transaction has been aborted and no funds were deducted.")
 
-    @commands.command(name="backpack", aliases=["gear", "items"])
+    @commands.command(name="backpack", aliases=["gear", "items", "bag"])
     @checks.has_started()
     @checks.is_authorized()
     async def backpack(self, ctx):

@@ -3260,7 +3260,7 @@ class Ecology(commands.Cog):
         embed.add_field(name="🌍 Ecological Surveys (XP Gain)", value=exp_text if exp_text else "None available.", inline=False)
         embed.add_field(name="💪 Intensive Training (EV Gain)", value=ev_text if ev_text else "None available.", inline=False)
         
-        embed.set_footer(text="Missions also yield rare items like Evolution Stones and Special Balls!")
+        embed.set_footer(text="Missions also yield rare items like Evolution Stones!")
         
         await ctx.send(embed=embed)
 
