@@ -19,6 +19,7 @@ from discord.ext import commands
 
 from utils import audit
 from utils.constants import DB_FILE, EQUIPMENT_CATALOG
+from utils.formulas import get_xp_requirement
 from utils.machines import grant_tm, find_tm
 
 # The two ledgers a grant can land in. A TM is not a backpack item - it lives in
@@ -429,6 +430,77 @@ class Admin(commands.Cog):
                     # paid for goes, so the record has to be enough to put them back by
                     # hand - an admin who rewrote the wrong tag has no other copy.
                     ("Moves", f"{pretty_moves(old_moves)} → {pretty_moves(new_moves)}")])
+
+    @rewrite.command(name="level", aliases=["lvl"])
+    @commands.is_owner()
+    async def rewrite_level(self, ctx, tag: str, new_level: int):
+        """[ADMIN] Sets a specimen's level. `!rewrite level a1b2c3 50`"""
+        if not 1 <= new_level <= 100:
+            return await ctx.send("⚠️ A level is between 1 and 100.")
+
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                specimen, problem = await resolve_specimen(db, tag)
+                if problem:
+                    return await ctx.send(problem)
+
+                (instance_id, owner_id, pokedex_id, _ability, old_level, nickname,
+                 species_name, _standards, _hidden) = specimen
+
+                async with db.execute(
+                        "SELECT growth_rate FROM base_pokemon_species "
+                        "WHERE pokedex_id = ?", (pokedex_id,)) as cursor:
+                    row = await cursor.fetchone()
+                growth_rate = (row[0] if row else None) or 'medium-fast'
+
+                # The XP has to move with the level or the change undoes itself. A
+                # specimen dropped to 5 while still carrying level-70 experience levels
+                # straight back up the moment it wins a battle, because the levelling
+                # loop reads the TOTAL and climbs until it stops qualifying. So this
+                # writes the exact threshold the new level sits on: the XP required to
+                # have REACHED it, which is the requirement for the level below.
+                new_xp = 0 if new_level <= 1 else get_xp_requirement(new_level - 1,
+                                                                    growth_rate)
+
+                await db.execute(
+                    "UPDATE caught_pokemon SET level = ?, experience = ? "
+                    "WHERE instance_id = ?", (new_level, new_xp, instance_id))
+                await db.commit()
+        except Exception as e:
+            print(f"Admin rewrite level error: {e}")
+            return await ctx.send("❌ A database error occurred. Nothing was rewritten.")
+
+        print(f"ADMIN REWRITE LEVEL {ctx.author.id}: {instance_id} "
+              f"{old_level} -> {new_level}")
+
+        embed = discord.Embed(
+            title="📈 Growth Record Rewritten",
+            description=f"Tag `{instance_id[:8]}`"
+                        + (f" — *{nickname}*" if nickname else "")
+                        + f", owned by `{owner_id}`.",
+            colour=discord.Colour.dark_teal())
+        embed.add_field(name="Species",
+                        value=species_name.replace('-', ' ').title(), inline=False)
+        embed.add_field(name="Level", value=f"{old_level} → **{new_level}**",
+                        inline=False)
+        embed.add_field(name="Experience",
+                        value=f"Reset to **{new_xp:,}**, the {growth_rate} threshold for "
+                              f"level {new_level}.", inline=False)
+        embed.add_field(name="Unchanged",
+                        value="Species, ability, moves, IVs, EVs, nature, held item",
+                        inline=False)
+        embed.set_footer(text=f"Authorised by {ctx.author.name}")
+        await ctx.send(embed=embed)
+
+        await audit.post_admin_action(
+            self.bot, action="Level rewrite", actor=ctx.author,
+            colour=discord.Colour.dark_teal(),
+            fields=[("Specimen", f"`{instance_id}`"
+                                 + (f" — *{nickname}*" if nickname else "")),
+                    ("Owner", f"`{owner_id}`"),
+                    ("Species", species_name),
+                    ("Level", f"{old_level} → {new_level}"),
+                    ("Experience", f"reset to {new_xp} ({growth_rate})")])
 
 
 async def setup(bot):

@@ -195,44 +195,41 @@
     "petaya-berry": {
         "type": "stat_boost",
         "threshold": 0.25,
-        "stat": "attack",
+        "stat": "sp_atk",
         "value": 1,
         "icon": "\ud83d\udd34"
     },
     "apicot-berry": {
         "type": "stat_boost",
         "threshold": 0.25,
-        "stat": "defense",
+        "stat": "sp_def",
         "value": 1,
         "icon": "\ud83d\udd34"
     },
     "lansat-berry": {
-        "type": "stat_boost",
+        "type": "volatile_boost",
         "threshold": 0.25,
-        "stat": "attack",
-        "value": 1,
-        "icon": "\ud83d\udd34"
+        "volatile": "lansat_crit",
+        "lasting": true,
+        "icon": "\ud83c\udfaf"
     },
     "starf-berry": {
-        "type": "stat_boost",
+        "type": "random_boost",
         "threshold": 0.25,
-        "stat": "attack",
-        "value": 1,
-        "icon": "\ud83d\udd34"
+        "value": 2,
+        "icon": "\ud83c\udf1f"
     },
     "micle-berry": {
-        "type": "stat_boost",
+        "type": "volatile_boost",
         "threshold": 0.25,
-        "stat": "attack",
-        "value": 1,
-        "icon": "\ud83d\udd34"
+        "volatile": "micle_accuracy",
+        "icon": "\ud83c\udfb1"
     },
     "custap-berry": {
-        "type": "stat_boost",
+        "type": "volatile_boost",
         "threshold": 0.25,
-        "stat": "attack",
-        "value": 1,
-        "icon": "\ud83d\udd34"
+        "volatile": "custap_priority",
+        "icon": "\u23e9"
     },
     "enigma-berry": {
         "type": "hit_reaction",

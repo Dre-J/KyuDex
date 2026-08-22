@@ -36,7 +36,8 @@ import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
-from utils.roster import locate_specimen
+from utils.roster import (locate_specimen, capsule_swap, patch_swap,
+                          parse_candy_request)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
@@ -2701,39 +2702,31 @@ class Ecology(commands.Cog):
     @commands.command(name="partner", aliases=["select"])
     @checks.has_started()
     @checks.is_authorized()
-    async def set_partner(self, ctx, tag_id: str):
-        user_id = str(ctx.author.id)
-        
-        async with aiosqlite.connect(DB_FILE) as db:
+    async def set_partner(self, ctx, tag_id: str = None):
+        """
+        Choose your lead fieldwork partner. `!select new` takes your latest catch.
 
-            # Verify ownership and resolve target
-            if tag_id.isdigit() and len(tag_id) <= 6:
-                async with db.execute("""
-                    WITH Roster AS (
-                        SELECT cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                    ) SELECT name, instance_id FROM Roster WHERE box_number = ?
-                """, (user_id, int(tag_id))) as cursor:
-                    pokemon = await cursor.fetchone()
-            else:
-                async with db.execute("""
-                    SELECT s.name, cp.instance_id
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                """, (f"{tag_id}%", user_id)) as cursor:
-                    pokemon = await cursor.fetchone()
-            
-            if not pokemon:
-                await ctx.send(f"❌ Could not find a specimen matching `{tag_id}` in your survey notebook.")
-                return
-                
+        The box number and tag lookups used to be hand-rolled here, which is how this
+        command came to be the one place in the codebase that could not say `new` - a
+        trainer who had just caught something had to go and find its box number at the
+        end of a roster hundreds long before they could select it. It shares the locator
+        every other command uses now, so it speaks the same vocabulary they all do.
+        """
+        user_id = str(ctx.author.id)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            if tag_id is None:
+                return await ctx.send(
+                    "🎯 Usage: `!select <box number | tag | new>`\n"
+                    "`!select new` chooses the specimen you most recently caught.")
+
+            pokemon, complaint = await locate_specimen(
+                db, user_id, tag_id, "s.name, cp.instance_id")
+            if complaint:
+                return await ctx.send(complaint)
+
             name, actual_tag = pokemon
-            
+
             # ==========================================
             # 🚨 NEW: DEPLOYMENT LOCKOUT CHECK
             # ==========================================
@@ -3260,7 +3253,7 @@ class Ecology(commands.Cog):
         embed.add_field(name="🌍 Ecological Surveys (XP Gain)", value=exp_text if exp_text else "None available.", inline=False)
         embed.add_field(name="💪 Intensive Training (EV Gain)", value=ev_text if ev_text else "None available.", inline=False)
         
-        embed.set_footer(text="Missions also yield rare items like Evolution Stones and Special Balls!")
+        embed.set_footer(text="Missions also yield rare items like Evolution Stones!")
         
         await ctx.send(embed=embed)
 
@@ -4089,22 +4082,26 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     @checks.is_not_in_combat()
-    async def use_rare_candy(self, ctx, target: str = None, amount: int = 1):
+    async def use_rare_candy(self, ctx, first: str = None, second: str = None):
         """
-        Feed rare candies to a specimen. `!candy` alone feeds your selected partner.
+        Feed rare candies to a specimen. `!candy` alone feeds your selected partner one.
 
         The box number used to be REQUIRED, so the specimen a trainer is actively
         levelling - the one `!partner` selected, the one every other command already
         defaults to - was the one thing `!candy` could not be pointed at without first
         going to look its box number up.
 
-        `target` takes a box number, a tag, the word `partner`, or nothing at all, which
-        is the same vocabulary `!equip`, `!learn` and the rest already accept.
+        A target takes a box number, a tag, the word `partner`, `new` for the latest
+        catch, or nothing at all - the same vocabulary `!equip`, `!learn` and the rest
+        already accept.
         """
-        # `!candy 5` means box 5, but `!candy 5` could also read as "five candies" - and
-        # the old signature made the first word a box number, so it stays one. A single
-        # number with no second argument is therefore a TARGET, which is what it has
-        # always been.
+        # A LONE number is an amount: `!candy 20` means twenty candies to whoever is
+        # selected. The rule lives in utils/roster.py so it can be checked without a
+        # database - see parse_candy_request for why it reads that way round.
+        target, amount, complaint = parse_candy_request(first, second)
+        if complaint:
+            return await ctx.send(complaint)
+
         if amount <= 0:
             return await ctx.send("⚠️ You must use at least 1 candy.")
 
@@ -4589,6 +4586,92 @@ class Ecology(commands.Cog):
                                       "Notice: Consumption was halted early - the stat reached zero.")
 
             await ctx.send(embed=embed)
+
+    async def _apply_ability_item(self, ctx, item_name, target, decide):
+        """
+        The shared half of `!capsule` and `!patch`.
+
+        `decide(current, standards, hidden)` returns (new_ability, complaint) - the two
+        rulings live in utils/roster.py so they can be tested without a database. The
+        item is only spent once the swap is known to be possible, which is the whole
+        reason the decision is made before anything is written.
+        """
+        user_id = str(ctx.author.id)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT quantity FROM user_inventory "
+                    "WHERE user_id = ? AND item_name = ?",
+                    (user_id, item_name)) as cursor:
+                held = await cursor.fetchone()
+
+            if not held or held[0] < 1:
+                pretty = item_name.replace('-', ' ').title()
+                return await ctx.send(f"🎒 You do not have an `{pretty}` in your bag.")
+
+            pokemon, complaint = await locate_specimen(
+                db, user_id, target,
+                "cp.instance_id, s.name, cp.ability, s.standard_abilities, "
+                "s.hidden_ability")
+            if complaint:
+                return await ctx.send(complaint)
+
+            instance_id, species, current, standards, hidden = pokemon
+
+            async with db.execute(
+                    "SELECT start_time FROM active_deployments WHERE instance_id = ?",
+                    (instance_id,)) as cursor:
+                if await cursor.fetchone():
+                    return await ctx.send(
+                        f"⚠️ **{species.capitalize()}** is away on a field mission.")
+
+            new_ability, refusal = decide(current, standards, hidden)
+            if refusal:
+                return await ctx.send(refusal)
+
+            await db.execute("UPDATE caught_pokemon SET ability = ? "
+                             "WHERE instance_id = ?", (new_ability, instance_id))
+            if held[0] - 1 <= 0:
+                await db.execute("DELETE FROM user_inventory "
+                                 "WHERE user_id = ? AND item_name = ?",
+                                 (user_id, item_name))
+            else:
+                await db.execute("UPDATE user_inventory SET quantity = quantity - 1 "
+                                 "WHERE user_id = ? AND item_name = ?",
+                                 (user_id, item_name))
+            await db.commit()
+
+        capsule = item_name == 'ability-capsule'
+        embed = discord.Embed(
+            title="💊 Ability Capsule Applied" if capsule else "🩹 Ability Patch Applied",
+            colour=discord.Colour.teal() if capsule else discord.Colour.purple())
+        embed.description = (f"**{species.capitalize()}** (`{instance_id[:8]}`) "
+                             f"reorganised its biology.")
+        embed.add_field(
+            name="Ability",
+            value=f"{(current or 'unknown').replace('-', ' ').title()} → "
+                  f"**{new_ability.replace('-', ' ').title()}**", inline=False)
+        if not capsule:
+            embed.set_footer(text="A Capsule cannot undo this - hidden is a one-way door.")
+        await ctx.send(embed=embed)
+
+    @commands.command(name="capsule", aliases=["abilitycapsule"])
+    @checks.has_started()
+    @checks.is_authorized()
+    @checks.is_not_in_combat()
+    async def use_ability_capsule(self, ctx, target: str = None):
+        """Swap a specimen between its two standard abilities. `!capsule [target]`"""
+        await self._apply_ability_item(ctx, 'ability-capsule', target, capsule_swap)
+
+    @commands.command(name="patch", aliases=["abilitypatch"])
+    @checks.has_started()
+    @checks.is_authorized()
+    @checks.is_not_in_combat()
+    async def use_ability_patch(self, ctx, target: str = None):
+        """Unlock a specimen's hidden ability. `!patch [target]`"""
+        await self._apply_ability_item(
+            ctx, 'ability-patch', target,
+            lambda current, standards, hidden: patch_swap(current, hidden))
 
     @commands.command(name="deploy")
     @checks.has_started()
