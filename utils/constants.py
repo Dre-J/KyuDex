@@ -1815,9 +1815,10 @@ MEGA_STONE_SPECIES = {
     'pidgeotite': 'pidgeot',
     'pinsirite': 'pinsir',
     'pyroarite': 'pyroar',
-    # ...and only the Alolan Raichu, for the same reason as Floette.
-    'raichunite-x': 'raichu-alola',
-    'raichunite-y': 'raichu-alola',
+    # ...and only the KANTONIAN Raichu, which is the opposite shape of problem from
+    # Floette's - see MEGA_STONE_EXACT_FORMS below.
+    'raichunite-x': 'raichu',
+    'raichunite-y': 'raichu',
     'sablenite': 'sableye',
     'salamencite': 'salamence',
     'sceptilite': 'sceptile',
@@ -1844,6 +1845,18 @@ MEGA_STONE_SPECIES = {
 # by holding anything, which is why `may_mega_evolve` keeps a second clause at all.
 MEGA_STONE_FREE_SPECIES = {'rayquaza'}
 
+# Stones that bind to a species EXACTLY, with no fall through to the regional and
+# cosmetic forms sitting under the same base name.
+#
+# Two opposite problems share one table, which is why this set has to exist alongside it.
+# Floette needed the binding to pick a form BELOW the base name - `floette-eternal` - and
+# the base-name fallback handles that on its own, because 'floette-eternal' never equals
+# 'floette'. Raichu needs the reverse: the stone belongs to the plain Kantonian Raichu
+# and must NOT reach Alolan Raichu, whose base name is also 'raichu'. The fallback that
+# makes one Tatsugiri row cover three forms is exactly what would let it through, so the
+# stones that mean "this form and no other" are named here.
+MEGA_STONE_EXACT_FORMS = frozenset({'raichunite-x', 'raichunite-y'})
+
 
 def mega_stone_binds_to(species_name, held_item):
     """
@@ -1851,13 +1864,18 @@ def mega_stone_binds_to(species_name, held_item):
 
     Replaces `'ite' in held_item`, which was true of a White Herb and an Eviolite and of
     every stone for every species. Matching the full name before the base name is what
-    lets `tatsugiri` cover all three of its forms while `raichu-alola` refuses a Kantonian
-    Raichu holding a Raichunite.
+    lets one `tatsugiri` row cover all three of its forms, and MEGA_STONE_EXACT_FORMS is
+    what lets a row opt out of that fallback when the base name is shared with a regional
+    form the stone does not belong to.
     """
-    bound = MEGA_STONE_SPECIES.get((held_item or 'none').lower().replace(' ', '-'))
+    item = (held_item or 'none').lower().replace(' ', '-')
+    bound = MEGA_STONE_SPECIES.get(item)
     if not bound:
         return False
+
     name = (species_name or '').lower().strip()
+    if item in MEGA_STONE_EXACT_FORMS:
+        return bound == name
     return bound == name or bound == name.split('-')[0].strip()
 
 
@@ -1936,18 +1954,23 @@ def z_move_power(base_power):
 
 # The eleven crystals that upgrade ONE move on ONE species instead of a whole element.
 # `species` is matched the same two ways MEGA_STONE_SPECIES is - full name, then base -
-# so `pikachu` covers the cap forms Pikashunium Z needs and `raichu-alola` does not cover
-# a Kantonian Raichu.
+# so `pikachu` covers the cap forms Pikashunium Z needs.
 #
-# Eevium Z is deliberately absent, on the same footing as Phase 1's Blank Plate: Extreme
-# Evoboost is the only Z-Move in the games that is a STATUS move, and the Z path refuses
-# status moves at the button. That is a mechanism this phase does not build, and an
-# unbuildable row is worse in the shop than an honest gap.
+# Eevium Z was held back one phase because Extreme Evoboost is not a damaging Z-Move at
+# all: it boosts all five of Eevee's stats by two and deals nothing. Now that the status
+# Z-Moves below have a mechanism, it is a row like the rest - it simply carries `boost`
+# where the others carry `power`.
 SIGNATURE_Z_CRYSTALS = {
     'aloraichium-z': {'species': 'raichu-alola', 'move': 'thunderbolt',
                       'name': 'Stoked Sparksurfer', 'power': 175},
     'decidium-z':    {'species': 'decidueye', 'move': 'spirit-shackle',
                       'name': 'Sinister Arrow Raid', 'power': 180},
+    # The odd one out: Last Resort is a physical move, and its Z-Move deals no damage.
+    # `boost` is what turns the move into a status one at resolution time.
+    'eevium-z':      {'species': 'eevee', 'move': 'last-resort',
+                      'name': 'Extreme Evoboost',
+                      'boost': [('attack', 2), ('defense', 2), ('special-attack', 2),
+                                ('special-defense', 2), ('speed', 2)]},
     'incinium-z':    {'species': 'incineroar', 'move': 'darkest-lariat',
                       'name': 'Malicious Moonsault', 'power': 180},
     'marshadium-z':  {'species': 'marshadow', 'move': 'spectral-thief',
@@ -1970,6 +1993,74 @@ SIGNATURE_Z_CRYSTALS = {
                       'move': 'natures-madness',
                       'name': 'Guardian of Alola', 'hp_fraction': 0.75},
 }
+
+
+# The wildcard a stat list uses to mean 'every stat'. Block 8's protection sets are
+# its other reader; it lives here because this is the first place the file needs it.
+ALL_STATS = '*'
+
+# ==========================================
+# 🌟 THE STATUS Z-MOVES
+# ==========================================
+# A status move used through a Z-Crystal still does its own job - Swords Dance still
+# raises Attack, Substitute still costs a quarter - and gains a Z-Power effect ON TOP.
+# The engine used to give every one of them the same blanket full heal, which is right
+# for Belly Drum and wrong for the other eighty-odd status moves in the game.
+#
+# The effect is per-move, and these are the ones pinned to their actual Gen VII values:
+#
+#   splash      the joke move that finally does something - Attack up three stages
+#   celebrate   likewise, spread across every stat
+#   conversion  the reason Porygon-Z ever saw a battle
+#   geomancy    a Speed stage on top of the charge, so the turn is not pure loss
+#   belly-drum  restores HP first, so the half the Drum costs is paid back
+#
+# ORDER MATTERS on that last one and it is the reason `heal` is applied BEFORE the move
+# rather than after: a Belly Drum that healed afterwards would undo its own cost AND
+# leave the user at full HP, which is a different and much stronger item.
+#
+# Everything not named here takes Z_STATUS_DEFAULT. That is a deliberate stand-in, not a
+# guess dressed up as data: "reset the user's lowered stages" is a real Gen VII Z-Power
+# effect, it is useful without being strong, and it cannot be absurd on any move the way
+# an invented +3 to a random stat could be. Filling in eighty rows from memory is how a
+# table becomes confidently wrong, so the rest wait for a reference.
+Z_STATUS_EFFECTS = {
+    'splash':     {'stats': [('attack', 3)]},
+    'celebrate':  {'stats': [(ALL_STATS, 1)]},
+    'conversion': {'stats': [(ALL_STATS, 1)]},
+    'geomancy':   {'stats': [('speed', 1)]},
+    'belly-drum': {'heal': True},
+}
+
+# The stand-in described above. Named rather than inlined so that the day a reference
+# turns up, the thing to delete is obvious.
+Z_STATUS_DEFAULT = {'reset': True}
+
+# The five stats ALL_STATS expands to in a Z-Power effect. Deliberately not accuracy or
+# evasion, which is the same ruling the Starf Berry gets and for the same reason.
+Z_BOOSTABLE_STATS = ('attack', 'defense', 'special-attack', 'special-defense', 'speed')
+
+
+def z_status_effect_for(move_name):
+    """
+    The Z-Power effect a status move carries, which is never None.
+
+    Callers apply this IN ADDITION to the move's own effect - a Z-Move does not replace
+    the move it upgrades.
+    """
+    return Z_STATUS_EFFECTS.get(
+        (move_name or '').lower().replace(' ', '-'), Z_STATUS_DEFAULT)
+
+
+def expand_z_stats(stats):
+    """Turn a Z-Power stat list into (stat, stages) pairs, unrolling ALL_STATS."""
+    unrolled = []
+    for stat, stages in stats or ():
+        if stat == ALL_STATS:
+            unrolled += [(s, stages) for s in Z_BOOSTABLE_STATS]
+        else:
+            unrolled.append((stat, stages))
+    return unrolled
 
 
 def signature_z_for(species_name, held_item, move_name):
@@ -3039,7 +3130,9 @@ ALLY_DODGE_ABILITIES = {'telepathy'}
 # Everything here reads the same event: ANOTHER specimen lowering a stage. A specimen's
 # own drops are its own business - Close Combat's Defense and Overheat's Sp. Atk are the
 # price of the move, and nothing on this page refuses them.
-ALL_STATS = '*'
+#
+# ALL_STATS moved above the Phase 8 shelf, which needs it for the Z-Power effects
+# that boost every stat at once. It is the same wildcard, defined once.
 
 # The payload speaks PokeAPI's stat names, the stage block speaks the database's. This
 # mapping is the only bridge between them, so anything not named here is not a stage and
