@@ -483,6 +483,17 @@ class Account(commands.Cog):
                    "statistics, your tokens and items, market and GTS activity, and "
                    "per-server contribution totals."),
             inline=False)
+        # Disclosed even though there is nothing personal in it, because "we count how
+        # often each command runs" is exactly the sort of thing a player would rather
+        # read here than discover. The absence of attribution is the interesting half,
+        # so it is stated plainly rather than left to be inferred from silence.
+        embed.add_field(
+            name="What is counted but not attributed",
+            value=("How many times each command is run, as a running total per command. "
+                   "**No user is recorded against these** — the table has no column for "
+                   "one — so they say what the bot is used for and nothing about who "
+                   "used it."),
+            inline=False)
         embed.add_field(
             name="How long trade records are kept",
             value=(f"Every transfer — gift, trade, GTS, market — is recorded so that "
