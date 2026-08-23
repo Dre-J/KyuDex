@@ -472,16 +472,23 @@ class ActiveTradeView(discord.ui.View):
 
         # Step 2: Fallback to Database for standard trades
         if not new_species_name:
+            # COALESCE, because a trade evolution's requirement lives in `held_item` and
+            # this read only ever looked at `item_name` - which is NULL for every single
+            # trade rule in the table. The `if required_item` below was therefore always
+            # false and every trade evolution fired with empty hands: a Scyther became a
+            # Scizor on any trade at all, no Metal Coat involved. `item_name` is kept in
+            # the read because a trade rule is allowed to name one, and one day might.
             await cursor.execute(
-                "SELECT evolved_species_id, item_name FROM evolution_rules WHERE base_species_id = ? AND trigger_name = 'trade'", 
+                "SELECT evolved_species_id, COALESCE(held_item, item_name) "
+                "FROM evolution_rules WHERE base_species_id = ? AND trigger_name = 'trade'",
                 (base_pokedex_id,)
             )
             db_evo = await cursor.fetchone()
-            
+
             if db_evo:
                 potential_dex_id = db_evo[0]
                 required_item = db_evo[1]
-                
+
                 if required_item:
                     if held_item_clean == str(required_item).strip().lower():
                         new_dex_id = potential_dex_id

@@ -3,7 +3,8 @@ from discord.ext import commands
 import aiosqlite
 import time
 import random
-from utils.constants import DB_FILE
+from utils.constants import DB_FILE, current_skies
+from utils.db_manager import check_evolution_trigger
 from utils.formulas import get_xp_requirement
 from utils.accounts import levelup_pings_enabled
 
@@ -145,39 +146,43 @@ class PassiveExperienceCog(commands.Cog):
                     
                     # The Everstone Bypass Shield
                     if held_item != 'everstone':
-                        async with db.execute("SELECT evolved_species_id, trigger_name, min_level, min_happiness FROM evolution_rules WHERE base_species_id = ?", (pokedex_id,)) as cursor:
-                            evo_options = await cursor.fetchall()
+                        # THE central rulebook, which until now nothing called: this
+                        # cog carried its own copy, and that copy said `req_level and
+                        # new_level >= req_level`. The `req_level and` meant a rule with
+                        # no minimum level could never fire, which is why Sneasel could
+                        # not become Weavile at any level; and the `happiness` trigger it
+                        # checked beside it does not exist in this table, so no friendship
+                        # evolution had ever fired either. The shared version knows about
+                        # the held item and the time of day as well.
+                        match = await check_evolution_trigger(
+                            db, pokedex_id, new_level, happiness,
+                            current_skies(), held_item)
 
-                        for evolved_id, trigger, req_level, req_happy in evo_options:
-                            can_evolve = False
-                            if trigger == 'level-up' and req_level and new_level >= req_level: can_evolve = True
-                            elif trigger == 'happiness' and req_happy and happiness >= req_happy: can_evolve = True
-                                
-                            if can_evolve:
-                                async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
-                                    evo_data = await cursor.fetchone()
-                                    
-                                if evo_data:
-                                    new_species_name, ev_standards, ev_hidden = evo_data
-                                    new_species_name = new_species_name.capitalize()
-                                    
-                                    # Trait Mapping
-                                    is_ha = (current_ability == current_hidden)
-                                    slot_index = 0
-                                    
-                                    if not is_ha and current_standards:
-                                        st_list = [a.strip() for a in current_standards.split(",")]
-                                        if current_ability in st_list:
-                                            slot_index = st_list.index(current_ability)
-                                            
-                                    if is_ha and ev_hidden:
-                                        new_ability = ev_hidden
-                                    else:
-                                        ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
-                                        new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+                        if match:
+                            evolved_id = match[0]
+                            async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
+                                evo_data = await cursor.fetchone()
 
-                                    possible_evolution = {"id": evolved_id, "name": new_species_name, "ability": new_ability}
-                                    break # Stop at the first valid evolution found
+                            if evo_data:
+                                new_species_name, ev_standards, ev_hidden = evo_data
+                                new_species_name = new_species_name.capitalize()
+
+                                # Trait Mapping
+                                is_ha = (current_ability == current_hidden)
+                                slot_index = 0
+
+                                if not is_ha and current_standards:
+                                    st_list = [a.strip() for a in current_standards.split(",")]
+                                    if current_ability in st_list:
+                                        slot_index = st_list.index(current_ability)
+
+                                if is_ha and ev_hidden:
+                                    new_ability = ev_hidden
+                                else:
+                                    ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
+                                    new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+
+                                possible_evolution = {"id": evolved_id, "name": new_species_name, "ability": new_ability}
 
                     # ==========================================
                     # 8. ANNOUNCE THE LEVEL UP / EVOLUTION
