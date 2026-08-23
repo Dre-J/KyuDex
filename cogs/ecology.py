@@ -41,6 +41,7 @@ from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES)
+from utils.filters import parse_filters, filter_help
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
@@ -3366,55 +3367,33 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def inventory(self, ctx, *, search_query: str = ""):
-        user_id = str(ctx.author.id)
-        
-        # 1. Base CTE Parameters (This ensures Box Numbers are mapped correctly!)
-        cte_params = [user_id]
-        
-        # 2. Dynamic Outer Filters
-        outer_where_clauses = ["1=1"] # Default to true so we can easily append with AND
-        outer_params = []
-        order_clause = "ORDER BY cp.box_number ASC"
-        
-        # --- The Smart Parser ---
-        if search_query:
-            args = search_query.lower().split()
-            for arg in args:
-                # 🏷️ TAG FILTER
-                if arg.startswith("tag:") or arg.startswith("label:"):
-                    val = arg.split(":")[1]
-                    outer_where_clauses.append("LOWER(cp.custom_tag) = ?")
-                    outer_params.append(val)
-                    
-                # 💧 TYPE FILTER 
-                elif arg.startswith("type:"):
-                    val = arg.split(":")[1]
-                    outer_where_clauses.append("EXISTS (SELECT 1 FROM base_pokemon_types t WHERE t.pokedex_id = cp.pokedex_id AND LOWER(t.type_name) = ?)")
-                    outer_params.append(val)
-                    
-                # ✨ SHINY FILTER
-                elif arg in ["shiny", "is:shiny"]:
-                    outer_where_clauses.append("cp.is_shiny = 1")
-                    
-                # 🔀 SORTING
-                elif arg.startswith("sort:"):
-                    val = arg.split(":")[1]
-                    if val in ["iv", "ivs", "stats"]:
-                        order_clause = "ORDER BY (cp.iv_hp + cp.iv_attack + cp.iv_defense + cp.iv_sp_atk + cp.iv_sp_def + cp.iv_speed) DESC"
-                    elif val in ["name", "az"]:
-                        order_clause = "ORDER BY COALESCE(cp.nickname, cp.name) ASC"
-                    elif val in ["tag", "label"]:
-                        order_clause = "ORDER BY cp.custom_tag DESC, cp.box_number DESC"
-                    elif val in ["desc", "new"]:
-                        order_clause = "ORDER BY cp.box_number DESC"
-                        
-                # 🔍 NAME SEARCH (Fixed the alias crash!)
-                elif ":" not in arg:
-                    outer_where_clauses.append("(LOWER(cp.name) LIKE ? OR LOWER(cp.nickname) LIKE ?)")
-                    outer_params.extend([f"%{arg}%", f"%{arg}%"])
+        """
+        Your PC, with filters that stack.
 
-        outer_where_string = " AND ".join(outer_where_clauses)
-        final_params = cte_params + outer_params # Combine CTE params with the Outer params
+        `!pc .shiny .ivs d` · `!pc .spatkiv 31 .nature adamant` · `!pc .help`
+
+        THE PARSER LIVES IN utils/filters.py, not here. It used to be a chain of
+        `startswith` tests written inline in this handler - four filters, no way to test
+        any of them without a Discord context, and column names being pasted into an
+        f-string right beside the values. Every column now comes out of a fixed map and
+        every value is a bound parameter, which is worth the move on its own.
+        """
+        user_id = str(ctx.author.id)
+
+        if search_query.strip().lower() in ('.help', 'help', '.filters', '?'):
+            embed = discord.Embed(title="📋 PC Filters",
+                                  description=filter_help(),
+                                  colour=discord.Colour.green())
+            return await ctx.send(embed=embed)
+
+        clauses, params, order_clause, applied, complaint = parse_filters(search_query)
+        if complaint:
+            # ONE bad filter refuses the WHOLE query. A list that quietly ignored half
+            # the request is the one that gets a specimen released by mistake.
+            return await ctx.send(f"{complaint}\n*Nothing was filtered - fix that and "
+                                  f"try again, or run `!pc .help`.*")
+
+        where_string = " AND ".join(["1=1"] + clauses)
 
         try:
             async with aiosqlite.connect(DB_FILE) as db:
@@ -3422,62 +3401,79 @@ class Ecology(commands.Cog):
                     user_data = await cursor.fetchone()
                 tokens = user_data[0] if user_data else 0
 
-                # --- The Anchored Query ---
+                # The CTE carries every column a filter can name. It used to carry the
+                # eight the display needed, which is why the old parser could only ever
+                # filter on four things - the columns simply were not there to ask about.
                 query = f"""
                     WITH AnchoredRoster AS (
-                        SELECT 
-                            s.name, cp.level, cp.is_shiny, cp.instance_id, 
+                        SELECT
+                            s.name, cp.level, cp.is_shiny, cp.instance_id,
                             cp.nickname, cp.custom_tag, cp.pokedex_id, cp.user_id,
                             cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                            cp.nature, cp.ability, cp.gender, cp.happiness, cp.gmax_factor,
+                            cp.original_user_id, cp.is_starter, cp.origin_language,
+                            cp.height_multiplier, cp.held_item,
                             ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
                         FROM caught_pokemon cp
                         JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ? 
+                        WHERE cp.user_id = ?
                         AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
                         AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
                     )
-                    SELECT 
+                    SELECT
                         cp.name, cp.level, cp.is_shiny, cp.instance_id, cp.nickname, cp.custom_tag,
-                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, cp.box_number
+                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
+                        cp.box_number, cp.gmax_factor, cp.gender, cp.nature
                     FROM AnchoredRoster cp
-                    WHERE {outer_where_string}
+                    WHERE {where_string}
                     {order_clause}
                 """
-                
-                async with db.execute(query, final_params) as cursor:
+
+                async with db.execute(query, [user_id] + params) as cursor:
                     rows = await cursor.fetchall()
-                    
+
         except Exception as e:
             print(f"🚨 SQL ERROR IN PC COMMAND: {e}")
             return await ctx.send("❌ A database error occurred while filtering your PC. Please check your search terms.")
-            
+
         # --- Formatting the Output ---
         if not rows:
-            return await ctx.send("🎒 No specimens match your search filters!")
-        
+            summary = (" · ".join(applied)) if applied else "no filters"
+            return await ctx.send(
+                f"🎒 No specimens match **{summary}**.\n"
+                f"*Run `!pc` with no filters to see everything, or `!pc .help`.*")
+
         lines = []
         for row in rows:
             species_name, level, is_shiny, tag_id, nickname, custom_tag = row[0:6]
             iv_tuple = row[6:12]
-            box_number = row[12] 
-            
+            box_number, gmax, gender, nature = row[12:16]
+
             iv_total = sum(iv_tuple)
             iv_percentage = int((iv_total / 186.0) * 100)
-            
+
             display_name = f'"{nickname}" ({species_name.capitalize()})' if nickname else species_name.capitalize()
             shiny_icon = "🌟" if is_shiny else "🌿"
             tag_display = f" `[{custom_tag}]`" if custom_tag else ""
-            
-            line = f"**#{box_number}** | {shiny_icon} **{display_name}** | Lvl {level} | IV: {iv_percentage}% | Tag: `{tag_id[:8]}`{tag_display}"
+            gmax_display = " 🔴" if gmax else ""
+            gender_display = {'M': " ♂", 'F': " ♀"}.get(gender, "")
+
+            line = (f"**#{box_number}** | {shiny_icon} **{display_name}**{gender_display}{gmax_display} "
+                    f"| Lvl {level} | IV: {iv_percentage}% | Tag: `{tag_id[:8]}`{tag_display}")
             lines.append(line)
-  
+
         view = InventoryPaginator(ctx, lines, tokens)
         initial_embed = view.create_embed()
-        
-        if search_query:
-            initial_embed.title = f"📋 Filtered Survey Results"
-            initial_embed.set_footer(text=f"Filter: '{search_query}' | " + initial_embed.footer.text)
-            
+
+        if applied:
+            # What ACTUALLY took effect, not what was typed. A filter that resolved to
+            # something other than the player expected - `.gender f` becoming `F`, a
+            # mention becoming an ID - is only debuggable if the line says so.
+            initial_embed.title = "📋 Filtered Survey Results"
+            initial_embed.set_footer(
+                text=f"{len(rows)} match · " + " · ".join(applied) + " | "
+                     + initial_embed.footer.text)
+
         await ctx.send(embed=initial_embed, view=view)
 
     @commands.command(name="catch")

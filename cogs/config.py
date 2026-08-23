@@ -287,7 +287,13 @@ class Config(commands.Cog):
     # ==========================================
     # THE COMMAND
     # ==========================================
-    @commands.group(name="config", aliases=["settings"],
+    # `settings` USED TO BE AN ALIAS HERE and is not any more: it now belongs to the
+    # per-trainer preferences in cogs/account.py. A player typing `!settings` wants
+    # their own timezone, not a server panel that answers "you need Manage Server" -
+    # and this command's real name has always been `!config`, which is what everything
+    # documents and what the panel itself tells people to type. `serverconfig` replaces
+    # the alias so nothing that pointed here is simply gone.
+    @commands.group(name="config", aliases=["serverconfig", "guildconfig"],
                     invoke_without_command=True)
     @commands.guild_only()
     async def config(self, ctx):

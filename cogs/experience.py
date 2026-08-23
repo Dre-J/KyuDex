@@ -4,6 +4,7 @@ import aiosqlite
 import time
 import random
 from utils.constants import DB_FILE, current_skies
+from utils.prefs import trainer_skies
 from utils.db_manager import check_evolution_trigger
 from utils.formulas import get_xp_requirement
 from utils.accounts import levelup_pings_enabled
@@ -159,7 +160,10 @@ class PassiveExperienceCog(commands.Cog):
                         # the held item and the time of day as well.
                         match = await check_evolution_trigger(
                             db, pokedex_id, new_level, happiness,
-                            current_skies(), held_item, known_moves)
+                            await trainer_skies(
+                                db, user_id,
+                                message.guild.id if message.guild else None),
+                            held_item, known_moves)
 
                         if match:
                             evolved_id = match[0]

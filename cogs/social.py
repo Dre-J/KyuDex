@@ -6,6 +6,8 @@ from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
                            log_trade, snapshot)
 from utils.limits import (ENERGY_MAX, ENERGY_BANK_CAP, ENERGY_REGEN_PER_HOUR,
                           describe_energy, regenerate_energy)
+from utils.constants import current_skies
+from utils.prefs import SOURCE_USER, now_in, resolve_timezone
 from utils.roster import bump_to_end_of_box
 from utils import checks, trading
 import time
@@ -1159,9 +1161,14 @@ class Social(commands.Cog):
                     LIMIT 10
                 """, (guild_id,)) as cursor:
                         results = await cursor.fetchall()
-                
-                embed = discord.Embed(title=f"📍 Local Ecosystem Leaders: {ctx.guild.name}", color=discord.Color.green())
-                embed.description = "The top 10 researchers maintaining this specific server's habitat."
+
+                    # INSIDE the else. These two lines sat one indent to the left, so
+                    # they ran after both branches and overwrote whatever the global
+                    # branch had just built: `!leaderboard global` fetched the worldwide
+                    # totals correctly and then titled them "Local Ecosystem Leaders",
+                    # naming whichever server the command happened to be typed in.
+                    embed = discord.Embed(title=f"📍 Local Ecosystem Leaders: {ctx.guild.name}", color=discord.Color.green())
+                    embed.description = "The top 10 researchers maintaining this specific server's habitat."
 
             if not results:
                 await ctx.send("No environmental data has been recorded for this leaderboard yet!")
@@ -1278,6 +1285,12 @@ class Social(commands.Cog):
                 # Get total catches
                 async with db.execute("SELECT COUNT(*) FROM caught_pokemon WHERE user_id = ?", (user_id,)) as cursor:
                     total_catches = (await cursor.fetchone())[0]
+
+                # The clock the day/night evolutions are read off. Shown here because a
+                # trainer whose Umbreon will not appear has no other way to find out
+                # what time the bot thinks it is for them - and guessing at that is the
+                # difference between a mechanic and a bug.
+                zone, zone_source = await resolve_timezone(db, user_id, guild_id)
             
             # ==========================================
             # LAZY-EVALUATION ENERGY MATH
@@ -1329,6 +1342,16 @@ class Social(commands.Cog):
             
             # --- Inject the Stamina row ---
             embed.add_field(name="🔋 Field Energy", value=f"{meter}\n*{regen_text}*", inline=False)
+
+            local_skies = current_skies(now_in(zone))
+            sky_icon = "🌙" if 'night' in local_skies else "☀️"
+            clock_note = ("*Set yours with `!settings timezone`*"
+                          if zone_source != SOURCE_USER else f"*{zone}*")
+            embed.add_field(
+                name=f"{sky_icon} Your Clock",
+                value=(f"**{now_in(zone).strftime('%H:%M')}** · "
+                       f"{'/'.join(sorted(local_skies))}\n{clock_note}"),
+                inline=False)
             
             embed.add_field(name="Global Eco-Tokens", value=f"🪙 {tokens:,}", inline=True)
             embed.add_field(name="Local Contribution", value=f"⭐ {contribution:,} points", inline=True)

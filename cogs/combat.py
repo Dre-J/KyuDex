@@ -23,6 +23,7 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
                              z_status_effect_for, expand_z_stats)
 from utils.directives import credit_cull, credit_evolution
+from utils.prefs import trainer_skies
 from utils.limits import (ENERGY_MAX, ENERGY_REGEN_PER_HOUR, ENERGY_DUEL_COST,
                           ENERGY_DEBT_FLOOR, energy_yield, describe_energy,
                           regenerate_energy)
@@ -2144,7 +2145,7 @@ async def roll_species_ability(db, pokedex_id, rng=random):
 # was still a coin flip. Imported from utils.formulas now, like everything else here.
 
 
-async def check_for_evolution(db, user_id, specimen, combat_log):
+async def check_for_evolution(db, user_id, specimen, combat_log, guild_id=None):
     """
     Checks if a specimen has hit its genetic threshold for level-based evolution.
 
@@ -2177,7 +2178,8 @@ async def check_for_evolution(db, user_id, specimen, combat_log):
             happiness, known_moves = (row[0] or 0), [m for m in row[1:] if m]
 
     evo_data = await check_evolution_trigger(
-        db, current_pokedex_id, current_level, happiness, current_skies(),
+        db, current_pokedex_id, current_level, happiness,
+        await trainer_skies(db, user_id, guild_id),
         resolve_persisted_item(specimen), known_moves)
 
     # 2. If an evolution is found, return the prompt and the new species ID!
@@ -4551,10 +4553,10 @@ class BattleDashboard(discord.ui.View):
         await interaction.edit_original_response(
             embed=embed, view=self, attachments=scene_attachment(embed, battle_file))
 
-    async def check_for_evolution(self, db, user_id, specimen, combat_log):
+    async def check_for_evolution(self, db, user_id, specimen, combat_log, guild_id=None):
         """Thin wrapper so existing PvE call sites keep working. See the module-level
         implementation, which the PvP resolver on the Combat cog also uses."""
-        return await check_for_evolution(db, user_id, specimen, combat_log)
+        return await check_for_evolution(db, user_id, specimen, combat_log, guild_id)
 
 
     async def handle_transformation(self, interaction: discord.Interaction):
@@ -7567,7 +7569,9 @@ class BattleDashboard(discord.ui.View):
                                     else:
                                         print(f"\n[DEBUG EVO PvE] 1. Checking evolution for {p['name']} (Level {p['level']})")
                                         try:
-                                            evo_msg, target_species = await self.check_for_evolution(db, self.user_id, p, combat_log)
+                                            evo_msg, target_species = await self.check_for_evolution(
+                                                db, self.user_id, p, combat_log,
+                                                getattr(getattr(self.ctx, "guild", None), "id", None))
                                             print(f"[DEBUG EVO PvE] 2. check_for_evolution returned -> msg: {bool(evo_msg)}, target: {target_species}")
                                             
                                             if evo_msg:
@@ -10156,7 +10160,9 @@ class Combat(commands.Cog):
                                                     # NOTE: this runs on the Combat cog itself, so there is no
                                                     # `self.cog` here, and check_for_evolution is not a Combat
                                                     # method either - it lives at module level for both engines.
-                                                    evo_msg, target_species = await check_for_evolution(db, user_id, p, combat_log)
+                                                    evo_msg, target_species = await check_for_evolution(
+                                                        db, user_id, p, combat_log,
+                                                        getattr(getattr(state.get("message_obj"), "guild", None), "id", None))
 
                                                     if evo_msg:
                                                         rewards_log += evo_msg
