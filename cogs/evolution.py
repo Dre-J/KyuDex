@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from utils.prefs import trainer_skies
 from utils.constants import (DB_FILE, current_skies, RITUAL_TRIGGERS,
                              RITUAL_MIN_LEVEL, RITUAL_KEYWORD)
 from utils import checks
@@ -118,7 +119,9 @@ class Evolution(commands.Cog):
                                 f"{pretty} for this to work - owning one is not enough. "
                                 f"Give it the {pretty} with `!give`, then try again.")
 
-                        skies = current_skies()
+                        skies = await trainer_skies(
+                            db, ctx.author.id,
+                            ctx.guild.id if ctx.guild else None)
                         for rule in held_rules:
                             if not rule[4] or rule[4] in skies:
                                 held_route = rule

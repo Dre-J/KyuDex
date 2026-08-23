@@ -27,6 +27,10 @@ from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary,
                             levelup_pings_enabled, reset_available_at,
                             set_levelup_pings, wipe_user)
 from utils.constants import DB_FILE
+from utils.constants import current_skies
+from utils.prefs import (COMMON_ZONES, SOURCE_DEFAULT, SOURCE_GUILD,
+                         SOURCE_USER, clear_timezone, describe_zone, now_in,
+                         resolve_timezone, resolve_zone, set_timezone)
 from utils.trading import LOG_RETENTION_DAYS, purge_expired_logs
 
 # Long enough to read the list, short enough that nobody wanders off mid-confirmation.
@@ -308,6 +312,120 @@ class Account(commands.Cog):
             await ctx.send("🔕 Level-up announcements are **off**. Evolution prompts "
                            "still appear — they need an answer, and there is no other "
                            "way to reach a level-up evolution.")
+
+    # ==========================================
+    # SETTINGS - the trainer's own preferences
+    # ==========================================
+    # Distinct from `!config`, which is the SERVER's settings and needs Manage Server.
+    # These belong to one person and travel with them between servers, which is the whole
+    # point of the timezone: a specimen must not behave differently depending on where
+    # its owner happened to type the command.
+    @commands.group(name="settings", aliases=["prefs", "preferences"],
+                    invoke_without_command=True)
+    @checks.has_started()
+    async def settings(self, ctx):
+        """Your personal preferences. `!settings timezone Europe/London`"""
+        user_id = str(ctx.author.id)
+        guild_id = ctx.guild.id if ctx.guild else None
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            zone, source = await resolve_timezone(db, user_id, guild_id)
+            pings = await levelup_pings_enabled(db, user_id)
+
+        skies = current_skies(now_in(zone))
+        origin = {SOURCE_USER: "your own setting",
+                  SOURCE_GUILD: "this server's setting",
+                  SOURCE_DEFAULT: "the default"}[source]
+
+        embed = discord.Embed(
+            title=f"⚙️ {ctx.author.name}'s Preferences",
+            colour=discord.Colour.blurple())
+        embed.add_field(
+            name="🕒 Timezone",
+            value=(f"**{describe_zone(zone)}**\n"
+                   f"*From {origin}.* Day/night is currently "
+                   f"**{'/'.join(sorted(skies))}**.\n"
+                   f"`!settings timezone <zone>`"),
+            inline=False)
+        embed.add_field(
+            name="🔔 Level-up announcements",
+            value=f"**{'on' if pings else 'off'}** · `!notify on` / `!notify off`",
+            inline=False)
+
+        # The nudge lives here too, not only on the evolution that failed - somebody who
+        # opens the panel is already asking the question this answers.
+        if source != SOURCE_USER:
+            embed.set_footer(
+                text="Time-gated evolutions - Umbreon, Espeon, the Lycanroc forms - "
+                     "read your timezone. Set yours so they match your own evening.")
+        await ctx.send(embed=embed)
+
+    @settings.command(name="timezone", aliases=["tz", "time"])
+    @checks.has_started()
+    async def settings_timezone(self, ctx, *, zone: str = None):
+        """
+        Set the clock your day/night evolutions are read off.
+
+        `!settings timezone Europe/London`, `!settings timezone new york`, or an
+        abbreviation like `PST`. `!settings timezone reset` hands you back to the
+        server's clock.
+        """
+        user_id = str(ctx.author.id)
+        guild_id = ctx.guild.id if ctx.guild else None
+
+        # No argument READS it back rather than guessing. Same rule `!notify` follows:
+        # changing an unseen setting is how people end up somewhere they did not intend.
+        if zone is None:
+            async with aiosqlite.connect(DB_FILE) as db:
+                current, source = await resolve_timezone(db, user_id, guild_id)
+            skies = current_skies(now_in(current))
+            origin = {SOURCE_USER: "Your own setting.",
+                      SOURCE_GUILD: "Inherited from this server - you have not set one.",
+                      SOURCE_DEFAULT: "The default - you have not set one."}[source]
+            examples = ", ".join(f"`{z}`" for z in COMMON_ZONES[:6])
+            return await ctx.send(
+                f"🕒 **{describe_zone(current)}**\n"
+                f"*{origin}* It is currently **{'/'.join(sorted(skies))}** for you.\n\n"
+                f"Change it with `!settings timezone <zone>` - {examples}.")
+
+        if zone.strip().lower() in ('reset', 'clear', 'default', 'none', 'unset'):
+            async with aiosqlite.connect(DB_FILE) as db:
+                await clear_timezone(db, user_id)
+                await db.commit()
+                fallback, source = await resolve_timezone(db, user_id, guild_id)
+            return await ctx.send(
+                f"🕒 Cleared. Your clock falls back to **{describe_zone(fallback)}**"
+                f"{' (this server)' if source == SOURCE_GUILD else ''}.")
+
+        resolved, complaint, suggestions = resolve_zone(zone)
+        if not resolved:
+            hint = ""
+            if suggestions:
+                hint = "\n\nDid you mean: " + " · ".join(f"`{s}`" for s in suggestions)
+            return await ctx.send(f"{complaint}{hint}")
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            stored = await set_timezone(db, user_id, resolved)
+            await db.commit()
+
+        if not stored:
+            return await ctx.send(
+                "⚠️ This database cannot store a timezone yet, so the setting was not "
+                "saved. Day and night stay on UTC for now.")
+
+        skies = current_skies(now_in(resolved))
+        note = ""
+        if resolved.startswith('Etc/GMT'):
+            # They gave a raw offset. It works, and it will be wrong for half the year
+            # if their country changes its clocks - worth saying once, at the moment
+            # they choose it, rather than in a bug report next spring.
+            note = ("\n⚠️ That is a fixed offset, so it will not follow daylight saving. "
+                    "A place name such as `Europe/London` handles the clock change for "
+                    "you.")
+        await ctx.send(
+            f"🕒 Timezone set to **{describe_zone(resolved)}**.\n"
+            f"It is **{'/'.join(sorted(skies))}** for you, so time-gated evolutions "
+            f"will read it that way.{note}")
 
     # ==========================================
     # PRIVACY - keeps nothing
