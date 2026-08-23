@@ -86,6 +86,92 @@ def describe_yield(multiplier):
     return f"diminishing returns · {int(round(multiplier * 100))}% haul"
 
 
+# ==========================================
+# FIELD ENERGY
+# ==========================================
+# The npcduel stamina meter. The numbers live here rather than in cogs/combat.py because
+# they were declared as locals INSIDE check_and_consume_energy and then declared a second
+# time inside `!profile` - two copies of 100 and 10 that agreed only by luck, and which a
+# change to one would have silently desynchronised.
+#
+# TWO CHANGES to what that meter used to do:
+#
+# 1. THE REFUSAL IS GONE. Running dry used to end the command - "your team is exhausted,
+#    come back later" - which is the same blunt wall the expedition cap used to be, and
+#    it lands on exactly the person who is enjoying the game most. Energy goes NEGATIVE
+#    now: the duel happens, and what thins is the payout. "This next hour is less
+#    efficient" is a thing a player can decide to accept; "come back later" is not.
+#
+# 2. IT BANKS WHILE YOU ARE AWAY, to ENERGY_BANK_CAP rather than stopping at a full
+#    reserve. Somebody who plays every third day used to watch two days of regeneration
+#    evaporate against the ceiling. They now come back to a real session.
+ENERGY_MAX = 100            # a full reserve; what "rested" means, and the regen target
+ENERGY_BANK_CAP = 200       # regeneration keeps going past full, to here
+ENERGY_REGEN_PER_HOUR = 10
+ENERGY_DUEL_COST = 10
+
+# The deficit is capped at one whole reserve. Past that a duellist is at the floor and
+# stays there however long they keep going - a slope that bottoms out, not a pit. The
+# half-life is set so that the floor multiplier is reached EXACTLY at the debt floor:
+# 0.5 ** (100/50) == 0.25. If you change one of these three, check the other two.
+ENERGY_DEBT_FLOOR = -ENERGY_MAX
+ENERGY_FATIGUE_HALF_LIFE = 50
+ENERGY_FATIGUE_FLOOR = 0.25
+
+
+def energy_yield(energy_before):
+    """
+    The multiplier on a duel's payout, given the reserve BEFORE its cost is taken.
+
+    A full-price duel while any energy remains, then halving every
+    ENERGY_FATIGUE_HALF_LIFE points of deficit, never below ENERGY_FATIGUE_FLOOR.
+
+    `energy_before` is read before the spend for the same reason `expedition_yield`
+    counts catches before the catch: the duel you are paying for is the one being
+    fought, and charging it at tomorrow's rate would make the meter read as a wall one
+    duel earlier than it is.
+    """
+    energy = energy_before or 0
+    if energy >= 0:
+        return 1.0
+    factor = 0.5 ** (-energy / float(ENERGY_FATIGUE_HALF_LIFE))
+    return max(ENERGY_FATIGUE_FLOOR, factor)
+
+
+def describe_energy(energy):
+    """A short phrase for the meter, or None while there is nothing to say about it."""
+    if energy is None:
+        return None
+    if energy < 0:
+        return f"running on reserves · {int(round(energy_yield(energy) * 100))}% payout"
+    if energy > ENERGY_MAX:
+        return f"banked · {energy - ENERGY_MAX} over a full reserve"
+    return None
+
+
+def regenerate_energy(energy, last_tick, now):
+    """
+    `(energy, last_tick)` brought up to date, without touching a database.
+
+    Whole hours only, and the tick is advanced by exactly the hours that were paid out
+    so a part-hour of progress is never thrown away. Extracted from the cog so the two
+    places that show this meter cannot compute it differently - which they did.
+    """
+    energy = energy or 0
+    last_tick = last_tick or 0
+    if energy >= ENERGY_BANK_CAP:
+        # Already brimming. The tick is pulled forward so that the moment they spend,
+        # the next hour starts from now rather than from whenever they last capped.
+        return ENERGY_BANK_CAP, now
+    hours = max(0, (now - last_tick) // 3600)
+    if hours:
+        energy = min(ENERGY_BANK_CAP, energy + int(hours * ENERGY_REGEN_PER_HOUR))
+        last_tick += hours * 3600
+        if energy >= ENERGY_BANK_CAP:
+            last_tick = now
+    return energy, last_tick
+
+
 def today():
     """The current UTC date as `YYYY-MM-DD`."""
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')

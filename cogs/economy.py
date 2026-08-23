@@ -11,7 +11,7 @@ from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
                            snapshot)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
-from utils.roster import locate_specimen, looks_like_partner
+from utils.roster import locate_specimen, looks_like_partner, bump_to_end_of_box
 from utils.machines import (owns_tm, owned_tms, grant_tm, find_tm, search_tms,
                             filter_tms, species_tms)
 from utils import checks
@@ -94,6 +94,7 @@ class GTSFulfillModal(discord.ui.Modal, title="Fulfill GTS Trade"):
                     # Swap the IDs!
                     await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (target_user_id, offered_id))
                     await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (user_id, gts_instance_id))
+                    await bump_to_end_of_box(db, offered_id, gts_instance_id)
 
                     await db.execute("DELETE FROM gts_deposits WHERE gts_id = ?", (gts_id,))
 
@@ -236,6 +237,7 @@ class GTSSearchPaginator(discord.ui.View):
                 # Atomic Swap!
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (target_user_id, self.preselected_instance))
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (user_id, gts_instance_id))
+                await bump_to_end_of_box(db, self.preselected_instance, gts_instance_id)
 
                 await db.execute("DELETE FROM gts_deposits WHERE gts_id = ?", (gts_id,))
 
@@ -618,6 +620,7 @@ async def process_gts_match(bot, db_file, new_gts_id):
                 # Swap Ownership
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (match_user_id, n_instance))
                 await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (n_user, match_instance))
+                await bump_to_end_of_box(db, n_instance, match_instance)
                 
                 # Remove both from the GTS
                 await db.execute("DELETE FROM gts_deposits WHERE gts_id IN (?, ?)", (new_gts_id, match_gts_id))
@@ -1678,6 +1681,7 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
                     # C. Reassign biological ownership, snapshotting it first.
                     sold = await snapshot(db, [instance_id])
                     await db.execute("UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ?", (buyer_id, instance_id))
+                    await bump_to_end_of_box(db, instance_id)
 
                     # D. Destroy the market listing
                     await db.execute("DELETE FROM global_market WHERE listing_id = ?", (listing_id,))

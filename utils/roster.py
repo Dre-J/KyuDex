@@ -121,6 +121,104 @@ def looks_like_newest(target):
     return target is not None and str(target).lower() in NEWEST_WORDS
 
 
+# ==========================================
+# HOW MANY BOX NUMBERS AT ONCE
+# ==========================================
+# The ceiling exists so that a slip of the keyboard cannot empty a box. `!release 1-500`
+# is a plausible typo for `!release 1-5`; it should be refused, not confirmed.
+MAX_BULK_BOXES = 25
+
+
+def parse_box_numbers(words):
+    """
+    A list of box numbers from `4`, `4 7 12`, `4-9`, or any mix of those.
+
+    Returns `(numbers, complaint)`. `numbers` is sorted and de-duplicated, so `4 4 4`
+    releases one specimen rather than trying to release the same one three times, and
+    an overlapping `1-5 3` is the same request as `1-5`.
+
+    Kept out of the cog because it is the only part of a bulk release that can be got
+    wrong without a database - and it is a parser, which is the part that is worth
+    testing against nonsense rather than against a happy path.
+    """
+    if not words:
+        return [], ("⚠️ Which specimens? `!release 4`, `!release 4 7 12` or "
+                    "`!release 4-9`.")
+
+    found = set()
+    for word in words:
+        token = str(word).strip().strip(',')
+        if not token:
+            continue
+
+        if '-' in token[1:]:
+            # token[1:] so a leading minus is a bad number rather than a bad range.
+            low, _, high = token.partition('-')
+            if not (low.isdigit() and high.isdigit()):
+                return [], f"⚠️ `{token}` is not a range of box numbers. Try `4-9`."
+            low, high = int(low), int(high)
+            if low < 1 or high < 1:
+                return [], "⚠️ Box numbers start at 1."
+            if high < low:
+                return [], f"⚠️ `{token}` runs backwards. Try `{high}-{low}`."
+            # Bounded BEFORE expansion: `1-100000` must not be turned into a hundred
+            # thousand integers on the way to being refused for being too many.
+            if high - low + 1 > MAX_BULK_BOXES:
+                return [], (f"⚠️ `{token}` covers {high - low + 1} specimens. "
+                            f"{MAX_BULK_BOXES} is the most one release can take.")
+            found.update(range(low, high + 1))
+        elif token.isdigit():
+            if int(token) < 1:
+                return [], "⚠️ Box numbers start at 1."
+            found.add(int(token))
+        else:
+            return [], (f"⚠️ `{token}` is not a box number. Use the numbers from "
+                        f"`!box`, e.g. `!release 4 7 12`.")
+
+    if not found:
+        return [], "⚠️ No box numbers given."
+    if len(found) > MAX_BULK_BOXES:
+        return [], (f"⚠️ That is {len(found)} specimens. {MAX_BULK_BOXES} is the most "
+                    f"one release can take - it is a permanent action, and a limit is "
+                    f"the only thing standing between a typo and an empty box.")
+    return sorted(found), None
+
+
+# ==========================================
+# WHERE A SPECIMEN LANDS WHEN IT CHANGES HANDS
+# ==========================================
+async def bump_to_end_of_box(db, *instance_ids):
+    """
+    Move specimens to the end of their new owner's box. Does NOT commit.
+
+    THE BUG THIS FIXES. Box numbers are `ROW_NUMBER() OVER(ORDER BY cp.rowid)` in
+    twenty-eight separate queries, and a rowid is stamped when the specimen was first
+    CAUGHT - by whoever caught it. A transfer only rewrites `user_id`, so a specimen
+    caught in the sender's first week arrives in the recipient's box wearing the rowid
+    of that week, and sorts ahead of things the recipient has owned for months. To a
+    player receiving a gift, their starter stops being Box #1 and the gift takes its
+    place: it reads exactly like the starter was overwritten, because every command
+    that speaks in box numbers now names the gift where it used to name the starter.
+
+    Nothing is overwritten - `instance_id` is the primary key and no two specimens can
+    collide - but "nothing was lost" is not much comfort when `!release 1` is aimed at
+    a different animal than the one the player has in mind.
+
+    Renumbering at the point of transfer rather than changing the twenty-eight queries
+    is deliberate: rowid is the box ordering, it is the ordering `!select new` reads,
+    and the schema has no acquisition timestamp to sort by instead. Nothing in the
+    database references caught_pokemon's rowid - no foreign key, no index, no trigger -
+    so it is free to move, and moving it fixes every one of those queries at once.
+    """
+    for instance_id in instance_ids:
+        if not instance_id:
+            continue
+        await db.execute(
+            "UPDATE caught_pokemon "
+            "SET rowid = (SELECT COALESCE(MAX(rowid), 0) + 1 FROM caught_pokemon) "
+            "WHERE instance_id = ?", (instance_id,))
+
+
 async def locate_specimen(db, user_id, target, columns):
     """
     One of a trainer's specimens, from a box number, a tag prefix, or nothing at all.
