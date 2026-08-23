@@ -12,6 +12,8 @@ from utils.trading import (announce_trade, blocked_from_trading, log_trade,
                            snapshot)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.roster import locate_specimen, looks_like_partner, bump_to_end_of_box
+from utils.filters import (_sort_direction, _tokenise, filter_help,
+                           resolve_query)
 from utils.machines import (owns_tm, owned_tms, grant_tm, find_tm, search_tms,
                             filter_tms, species_tms)
 from utils import checks
@@ -959,11 +961,45 @@ class MarketView(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
+# Flags the market answers itself. Declared to the shared parser so it lets them
+# through rather than refusing them as unknown, and read back by `_market_order`.
+MARKET_ONLY_FLAGS = frozenset({'price', 'cost', 'tokens'})
+
+
+def _market_order(query, order_clause):
+    """
+    Let `.price a|d` sort the market, which is the one thing `!pc` cannot offer.
+
+    Price belongs to the LISTING, not the specimen - there is no such column in
+    caught_pokemon - so teaching the shared parser about it would have meant teaching it
+    about a table `!pc` never touches. Rewriting the clause here keeps that knowledge in
+    the one command that has it, and every other filter still comes from the shared
+    parser untouched.
+    """
+    for flag, value, _explicit in _tokenise(str(query or '')):
+        if flag in MARKET_ONLY_FLAGS and value:
+            direction = _sort_direction(value)
+            if direction:
+                return f"ORDER BY gm.price {direction}, gm.listed_at DESC"
+
+    # THE TIEBREAKER HAS TO GO TOO, not just the default. `cp.box_number` is a
+    # ROW_NUMBER over one trainer's roster - it does not exist on a market listing and
+    # could not mean anything if it did. The shared parser appends it to EVERY sort, so
+    # `.ivs d` arrived here as `ORDER BY (…) DESC, cp.box_number ASC` and SQLite refused
+    # the whole query. Replacing it rather than only replacing the default is the
+    # difference between the market supporting one sort and supporting all of them.
+    return order_clause.replace("cp.box_number", "gm.listed_at")
+
+
 class MarketPaginator(discord.ui.View):
-    def __init__(self, ctx, listings):
+    def __init__(self, ctx, listings, applied=None):
         super().__init__(timeout=180)
         self.ctx = ctx
         self.listings = listings # Array of dictionaries containing the listing data
+        # What the filters resolved to, held on the VIEW so it survives paging - the
+        # `!pc` version of this was being stitched onto page one's footer by the caller
+        # and silently lost the moment anybody pressed Next.
+        self.applied = list(applied or [])
         self.current_page = 0
         self.items_per_page = 5 # 5 items per page keeps the UI clean and readable
         
@@ -982,7 +1018,11 @@ class MarketPaginator(discord.ui.View):
         end = start + self.items_per_page
         chunk = self.listings[start:end]
 
-        if not chunk:
+        if not chunk and self.applied:
+            embed.description = ("No listings match **" + " · ".join(self.applied)
+                                 + "**.\n*Run `!global market view` with no filters to "
+                                   "see everything, or `.help` for the list.*")
+        elif not chunk:
             embed.description = "The market is currently empty. Use `!global market sell` to list an asset!"
         else:
             for item in chunk:
@@ -999,7 +1039,12 @@ class MarketPaginator(discord.ui.View):
                     inline=False
                 )
 
-        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Use !global market buy [Listing ID]")
+        footer = (f"Page {self.current_page + 1}/{self.max_pages}  ·  "
+                  f"{len(self.listings)} listings  ·  "
+                  f"!global market buy [Listing ID]")
+        if self.applied:
+            footer += "\n" + " · ".join(self.applied)
+        embed.set_footer(text=footer)
         return embed
 
     @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary)
@@ -1471,47 +1516,71 @@ class Economy(commands.Cog):
     @global_market.command(name="view", aliases=["browse", "market"])
     @checks.has_started()
     @checks.is_authorized()
-    async def global_market_view(self, ctx):
-        """Browses all active listings on the global market."""
+    async def global_market_view(self, ctx, *, search_query: str = ""):
+        """
+        Browse the market, with the same filters `!pc` uses.
+
+        `!global market view .shiny .ivs d` · `.evo charizard` · `.level 50-100`
+
+        THE SAME PARSER, deliberately. A player who has learned one filter language
+        should not have to learn a second one to shop with it, and the market was the
+        place they most wanted it - a hundred listings with no way to ask for the shiny
+        ones is a wall of text. `cp` is aliased onto the joined caught_pokemon row so
+        every column name the filters know still means what it means in `!pc`.
+        """
+        if search_query.strip().lower() in ('.help', 'help', '.filters', '?'):
+            embed = discord.Embed(title="🌍 Market Filters",
+                                  description=filter_help(),
+                                  colour=discord.Colour.gold())
+            return await ctx.send(embed=embed)
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
                 # 1. GARBAGE COLLECTION: Delete expired listings automatically!
                 await db.execute("DELETE FROM global_market WHERE expires_at < CURRENT_TIMESTAMP")
                 await db.commit()
-                
-                # 2. Fetch all active listings, joining the biological data AND fetching instance_id
-                async with db.execute("""
+
+                (clauses, params, order_clause,
+                 applied, complaint) = await resolve_query(
+                    db, search_query, MARKET_ONLY_FLAGS)
+                if complaint:
+                    return await ctx.send(
+                        f"{complaint}\n*Nothing was filtered - fix that and try again, "
+                        f"or run `!global market view .help`.*")
+
+                # PRICE IS SORTABLE HERE AND NOWHERE ELSE, because it is a property of
+                # the LISTING rather than of the specimen - `!pc` has no such column.
+                # Handled by rewriting the order clause rather than by teaching the
+                # shared parser about a table it does not otherwise know.
+                order_clause = _market_order(search_query, order_clause)
+
+                where = " AND ".join(["1=1"] + clauses)
+                async with db.execute(f"""
                     SELECT gm.listing_id, gm.price, gm.seller_id,
-                        s.name, cp.level, cp.is_shiny, gm.instance_id,
+                        cp.name, cp.level, cp.is_shiny, gm.instance_id,
                         cp.gmax_factor, cp.height_multiplier
                     FROM global_market gm
-                    JOIN caught_pokemon cp ON gm.instance_id = cp.instance_id
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    ORDER BY gm.listed_at DESC
-                """) as cursor:
+                    JOIN (
+                        SELECT c.*, s.name
+                        FROM caught_pokemon c
+                        JOIN base_pokemon_species s ON c.pokedex_id = s.pokedex_id
+                    ) cp ON gm.instance_id = cp.instance_id
+                    WHERE {where}
+                    {order_clause}
+                """, params) as cursor:
                     rows = await cursor.fetchall()
 
-            # 3. Package the data for the UI
-            market_data = []
-            for row in rows:
-                market_data.append({
-                    'list_id': row[0],
-                    'price': row[1],
-                    'seller': row[2],
-                    'name': row[3],
-                    'level': row[4],
-                    'is_shiny': row[5],
-                    'uuid': row[6],
-                    # Carried so the browse list can badge an Alpha or a G-Max specimen
-                    # without opening every listing to find out.
-                    'gmax': row[7],
-                    'h_mult': row[8],
-                })
-                
-            # 4. Boot up the Paginator
-            view = MarketPaginator(ctx, market_data)
+            market_data = [{
+                'list_id': r[0], 'price': r[1], 'seller': r[2], 'name': r[3],
+                'level': r[4], 'is_shiny': r[5], 'uuid': r[6],
+                # Carried so the browse list can badge an Alpha or a G-Max specimen
+                # without opening every listing to find out.
+                'gmax': r[7], 'h_mult': r[8],
+            } for r in rows]
+
+            view = MarketPaginator(ctx, market_data, applied)
             await ctx.send(embed=view.create_embed(), view=view)
-            
+
         except Exception as e:
             print(f"Global Market View Error: {e}")
             await ctx.send("❌ A database error occurred while accessing the market network.")

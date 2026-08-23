@@ -202,7 +202,25 @@ def _tokenise(query):
     return out
 
 
-def parse_filters(query):
+EVO_FLAGS = ('evo', 'evos', 'family', 'line', 'evolution', 'evolutions')
+
+
+def evo_targets(query):
+    """
+    The species named by any `.evo` flag, so a caller can resolve them before parsing.
+
+    `.evo` is the one filter that cannot be answered without the database - an
+    evolutionary family is a graph walk, not a column - and this module is deliberately
+    a pure parser with no connection of its own. So resolution is split in two: the cog
+    asks what needs looking up, looks it up, and hands the answer back to `parse_filters`.
+    The alternative was to give the parser a database handle, which would have made
+    every test of every OTHER filter need one too.
+    """
+    return [value for flag, value, _explicit in _tokenise(str(query or ''))
+            if flag in EVO_FLAGS and value]
+
+
+def parse_filters(query, family_ids=None, extra_flags=()):
     """
     A `!pc` query as `(where_clauses, params, order_by, applied, complaint)`.
 
@@ -253,6 +271,33 @@ def parse_filters(query):
                     f"`.level d` or `.name a`.")
             direction = 'DESC' if target in ('iv', 'ivtotal', 'box') else 'ASC'
             sorted_by = (target, direction)
+            continue
+
+        # --- flags this caller handles itself ---
+        # The market sorts by `.price`, which is a property of the LISTING and has no
+        # column on caught_pokemon. Rather than teach this parser about a table `!pc`
+        # never touches, a caller declares the flags it will deal with and they pass
+        # through here untouched. Without this the shared parser refused `.price` as
+        # unknown before the market's own handler ever saw it.
+        if flag in extra_flags:
+            continue
+
+        # --- `.evo charizard`, resolved by the caller before we got here ---
+        if flag in EVO_FLAGS:
+            if not value:
+                return None, None, None, None, (
+                    "⚠️ `.evo` needs a species, e.g. `.evo charizard` - it shows every "
+                    "member of that evolutionary line.")
+            resolved = (family_ids or {}).get(str(value).strip().lower())
+            if not resolved:
+                return None, None, None, None, (
+                    f"⚠️ `{value}` is not a species I know, so I cannot work out its "
+                    f"evolutionary line.")
+            ids, pretty = resolved
+            clauses.append(
+                f"cp.pokedex_id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+            applied.append(f"{pretty.capitalize()} line ({len(ids)})")
             continue
 
         # --- `.type water`, which is not a column on this table ---
@@ -340,6 +385,25 @@ def parse_filters(query):
     return clauses, params, order_by, applied, None
 
 
+async def resolve_query(db, query, extra_flags=()):
+    """
+    Parse a filter query, resolving any `.evo` against the database first.
+
+    THE ONE DOOR both `!pc` and the market go through. The two-step dance - ask what
+    needs looking up, look it up, parse - is easy to get subtly wrong and there is no
+    reason for two commands to each get it wrong differently.
+
+    Returns exactly what `parse_filters` returns.
+    """
+    families = {}
+    for target in evo_targets(query):
+        from utils.db_manager import evolution_family
+        ids, pretty = await evolution_family(db, target)
+        if ids:
+            families[str(target).strip().lower()] = (ids, pretty)
+    return parse_filters(query, families, extra_flags)
+
+
 def filter_help():
     """The list, for `!pc .help`. Generated from FIELDS so it cannot fall behind."""
     lines = ["**Filters stack.** `!pc .shiny .ivs d`, `!pc .spatkiv 31 .nature adamant`",
@@ -356,6 +420,9 @@ def filter_help():
     lines.append("")
     words = [f"`.{k}`" for k, f in FIELDS.items() if f.kind in ('text', 'like')]
     lines.append("**Words:** " + " ".join(sorted(words)) + " `.type`")
+    lines.append("")
+    lines.append("**`.evo <species>`** shows the whole evolutionary line — "
+                 "`.evo charizard` finds your Charmander too.")
     lines.append("")
     lines.append("A bare word searches species and nicknames: `!pc charizard .shiny`")
     return "\n".join(lines)
