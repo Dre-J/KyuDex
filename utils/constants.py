@@ -2942,6 +2942,13 @@ EVOLUTION_SHOP_ITEMS = {
                          EVOLUTION_STONE_PRICE, '💍'),
     'galarica-wreath':  ("A Galarian garland that reshapes a Slowpoke.",
                          EVOLUTION_STONE_PRICE, '🌿'),
+    # Kubfu's two scrolls, which arrived with the regional-form rules. Worth having on the
+    # shelf for their own sake: they are the ONLY route to either Urshifu that this world
+    # can stage, since the two Towers of Trials it would otherwise need do not exist here.
+    'scroll-of-waters': ("Kubfu reads it and becomes Rapid Strike Urshifu.",
+                         EVOLUTION_STONE_PRICE, '📜'),
+    'scroll-of-darkness': ("Kubfu reads it and becomes Single Strike Urshifu.",
+                           EVOLUTION_STONE_PRICE, '🌘'),
 
     # The items a specimen HOLDS. These are what the migration added a column for.
     'dragon-scale':     ("Held: a Seadra that is traded holding this becomes a Kingdra.",
@@ -3045,6 +3052,50 @@ FULL_MOON_WINDOW = 1.5          # days either side of the exact full moon
 # both match - otherwise Rockruff's three level-25 rules would always resolve to the
 # day one and Lycanroc-Dusk could never be reached.
 SPECIAL_SKIES = frozenset({'dusk', 'full-moon'})
+
+# ==========================================
+# 🩸 EVOLUTIONS THAT ARE EARNED, NOT REACHED
+# ==========================================
+# Some evolutions are triggered by something that HAPPENS rather than by a level, an item
+# or a clock. Two of them are conditions this engine already watches and simply never
+# wrote down:
+#
+#   take-damage          Galarian Yamask becomes a Runerigus after surviving a single
+#                        blow of 49 or more. In the games you then walk under a stone
+#                        arch; there is no overworld here, so surviving the hit IS the
+#                        story and the arch is the part that gets left out.
+#   three-critical-hits  Galarian Farfetch'd becomes a Sirfetch'd after landing three
+#                        criticals in one battle.
+#
+# `column` is the counter on caught_pokemon, `threshold` the figure it must reach, and
+# `per_battle` says whether the counter resets when a new battle starts - a Sirfetch'd
+# wants three criticals in ONE battle, while Runerigus only cares about the hardest hit
+# its Yamask has ever taken.
+CONDITION_TRIGGERS = {
+    'take-damage': {
+        'column': 'biggest_hit_taken', 'threshold': 49, 'per_battle': False,
+        'flavour': "endured a devastating blow and its spirit reshaped the clay",
+    },
+    'three-critical-hits': {
+        'column': 'crits_landed_battle', 'threshold': 3, 'per_battle': True,
+        'flavour': "struck three times with lethal precision and stood taller for it",
+    },
+}
+
+# The triggers left over: things this world has no equivalent of at all. Legends Arceus'
+# Strong Style, the Isle of Armor's two Towers, Basculin's recoil swim. Rather than
+# pretending to model them, a specimen whose only route is one of these can be pushed
+# through it by hand once it is experienced enough - `!evolve <specimen> ritual`.
+#
+# The level is a stand-in, and is named here rather than buried so it reads as the
+# deliberate substitution it is.
+RITUAL_TRIGGERS = frozenset({
+    'strong-style-move', 'agile-style-move', 'use-move', 'tower-of-waters',
+    'tower-of-darkness', 'recoil-damage', 'spin', 'shed', 'three-defeated-bisharp',
+    'gimmmighoul-coins', 'other',
+})
+RITUAL_MIN_LEVEL = 40
+RITUAL_KEYWORD = 'ritual'
 
 # A known new moon, and the mean synodic month. Good to a few hours over a century, which
 # is far better than this needs to be.

@@ -101,7 +101,8 @@ class PassiveExperienceCog(commands.Cog):
                 async with db.execute("""
                     SELECT 
                         cp.level, cp.experience, cp.pokedex_id, cp.happiness, cp.held_item, cp.ability,
-                        s.name, s.growth_rate, s.standard_abilities, s.hidden_ability
+                        s.name, s.growth_rate, s.standard_abilities, s.hidden_ability,
+                        cp.move_1, cp.move_2, cp.move_3, cp.move_4
                     FROM caught_pokemon cp
                     JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
                     WHERE cp.instance_id = ?
@@ -111,7 +112,9 @@ class PassiveExperienceCog(commands.Cog):
                 if not pokemon:
                     return # Failsafe in case the partner data is orphaned
 
-                current_level, current_xp, pokedex_id, happiness, held_item, current_ability, species_name, growth_rate, current_standards, current_hidden = pokemon
+                (current_level, current_xp, pokedex_id, happiness, held_item,
+                 current_ability, species_name, growth_rate, current_standards,
+                 current_hidden, *known_moves) = pokemon
 
                 # Stop if they are already max level
                 if current_level >= 100:
@@ -156,7 +159,7 @@ class PassiveExperienceCog(commands.Cog):
                         # the held item and the time of day as well.
                         match = await check_evolution_trigger(
                             db, pokedex_id, new_level, happiness,
-                            current_skies(), held_item)
+                            current_skies(), held_item, known_moves)
 
                         if match:
                             evolved_id = match[0]

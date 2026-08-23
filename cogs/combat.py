@@ -7,11 +7,12 @@ import aiosqlite
 import random
 import asyncio
 import math
-from utils.formulas import advance_field_tenure, apply_max_sanitisation, apply_item_sustenance, apply_bag_item, bag_item_is_useless, calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, shrugs_off_weather_chip, ignores_hazards, species_form_for, true_species_name, roll_gender, declared_gender, expire_action_markers
+from utils.formulas import record_battle_conditions, advance_field_tenure, apply_max_sanitisation, apply_item_sustenance, apply_bag_item, bag_item_is_useless, calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, shrugs_off_weather_chip, ignores_hazards, species_form_for, true_species_name, roll_gender, declared_gender, expire_action_markers
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
+from utils.db_manager import check_evolution_trigger, check_condition_evolution
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
-from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL,
+from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
                              TM_CATALOG, type_badges, type_icon,
                              PVP_LEVEL_CAPS, parse_level_cap,
                              Z_MOVE_NAMES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS,
@@ -2145,16 +2146,29 @@ async def check_for_evolution(db, user_id, specimen, combat_log):
     current_level = specimen['level']
     current_name = specimen['name']
 
-    # 1. Check the Metamorphosis Rulebook for level-based triggers
-    async with db.execute("""
-        SELECT er.evolved_species_id, s.name
-        FROM evolution_rules er
-        JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
-        WHERE er.base_species_id = ?
-        AND er.trigger_name = 'level-up'
-        AND er.min_level <= ?
-    """, (current_pokedex_id, current_level)) as cursor:
-        evo_data = await cursor.fetchone()
+    # 1. Check the Metamorphosis Rulebook.
+    #
+    # This was a THIRD copy of the rule, and the loosest of the three: `min_level <= ?`
+    # and nothing else, so it ignored the sky, the held item, the friendship figure and
+    # the known move entirely. A Rockruff coming out of a battle at 25 took whichever of
+    # its three rules the database happened to return first, whatever time it was.
+    #
+    # It is the shared rulebook now. Happiness and the moveset are not on the battle
+    # payload, so they are read back for the one specimen that just levelled - which is
+    # cheap, and the alternative is threading them through the whole combat state.
+    happiness, known_moves = 0, []
+    if specimen.get('instance_id'):
+        async with db.execute(
+                "SELECT happiness, move_1, move_2, move_3, move_4 "
+                "FROM caught_pokemon WHERE instance_id = ?",
+                (specimen['instance_id'],)) as cursor:
+            row = await cursor.fetchone()
+        if row:
+            happiness, known_moves = (row[0] or 0), [m for m in row[1:] if m]
+
+    evo_data = await check_evolution_trigger(
+        db, current_pokedex_id, current_level, happiness, current_skies(),
+        resolve_persisted_item(specimen), known_moves)
 
     # 2. If an evolution is found, return the prompt and the new species ID!
     if evo_data:
@@ -6041,6 +6055,7 @@ class BattleDashboard(discord.ui.View):
                         if dmg > 0:
                             defender['last_damage_taken'] = dmg
                             defender['last_damage_class'] = move_stats.get('class', 'physical')
+                            record_battle_conditions(defender, dmg, attacker, msg)
                             # A biding target banks whatever it just absorbed
                             store_bide_damage(defender, dmg)
 
@@ -7489,11 +7504,39 @@ class BattleDashboard(discord.ui.View):
                         # Save the entire team's updated state
                         for p in state['player_team']:
                             if 'instance_id' in p:
+                                # The two battle tallies ride the save that was already
+                                # happening. `biggest_hit_taken` is a high-water mark, so
+                                # MAX rather than assignment - it is the worst blow this
+                                # specimen has ever survived, not the worst one today.
                                 await db.execute("""
-                                    UPDATE caught_pokemon 
-                                    SET level = ?, experience = ?, held_item = ?
+                                    UPDATE caught_pokemon
+                                    SET level = ?, experience = ?, held_item = ?,
+                                        biggest_hit_taken = MAX(COALESCE(biggest_hit_taken, 0), ?),
+                                        crits_landed_battle = ?
                                     WHERE instance_id = ?
-                                """, (p['level'], p['experience'], resolve_persisted_item(p), p['instance_id']))
+                                """, (p['level'], p['experience'], resolve_persisted_item(p),
+                                      p.get('biggest_hit_taken') or 0,
+                                      p.get('crits_landed_battle') or 0,
+                                      p['instance_id']))
+
+                                # AN EVOLUTION THAT WAS EARNED rather than reached. Checked
+                                # for everything that fought, not only for what levelled:
+                                # a Galarian Yamask that survives a huge hit has done the
+                                # thing, whether or not the experience happened to tip over.
+                                earned = await check_condition_evolution(
+                                    db, p['pokedex_id'],
+                                    {'biggest_hit_taken': p.get('biggest_hit_taken') or 0,
+                                     'crits_landed_battle': p.get('crits_landed_battle') or 0})
+                                if earned and resolve_persisted_item(p) != 'everstone':
+                                    new_id, new_name, flavour = earned
+                                    await db.execute(
+                                        "UPDATE caught_pokemon SET pokedex_id = ? "
+                                        "WHERE instance_id = ?", (new_id, p['instance_id']))
+                                    rewards_log += (
+                                        f"\n🌑 **{p['name'].capitalize()}** {flavour} - "
+                                        f"it became **{new_name.capitalize()}**!")
+                                    p['pokedex_id'] = new_id
+                                    p['name'] = new_name
 
                                 sketched = await persist_sketch(db, p)
                                 if sketched:
@@ -9221,6 +9264,7 @@ class Combat(commands.Cog):
                     if dmg > 0:
                         defender['last_damage_taken'] = dmg
                         defender['last_damage_class'] = move.get('class', 'physical')
+                        record_battle_conditions(defender, dmg, attacker, msg)
                         # A biding target banks whatever it just absorbed
                         store_bide_damage(defender, dmg)
 

@@ -2410,6 +2410,41 @@ def is_first_turn_out(pokemon):
     return (pokemon.get('turns_on_field') or 0) == 0
 
 
+# The exact words a landed critical writes into the damage message, named once so the
+# emitter and the reader below cannot drift apart. Deliberately NOT the phrase "critical
+# hit": Focus Energy, Laser Focus and Z-Focus Energy all say "critical hit ratio rose",
+# and a substring match on that would have counted three criticals for a Farfetch'd that
+# had merely psyched itself up three times.
+CRIT_STRIKE_MESSAGE = "A critical strike! "
+
+
+def record_battle_conditions(defender, damage, attacker=None, message=""):
+    """
+    The two tallies that some evolutions are earned by, kept on the battle payload.
+
+    Galarian Yamask becomes a Runerigus after surviving a single blow of 49 or more, and
+    Galarian Farfetch'd becomes a Sirfetch'd after landing three criticals in one battle.
+    Both are things this engine has always SEEN and never written down, which is why those
+    two evolutions were unreachable however the rules were keyed.
+
+    The hardest hit is a high-water mark that persists between battles - it is the worst
+    thing that ever happened to this specimen. The critical tally is per-battle, and the
+    battle payload is rebuilt every time, so it resets on its own.
+
+    Read off the damage message rather than a crit flag because the flag is local to the
+    damage resolver and never leaves it; the message is what both engines already receive.
+    A miss deals no damage and produces no line, so there is nothing to miscount.
+    """
+    if not defender or damage is None or damage <= 0:
+        return
+
+    if damage > (defender.get('biggest_hit_taken') or 0):
+        defender['biggest_hit_taken'] = damage
+
+    if attacker is not None and CRIT_STRIKE_MESSAGE.strip() in (message or ''):
+        attacker['crits_landed_battle'] = (attacker.get('crits_landed_battle') or 0) + 1
+
+
 def advance_field_tenure(combatant):
     """
     Count one more turn survived out here - the thing that disarms Fake Out.
@@ -8264,7 +8299,7 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         elif type_multiplier > 0.0 and type_multiplier < 1.0: msg += "It's not very effective... "
         elif type_multiplier == 0.0: return 0, "It had no effect!", None, [], 0
 
-        if crit_occurred: msg += "A critical strike! "
+        if crit_occurred: msg += CRIT_STRIKE_MESSAGE
         if hits_landed > 1: msg += f"Hit {hits_landed} times! "
         
         if move.get('drain', 0) > 0:
