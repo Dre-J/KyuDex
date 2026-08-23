@@ -2893,6 +2893,201 @@ EQUIPMENT_CATALOG.update(build_phase11_stock())
 
 
 # ==========================================
+# 🧬 THE EVOLUTION SHELF
+# ==========================================
+# `evolution_rules` names 19 items you USE and 11 you HOLD. Three of the thirty were on
+# sale. So most of this bot's item-gated evolutions were gated on something nobody could
+# obtain - which nobody noticed, because the code never checked the requirement either:
+# the trade path read `item_name`, that column is NULL for every trade evolution, and a
+# Scyther therefore became a Scizor on any trade at all.
+#
+# Making the engine enforce the requirement without also selling the items would trade a
+# too-lax evolution for an impossible one, so the two go together or neither is a fix.
+#
+# Priced off the three stones that were already here at 500. The held items are cheaper,
+# at 450, because they are also ordinary battle equipment - a Metal Coat and a King's Rock
+# already sat on the battle shelf at 400 and 350 and keep those prices; only the ones that
+# were missing entirely are added here.
+EVOLUTION_STONE_PRICE = 500
+EVOLUTION_HELD_PRICE = 450
+
+EVOLUTION_SHOP_ITEMS = {
+    # The stones a trainer USES, in `!evolve <stone> <specimen>`.
+    'thunder-stone':    ("Evolves certain Electric species.", EVOLUTION_STONE_PRICE, '💎'),
+    'moon-stone':       ("Evolves certain Normal, Fairy and Poison species.",
+                         EVOLUTION_STONE_PRICE, '🌙'),
+    'sun-stone':        ("Evolves certain Grass, Rock and Psychic species.",
+                         EVOLUTION_STONE_PRICE, '☀️'),
+    'dusk-stone':       ("Evolves certain Dark and Ghost species.",
+                         EVOLUTION_STONE_PRICE, '🌑'),
+    'shiny-stone':      ("Evolves certain Fairy and Grass species.",
+                         EVOLUTION_STONE_PRICE, '✨'),
+    'dawn-stone':       ("Evolves Kirlia and Snorunt, and only one gender of each.",
+                         EVOLUTION_STONE_PRICE, '🌅'),
+    'ice-stone':        ("Evolves certain Ice species.", EVOLUTION_STONE_PRICE, '🧊'),
+    'black-augurite':   ("A dark stone that reshapes a Scyther.",
+                         EVOLUTION_STONE_PRICE, '🪨'),
+    'peat-block':       ("Dense bog soil that reshapes a Ursaluna.",
+                         EVOLUTION_STONE_PRICE, '🟤'),
+    'malicious-armor':  ("Cursed plating that reshapes a Charcadet.",
+                         EVOLUTION_STONE_PRICE, '🩸'),
+    'auspicious-armor': ("Blessed plating that reshapes a Charcadet.",
+                         EVOLUTION_STONE_PRICE, '🛡️'),
+    'sweet-apple':      ("An apple that reshapes an Applin.", EVOLUTION_STONE_PRICE, '🍏'),
+    'tart-apple':       ("A sour apple that reshapes an Applin.",
+                         EVOLUTION_STONE_PRICE, '🍎'),
+    'cracked-pot':      ("A chipped teapot that reshapes a Sinistea.",
+                         EVOLUTION_STONE_PRICE, '🫖'),
+    'galarica-cuff':    ("A Galarian bangle that reshapes a Slowpoke.",
+                         EVOLUTION_STONE_PRICE, '💍'),
+    'galarica-wreath':  ("A Galarian garland that reshapes a Slowpoke.",
+                         EVOLUTION_STONE_PRICE, '🌿'),
+
+    # The items a specimen HOLDS. These are what the migration added a column for.
+    'dragon-scale':     ("Held: a Seadra that is traded holding this becomes a Kingdra.",
+                         EVOLUTION_HELD_PRICE, '🐉'),
+    'up-grade':         ("Held: a Porygon that is traded holding this becomes a Porygon2.",
+                         EVOLUTION_HELD_PRICE, '💾'),
+    'dubious-disc':     ("Held: a Porygon2 that is traded holding this becomes a "
+                         "Porygon-Z.", EVOLUTION_HELD_PRICE, '💿'),
+    'protector':        ("Held: a Rhydon that is traded holding this becomes a Rhyperior.",
+                         EVOLUTION_HELD_PRICE, '🦺'),
+    'electirizer':      ("Held: an Electabuzz that is traded holding this becomes an "
+                         "Electivire.", EVOLUTION_HELD_PRICE, '🔌'),
+    'magmarizer':       ("Held: a Magmar that is traded holding this becomes a Magmortar.",
+                         EVOLUTION_HELD_PRICE, '🔥'),
+    'reaper-cloth':     ("Held: a Dusclops that is traded holding this becomes a Dusknoir.",
+                         EVOLUTION_HELD_PRICE, '👘'),
+    'prism-scale':      ("Held: a Feebas that is traded holding this becomes a Milotic.",
+                         EVOLUTION_HELD_PRICE, '🌈'),
+    'oval-stone':       ("Held: a Happiny that levels up in the day becomes a Chansey.",
+                         EVOLUTION_HELD_PRICE, '🥚'),
+    'sachet':           ("Held: a Spritzee that is traded holding this becomes an "
+                         "Aromatisse.", EVOLUTION_HELD_PRICE, '💐'),
+    'whipped-dream':    ("Held: a Swirlix that is traded holding this becomes a Slurpuff.",
+                         EVOLUTION_HELD_PRICE, '🍰'),
+}
+
+
+def build_evolution_stock():
+    """
+    The evolution shelf, checked against the rulebook it exists to serve.
+
+    The assertion runs the other way from the item phases': rather than proving every
+    shelf entry has an implementation, it proves every entry is an item some evolution
+    RULE actually names. An evolution item that evolves nothing is a trap - a player
+    spends 500 on it and finds out afterwards.
+
+    Read straight out of `evolution_rules` at import, the same way UNEVOLVED_SPECIES and
+    the body-mass index already are, so it cannot drift from the table.
+    """
+    named = set()
+    try:
+        import sqlite3 as _sqlite3
+        _conn = _sqlite3.connect(f'file:{DB_FILE}?mode=ro', uri=True)
+        try:
+            for column in ('item_name', 'held_item'):
+                try:
+                    named.update(
+                        row[0] for row in _conn.execute(
+                            f"SELECT DISTINCT {column} FROM evolution_rules "
+                            f"WHERE {column} IS NOT NULL"))
+                except _sqlite3.OperationalError:
+                    # `held_item` predates its own migration on a database that has not
+                    # been migrated yet. The shelf still stands; it is simply not checked
+                    # against a column that is not there.
+                    pass
+        finally:
+            _conn.close()
+    except Exception:
+        named = set(EVOLUTION_SHOP_ITEMS)      # no database to hand: trust the table
+
+    if named:
+        useless = set(EVOLUTION_SHOP_ITEMS) - named
+        assert not useless, f"evolution items that evolve nothing: {sorted(useless)}"
+
+    return {
+        item: {
+            "name": item.replace('-', ' ').title(),
+            "price": EVOLUTION_SHOP_ITEMS[item][1],
+            "desc": EVOLUTION_SHOP_ITEMS[item][0],
+            "emoji": EVOLUTION_SHOP_ITEMS[item][2],
+            "category": "evoitems",
+        }
+        for item in sorted(EVOLUTION_SHOP_ITEMS)
+    }
+
+
+EQUIPMENT_CATALOG.update(build_evolution_stock())
+
+
+# The sky, for the evolutions that care. There is no in-world clock here, so the real one
+# is the honest source: a Sneasel becomes a Weavile in YOUR evening. UTC rather than local
+# time so two trainers in different timezones see the same sky, which is the same choice
+# the daily expedition counter already makes.
+#
+# `evolution_rules.time_of_day` holds FOUR values, not two - 'day', 'night', 'dusk' and
+# 'full-moon' - and the last two are not alternatives to the first two, they are moments
+# INSIDE them. Rockruff wants dusk, which is also day; Ursaring wants a full moon, which
+# is also night. So the answer is a set rather than a string, and a rule matches when the
+# sky it names is in it.
+#
+# This mattered the moment time_of_day started being enforced at all. Before that nothing
+# read the column, so Lycanroc-Dusk and Ursaluna were reachable by accident; checking only
+# 'day' and 'night' would have made them unreachable on purpose, which is worse.
+NIGHT_BEGINS_HOUR = 18
+DAY_BEGINS_HOUR = 6
+DUSK_HOUR = 17                  # the hour before night, when Rockruff can turn
+FULL_MOON_WINDOW = 1.5          # days either side of the exact full moon
+
+# The two skies that sit INSIDE another one. A rule naming one of these is more
+# specific than a rule naming plain day or night, and the rulebook prefers it when
+# both match - otherwise Rockruff's three level-25 rules would always resolve to the
+# day one and Lycanroc-Dusk could never be reached.
+SPECIAL_SKIES = frozenset({'dusk', 'full-moon'})
+
+# A known new moon, and the mean synodic month. Good to a few hours over a century, which
+# is far better than this needs to be.
+_NEW_MOON_EPOCH = 1136073600    # 2006-01-01 00:00 UTC, near a new moon
+_SYNODIC_MONTH = 29.530588853 * 86400
+
+
+def is_full_moon(now=None):
+    """Whether the moon is full, to within a day and a half either side."""
+    import datetime as _datetime
+    when = now or _datetime.datetime.now(_datetime.timezone.utc)
+    age = ((when.timestamp() - _NEW_MOON_EPOCH) % _SYNODIC_MONTH) / 86400.0
+    return abs(age - (_SYNODIC_MONTH / 86400.0) / 2) <= FULL_MOON_WINDOW
+
+
+def current_skies(now=None):
+    """
+    Every sky-name true right now, as a frozenset of the strings the table uses.
+
+    Always contains exactly one of 'day' or 'night', and may also contain 'dusk' or
+    'full-moon' when those moments are inside it.
+    """
+    import datetime as _datetime
+    when = now or _datetime.datetime.now(_datetime.timezone.utc)
+    skies = set()
+    if DAY_BEGINS_HOUR <= when.hour < NIGHT_BEGINS_HOUR:
+        skies.add('day')
+        if when.hour == DUSK_HOUR:
+            skies.add('dusk')
+    else:
+        skies.add('night')
+        if is_full_moon(when):
+            skies.add('full-moon')
+    return frozenset(skies)
+
+
+def current_time_of_day(now=None):
+    """'day' or 'night' - the one sky that is always true. Kept for callers that want a
+    single string; the rulebook itself asks current_skies()."""
+    return 'day' if 'day' in current_skies(now) else 'night'
+
+
+# ==========================================
 # 💿 THE TM SHELF
 # ==========================================
 # TMs used to be their own command with their own hand-written emoji map, which meant a

@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from utils.constants import DB_FILE
+from utils.constants import DB_FILE, current_skies
 from utils import checks
 from utils.directives import credit_evolution
 import aiosqlite
@@ -77,15 +77,64 @@ class Evolution(commands.Cog):
                     SELECT er.evolved_species_id, s.name, s.standard_abilities, s.hidden_ability
                     FROM evolution_rules er
                     JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
-                    WHERE er.base_species_id = ? 
-                    AND er.trigger_name = 'use-item' 
+                    WHERE er.base_species_id = ?
+                    AND er.trigger_name = 'use-item'
                     AND er.item_name = ?
                 """, (current_pokedex_id, formatted_item)) as cursor:
                     evo_data = await cursor.fetchone()
-                
+
+                # THE HELD-ITEM ROUTE. A Razor Claw is not a stone: in the games the
+                # specimen levels up while HOLDING it, and the item survives. So this
+                # branch asks a different question from the one above - not "do you own
+                # one" but "is this specimen wearing one" - and spends nothing.
+                #
+                # Only reached when there is no use-item rule, so a stone keeps its own
+                # behaviour untouched and the two routes can never both fire.
+                held_route = None
+                if not evo_data:
+                    async with db.execute("""
+                        SELECT er.evolved_species_id, s.name, s.standard_abilities,
+                               s.hidden_ability, er.time_of_day
+                        FROM evolution_rules er
+                        JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+                        WHERE er.base_species_id = ?
+                        AND er.trigger_name = 'level-up'
+                        AND er.held_item = ?
+                    """, (current_pokedex_id, formatted_item)) as cursor:
+                        held_rules = await cursor.fetchall()
+
+                    if held_rules:
+                        async with db.execute(
+                                "SELECT held_item FROM caught_pokemon WHERE instance_id = ?",
+                                (db_tag_id,)) as cursor:
+                            worn = await cursor.fetchone()
+                        worn_item = (worn[0] if worn else '' or '').lower().replace(' ', '-')
+
+                        if worn_item != formatted_item:
+                            pretty = formatted_item.replace('-', ' ').title()
+                            return await ctx.send(
+                                f"🧬 **{current_name.capitalize()}** has to be HOLDING the "
+                                f"{pretty} for this to work - owning one is not enough. "
+                                f"Give it the {pretty} with `!give`, then try again.")
+
+                        skies = current_skies()
+                        for rule in held_rules:
+                            if not rule[4] or rule[4] in skies:
+                                held_route = rule
+                                break
+
+                        if held_route is None:
+                            wanted = sorted({r[4] for r in held_rules if r[4]})
+                            return await ctx.send(
+                                f"🌙 **{current_name.capitalize()}** will only change while "
+                                f"holding that during the **{' or '.join(wanted)}**, and it "
+                                f"is currently **{'/'.join(sorted(skies))}**. Come back later.")
+
+                        evo_data = held_route[:4]
+
                 if not evo_data:
                     return await ctx.send(f"⚠️ A **{formatted_item.replace('-', ' ').title()}** has no biological effect on a **{current_name.capitalize()}**.")
-                    
+
                 new_pokedex_id, evolved_into_name, post_std_abs_raw, post_hidden_ab = evo_data
                 
                 # ==========================================
@@ -112,18 +161,25 @@ class Evolution(commands.Cog):
                     new_ability = post_std_abs[0]
                 # ==========================================
                 
-                # 4. Check Inventory
-                async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item)) as cursor:
-                    inv_data = await cursor.fetchone()
-                
-                if not inv_data or inv_data[0] < 1:
-                    return await ctx.send(f"🎒 You don't have a **{formatted_item.replace('-', ' ').title()}** in your field pack!")
+                # 4. Check Inventory - the STONE route only. A held item was already proved
+                #    to be on the specimen a few lines up, and it is not in the pack to be
+                #    found: a Razor Claw a Sneasel is wearing left the bag when it was given.
+                if held_route is None:
+                    async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item)) as cursor:
+                        inv_data = await cursor.fetchone()
+
+                    if not inv_data or inv_data[0] < 1:
+                        return await ctx.send(f"🎒 You don't have a **{formatted_item.replace('-', ' ').title()}** in your field pack!")
 
                 # 5. Execute the Metamorphosis safely
                 await db.execute("BEGIN TRANSACTION")
                 try:
-                    # Deduct the item
-                    await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
+                    # Deduct the item - the stone is used up, the held item is not. A Razor
+                    # Claw stays on the Weavile that grew around it, which is both what the
+                    # games do and the only answer that leaves the specimen's held_item
+                    # column pointing at something it is still wearing.
+                    if held_route is None:
+                        await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
                     
                     # 🚨 UPDATE THE SPECIMEN'S GENETICS AND ABILITY
                     await db.execute("UPDATE caught_pokemon SET pokedex_id = ?, ability = ? WHERE instance_id = ?", (new_pokedex_id, new_ability, db_tag_id))
@@ -144,7 +200,10 @@ class Evolution(commands.Cog):
             # Outside the DB Context Manager: Build the UI
             embed = discord.Embed(title="🧬 Metamorphosis Complete!", color=discord.Color.gold())
             
-            base_desc = f"**{ctx.author.name}** exposed their **{current_name.capitalize()}** to a {formatted_item.replace('-', ' ').title()}...\n\nIt rapidly adapted and evolved into a **{evolved_into_name.capitalize()}**!"
+            if held_route is None:
+                base_desc = f"**{ctx.author.name}** exposed their **{current_name.capitalize()}** to a {formatted_item.replace('-', ' ').title()}...\n\nIt rapidly adapted and evolved into a **{evolved_into_name.capitalize()}**!"
+            else:
+                base_desc = f"**{ctx.author.name}**'s **{current_name.capitalize()}**, still holding its {formatted_item.replace('-', ' ').title()}, shuddered and grew...\n\nIt evolved into a **{evolved_into_name.capitalize()}**!"
             
             # Add a note if their ability changed!
             if current_ability != new_ability:
@@ -154,7 +213,10 @@ class Evolution(commands.Cog):
                 base_desc += "\n\n📡 **Directive Complete:** Kinetic Maturation Study concluded! Run `!claim` to receive your funding."
                 
             embed.description = base_desc
-            embed.set_footer(text=f"Tag ID: {db_tag_id[:8]} | 1x {formatted_item.replace('-', ' ').title()} Consumed")
+            spent = ("1x " + formatted_item.replace('-', ' ').title() + " Consumed"
+                     if held_route is None
+                     else formatted_item.replace('-', ' ').title() + " Retained")
+            embed.set_footer(text=f"Tag ID: {db_tag_id[:8]} | {spent}")
             
             await ctx.send(embed=embed)
 

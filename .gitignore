@@ -5,6 +5,10 @@
 
 # Local database
 ecosystem.db
+# ...and the timestamped copies a migration takes before touching it. `ecosystem.db`
+# above is an exact name, not a glob, so a backup was landing in `git status` as an
+# untracked 13MB file waiting for somebody to `git add .`
+ecosystem.db.bak-*
 *.db-journal
 *.db-wal
 *.db-shm
