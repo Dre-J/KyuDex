@@ -28,9 +28,11 @@ from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary,
                             set_levelup_pings, wipe_user)
 from utils.constants import DB_FILE
 from utils.constants import current_skies
-from utils.prefs import (COMMON_ZONES, SOURCE_DEFAULT, SOURCE_GUILD,
-                         SOURCE_USER, clear_timezone, describe_zone, now_in,
-                         resolve_timezone, resolve_zone, set_timezone)
+from utils.prefs import (CARD_EMBED, CARD_IMAGE, COMMON_ZONES, SOURCE_DEFAULT,
+                         SOURCE_GUILD, SOURCE_USER, clear_timezone,
+                         describe_zone, get_card_style, now_in, resolve_card_style,
+                         resolve_timezone, resolve_zone, set_card_style,
+                         set_timezone)
 from utils.trading import LOG_RETENTION_DAYS, purge_expired_logs
 
 # Long enough to read the list, short enough that nobody wanders off mid-confirmation.
@@ -359,6 +361,44 @@ class Account(commands.Cog):
                 text="Time-gated evolutions - Umbreon, Espeon, the Lycanroc forms - "
                      "read your timezone. Set yours so they match your own evening.")
         await ctx.send(embed=embed)
+
+    @settings.command(name="card", aliases=["profile", "cards"])
+    @checks.has_started()
+    async def settings_card(self, ctx, *, style: str = None):
+        """
+        How `!profile` is drawn. `!settings card image` or `!settings card embed`.
+
+        The image is the default because it is the feature. The embed exists because an
+        image is the worse answer on a slow connection, on a screen reader, and on a
+        host that has to render it - none of which is a minority worth ignoring.
+        """
+        user_id = str(ctx.author.id)
+
+        if style is None:
+            async with aiosqlite.connect(DB_FILE) as db:
+                current = await get_card_style(db, user_id)
+            other = CARD_EMBED if current == CARD_IMAGE else CARD_IMAGE
+            return await ctx.send(
+                f"🖼️ Your profile is drawn as **{current}**.\n"
+                f"Switch with `!settings card {other}`.")
+
+        resolved, complaint = resolve_card_style(style)
+        if not resolved:
+            return await ctx.send(complaint)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            stored = await set_card_style(db, user_id, resolved)
+            await db.commit()
+
+        if not stored:
+            return await ctx.send(
+                "⚠️ This database cannot store the preference yet, so it was not saved. "
+                "Profiles stay on the rendered card for now.")
+
+        extra = ("" if resolved == CARD_IMAGE else
+                 "\n*The embed is plain text - selectable, screen-reader friendly, and "
+                 "far smaller to send.*")
+        return await ctx.send(f"🖼️ `!profile` will be drawn as **{resolved}**.{extra}")
 
     @settings.command(name="timezone", aliases=["tz", "time"])
     @checks.has_started()

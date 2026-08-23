@@ -23,6 +23,7 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
                              z_status_effect_for, expand_z_stats)
 from utils.directives import credit_cull, credit_evolution
+from utils.roster import party_filter
 from utils.prefs import trainer_skies
 from utils.limits import (ENERGY_MAX, ENERGY_REGEN_PER_HOUR, ENERGY_DUEL_COST,
                           ENERGY_DEBT_FLOOR, energy_yield, describe_energy,
@@ -673,27 +674,6 @@ from utils.roster import (PARTNER_WORDS, parse_learn_request, locate_specimen,
                           active_party, party_names, party_counts, set_active_party,
                           clean_party_name, has_party_column, DEFAULT_PARTY,
                           PARTY_SLOTS, MAX_PARTIES)
-
-async def party_filter(db, user_id, alias='up'):
-    """
-    The WHERE fragment and parameters restricting a roster query to the active party.
-
-    Returned as a fragment rather than baked into each query because five separate
-    places build a team out of `user_party`, and a sixth would otherwise be written
-    without the scope - which is exactly how a trainer would end up fighting with two
-    rosters' worth of specimens.
-
-    An un-migrated database has one party and gets an empty fragment, so every one of
-    those five keeps working untouched.
-    """
-    try:
-        if await has_party_column(db):
-            prefix = f"{alias}." if alias else ""
-            return f"AND {prefix}party_name = ?", (await active_party(db, user_id),)
-    except Exception:
-        pass
-    return "", ()
-
 
 async def assign_to_party(db, user_id, name, targets, start_slot=None):
     """

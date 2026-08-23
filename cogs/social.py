@@ -7,7 +7,13 @@ from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
 from utils.limits import (ENERGY_MAX, ENERGY_BANK_CAP, ENERGY_REGEN_PER_HOUR,
                           describe_energy, regenerate_energy)
 from utils.constants import current_skies
-from utils.prefs import SOURCE_USER, now_in, resolve_timezone
+from utils.prefs import (CARD_IMAGE, SOURCE_USER, get_card_style,
+                         nudge_if_default, now_in, resolve_timezone)
+from utils.levels import (contribution_for_level, energy_bank_cap,
+                          trainer_level)
+from utils.roster import party_filter
+from profile_card import build_profile_card, render_profile_card_async
+import io
 from utils.roster import bump_to_end_of_box
 from utils import checks, trading
 import time
@@ -1255,117 +1261,189 @@ class Social(commands.Cog):
     @commands.command(name="profile", aliases=["impact", "bal"])
     @checks.has_started()
     @checks.is_authorized()
-    async def profile(self, ctx):
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
-        
+    async def profile(self, ctx, member: discord.Member = None):
+        """
+        Your trainer card. `!settings card image|embed` chooses how it is drawn.
+
+        THE DATA IS GATHERED ONCE and rendered two ways. The image card and the embed
+        used to be two different sets of numbers waiting to happen - the whole reason
+        the energy meter needed fixing last time was that two places computed it
+        separately. `_gather_profile` is the only thing that reads the database, and
+        both renderers are handed the same dictionary.
+        """
+        target = member or ctx.author
+        user_id = str(target.id)
+        guild_id = str(ctx.guild.id) if ctx.guild else None
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                
-                # 1. Check Inbox! (🚨 NEW LOGIC)
-                async with db.execute("SELECT COUNT(*) FROM user_alerts WHERE user_id = ? AND is_read = 0", (user_id,)) as cursor:
-                    unread_count = (await cursor.fetchone())[0]
-
-                # 2. Core Profile Data
-                async with db.execute("SELECT eco_tokens, unlocked_visas, current_energy, last_energy_tick FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                    user_data = await cursor.fetchone()
-            
-                tokens = user_data[0] if user_data else 0
-                visas_raw = user_data[1] if user_data and len(user_data) > 1 and user_data[1] else "canopy"
-                
-                # Safely extract energy data (defaults to 100 energy, 0 tick if not found)
-                db_energy = user_data[2] if user_data and len(user_data) > 2 else 100
-                last_tick = user_data[3] if user_data and len(user_data) > 3 else 0
-                
-                # Get local contribution points
-                async with db.execute("SELECT contribution_points FROM guild_members WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)) as cursor:
-                    member_data = await cursor.fetchone()
-                contribution = member_data[0] if member_data else 0
-                
-                # Get total catches
-                async with db.execute("SELECT COUNT(*) FROM caught_pokemon WHERE user_id = ?", (user_id,)) as cursor:
-                    total_catches = (await cursor.fetchone())[0]
-
-                # The clock the day/night evolutions are read off. Shown here because a
-                # trainer whose Umbreon will not appear has no other way to find out
-                # what time the bot thinks it is for them - and guessing at that is the
-                # difference between a mechanic and a bug.
-                zone, zone_source = await resolve_timezone(db, user_id, guild_id)
-            
-            # ==========================================
-            # LAZY-EVALUATION ENERGY MATH
-            # ==========================================
-            # The arithmetic used to be written out here a second time, with its own
-            # copies of 100 and 10 and its own idea of when the tick advances. Two
-            # transcriptions of one rule agree only until one of them is edited, and
-            # this pair could not survive the reserve being allowed past a hundred.
-            # `!profile` and `!npcduel` now read the same function.
-            now = int(time.time())
-            display_energy, display_tick = regenerate_energy(db_energy, last_tick, now)
-
-            if display_energy >= ENERGY_BANK_CAP:
-                regen_text = "(BANKED)"
-            else:
-                next_tick_in = max(0, 3600 - (now - display_tick))
-                mins, secs = divmod(next_tick_in, 60)
-                regen_text = f"(+{ENERGY_REGEN_PER_HOUR} in {mins}m {secs}s)"
-
-            note = describe_energy(display_energy)
-            if note:
-                regen_text = f"{regen_text} · {note}"
-
-            # A deficit reads as an empty tank with a warning under it, not as a
-            # negative number - the meter is a fuel gauge, and a gauge that can read
-            # minus forty tells a player nothing they can act on.
-            meter = f"**{max(0, display_energy)} / {ENERGY_MAX}**"
-            # ==========================================
-            
-            # Format the Visas beautifully for the UI
-            biome_emojis = {
-                'canopy': '🌲 Canopy',
-                'trench': '🌊 Trench',
-                'core': '🌋 Core',
-                'sprawl': '🏙️ Sprawl',
-                'apex': '🐉 Apex'
-            }
-            
-            unlocked_list = [biome_emojis.get(b.strip(), b.title()) for b in visas_raw.split(',') if b.strip()]
-            visas_display = " • ".join(unlocked_list)
-            
-            # Build the Embed
-            embed = discord.Embed(title=f"🌿 {ctx.author.name}'s Ecological Profile", color=discord.Color.green())
-            embed.set_thumbnail(url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
-            
-            # 🚨 NEW LOGIC: Inject the Inbox Alert!
-            if unread_count > 0:
-                embed.description = f"📬 **You have {unread_count} unread update{'s' if unread_count > 1 else ''}!** Type `!inbox` to read them."
-            
-            # --- Inject the Stamina row ---
-            embed.add_field(name="🔋 Field Energy", value=f"{meter}\n*{regen_text}*", inline=False)
-
-            local_skies = current_skies(now_in(zone))
-            sky_icon = "🌙" if 'night' in local_skies else "☀️"
-            clock_note = ("*Set yours with `!settings timezone`*"
-                          if zone_source != SOURCE_USER else f"*{zone}*")
-            embed.add_field(
-                name=f"{sky_icon} Your Clock",
-                value=(f"**{now_in(zone).strftime('%H:%M')}** · "
-                       f"{'/'.join(sorted(local_skies))}\n{clock_note}"),
-                inline=False)
-            
-            embed.add_field(name="Global Eco-Tokens", value=f"🪙 {tokens:,}", inline=True)
-            embed.add_field(name="Local Contribution", value=f"⭐ {contribution:,} points", inline=True)
-            embed.add_field(name="Specimens Rescued", value=f"🐾 {total_catches} total", inline=True)
-            
-            # Inject the Sector Clearance row at the bottom
-            embed.add_field(name="🛂 Sector Clearance (Visas)", value=f"**{visas_display}**", inline=False)
-            
-            embed.set_footer(text=f"Server: {ctx.guild.name}")
-            
-            await ctx.send(embed=embed)
+                data = await self._gather_profile(db, target, guild_id)
+                style = await get_card_style(db, str(ctx.author.id))
         except Exception as e:
             print(f"Profile Database Error: {e}")
-            await ctx.send("❌ Error extracting biometric profile.")
+            return await ctx.send("❌ Error extracting biometric profile.")
+
+        # Somebody else's card is never rendered from the viewer's preference alone if
+        # the image path fails; both routes end in a send, and the embed is the one that
+        # cannot fail for want of an asset.
+        # Somebody still on a fallback clock is told once, on whichever route they use.
+        # The card SHOWS their time; only this says the time might not be theirs.
+        nudge = nudge_if_default(data['zone_source']) if target == ctx.author else None
+
+        if style == CARD_IMAGE:
+            try:
+                blob = await render_profile_card_async(build_profile_card(data))
+                file = discord.File(io.BytesIO(blob), filename="profile.webp")
+                return await ctx.send(content=nudge, file=file)
+            except Exception as e:
+                # A missing font, a missing background, a Pillow that is too old. The
+                # card is a nicety; the profile is not. Fall through to the embed rather
+                # than telling somebody their profile is broken.
+                print(f"Profile card render failed, falling back to embed: {e}")
+
+        await ctx.send(content=nudge, embed=self._profile_embed(ctx, target, data))
+
+    async def _gather_profile(self, db, target, guild_id):
+        """Every number both renderings need, read once."""
+        user_id = str(target.id)
+
+        async with db.execute(
+                "SELECT COUNT(*) FROM user_alerts WHERE user_id = ? AND is_read = 0",
+                (user_id,)) as cursor:
+            unread = (await cursor.fetchone())[0]
+
+        async with db.execute(
+                "SELECT eco_tokens, unlocked_visas, current_energy, last_energy_tick "
+                "FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+        tokens = row[0] if row else 0
+        visas_raw = (row[1] if row and row[1] else "canopy")
+        db_energy = row[2] if row and len(row) > 2 else ENERGY_MAX
+        last_tick = row[3] if row and len(row) > 3 else 0
+
+        # LIFETIME, summed across guilds - not this server's slice. A level that changed
+        # depending on where you typed the command would be the same defect the timezone
+        # work took out of evolutions.
+        level, title, lifetime = await trainer_level(db, user_id)
+
+        # This server's own figure is still shown, because the local leaderboard ranks
+        # on it and a profile that could not explain that ranking would be a puzzle.
+        local_contribution = 0
+        if guild_id:
+            async with db.execute(
+                    "SELECT contribution_points FROM guild_members "
+                    "WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)) as cursor:
+                member_row = await cursor.fetchone()
+            local_contribution = member_row[0] if member_row else 0
+
+        async with db.execute(
+                "SELECT COUNT(*), COALESCE(SUM(is_shiny), 0) FROM caught_pokemon "
+                "WHERE user_id = ?", (user_id,)) as cursor:
+            caught, shinies = await cursor.fetchone()
+
+        # The party, in slot order, with what each specimen actually looks like.
+        scope, scope_params = await party_filter(db, user_id)
+        async with db.execute(f"""
+            SELECT cp.pokedex_id, cp.is_shiny, cp.gender
+            FROM user_party up
+            JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
+            WHERE up.user_id = ? {scope}
+            ORDER BY up.slot ASC
+        """, (user_id, *scope_params)) as cursor:
+            party = [(r[0], bool(r[1]), r[2]) for r in await cursor.fetchall()]
+
+        zone, zone_source = await resolve_timezone(db, user_id, guild_id)
+        when = now_in(zone)
+        skies = current_skies(when)
+
+        # THE BANK CAP IS THE TRAINER'S OWN, and it has to be worked out before the
+        # regeneration is, because it is the ceiling that regeneration fills to.
+        bank_cap = energy_bank_cap(level)
+        energy, tick = regenerate_energy(db_energy, last_tick, int(time.time()), bank_cap)
+
+        visas = [v.strip() for v in str(visas_raw).split(',') if v.strip()]
+
+        return {
+            'target': target,
+            'unread': unread,
+            'tokens': tokens,
+            'visas': visas,
+            'energy': energy,
+            'energy_tick': tick,
+            'bank_cap': bank_cap,
+            'level': level,
+            'title': title,
+            'lifetime': lifetime,
+            'local_contribution': local_contribution,
+            'caught': caught,
+            'shinies': shinies,
+            'party': party,
+            'zone': zone,
+            'zone_source': zone_source,
+            'clock': when.strftime('%H:%M'),
+            'skies': tuple(sorted(skies)),
+        }
+
+    @staticmethod
+    def _profile_embed(ctx, target, d):
+        """The text rendering. Same numbers, no assets, no Pillow."""
+        level, span = d['level'], max(1, contribution_for_level(d['level'] + 1)
+                                      - contribution_for_level(d['level']))
+        into = d['lifetime'] - contribution_for_level(level)
+
+        embed = discord.Embed(
+            title=f"🌿 {target.display_name}'s Ecological Profile",
+            colour=discord.Colour.green())
+
+        if d['unread'] and target == ctx.author:
+            embed.description = (f"📬 **You have {d['unread']} unread "
+                                 f"update{'s' if d['unread'] > 1 else ''}!** "
+                                 f"Type `!inbox` to read them.")
+
+        embed.add_field(
+            name=f"🎖️ {d['title']} · Level {level}",
+            value=(f"{_progress_bar(into, span)}  {into:,} / {span:,}\n"
+                   f"*{d['lifetime']:,} lifetime contribution*"),
+            inline=False)
+
+        shown = max(0, d['energy'])
+        note = describe_energy(d['energy'], d['bank_cap']) or ""
+        embed.add_field(
+            name="🔋 Field Energy",
+            value=(f"{_progress_bar(shown, d['bank_cap'])}  "
+                   f"**{shown} / {ENERGY_MAX}**"
+                   + (f"\n*{note}*" if note else "")),
+            inline=False)
+
+        sky_icon = "🌙" if 'night' in d['skies'] else "☀️"
+        embed.add_field(name=f"{sky_icon} Clock",
+                        value=f"{d['clock']} · {'/'.join(d['skies'])}", inline=True)
+        embed.add_field(name="🪙 Eco-Tokens", value=f"{d['tokens']:,}", inline=True)
+        embed.add_field(name="🐾 Specimens", value=f"{d['caught']:,} · ✨ {d['shinies']:,}",
+                        inline=True)
+
+        biome_emojis = {'canopy': '🌲 Canopy', 'trench': '🌊 Trench', 'core': '🌋 Core',
+                        'sprawl': '🏙️ Sprawl', 'apex': '🐉 Apex'}
+        visas_display = " • ".join(biome_emojis.get(v, v.title()) for v in d['visas'])
+        embed.add_field(name="🛂 Sector Clearance", value=f"**{visas_display}**",
+                        inline=False)
+
+        footer = (f"{ctx.guild.name} · {d['local_contribution']:,} local contribution"
+                  if ctx.guild else "")
+        if d['zone_source'] != SOURCE_USER:
+            footer += ("  |  Set yours with `!settings timezone` so day/night matches "
+                       "your own evening.")
+        if footer:
+            embed.set_footer(text=footer)
+        return embed
+
+def _progress_bar(current, total, width=12):
+    """A bar drawn out of block characters, for the embed rendering."""
+    total = max(1, int(total or 0))
+    filled = max(0, min(width, round(width * (max(0, int(current or 0)) / total))))
+    return "█" * filled + "░" * (width - filled)
+
 
 async def setup(bot):
     await bot.add_cog(Social(bot))

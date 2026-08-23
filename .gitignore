@@ -19,6 +19,10 @@ migrate_genders.py
 # Sprite assets (fetched separately from PokeAPI/sprites)
 KyuSprites/
 
+# Trainer sprites for the profile card. 650 files, same provenance as KyuSprites and
+# ignored for the same reason: fetched art, not source.
+trainers/
+
 # Local battle backdrops (only consumed by the scratch battletest cog)
 assets/
 
