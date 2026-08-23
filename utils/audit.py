@@ -43,6 +43,29 @@ async def post(bot, embed):
         return False
 
 
+async def post_command_digest(bot, *, rows, window, total_uses, total_errors,
+                              distinct, body):
+    """
+    Post the aggregate command counts.
+
+    NO ACTOR FIELD, and there is nothing to put in one - the counts carry no user id.
+    Every other embed in this module names who did something, which is the point of an
+    audit log; this one deliberately cannot, which is the point of an aggregate. The
+    footer says so explicitly rather than leaving the absence to be inferred.
+    """
+    embed = discord.Embed(
+        title="📊 Command Usage",
+        colour=discord.Colour.blurple(),
+        description=body)
+    embed.add_field(name="Window", value=window, inline=True)
+    embed.add_field(name="Total", value=f"{total_uses:,} uses", inline=True)
+    embed.add_field(name="Commands", value=f"{distinct} distinct", inline=True)
+    if total_errors:
+        embed.add_field(name="Errors", value=f"{total_errors:,}", inline=True)
+    embed.set_footer(text="Aggregate counts only — no user is recorded against these.")
+    return await post(bot, embed)
+
+
 async def post_admin_action(bot, *, action, actor, target=None, colour=None, fields=(),
                             detail=None):
     """
