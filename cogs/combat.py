@@ -23,6 +23,9 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
                              z_status_effect_for, expand_z_stats)
 from utils.directives import credit_cull, credit_evolution
+from utils.limits import (ENERGY_MAX, ENERGY_REGEN_PER_HOUR, ENERGY_DUEL_COST,
+                          ENERGY_DEBT_FLOOR, energy_yield, describe_energy,
+                          regenerate_energy)
 from utils import checks
 import aiohttp
 from cogs import battle_render
@@ -2099,12 +2102,18 @@ async def fetch_gender_rate(db, pokedex_id):
 
 async def roll_species_ability(db, pokedex_id, rng=random):
     """
-    Pick an ability for a GENERATED specimen, the way a wild capture does.
+    Pick an ability for a GENERATED rival, which is not caught and never becomes a
+    caught_pokemon row.
 
-    The hidden ability comes up one time in five, which is the figure the capture path in
-    cogs/ecology.py already uses. Kept to the same odds deliberately: two places that
-    disagreed about a specimen's genetics would be worse than either being wrong, and a
-    rival should be built from the same rules as something you could have caught.
+    The hidden ability comes up one time in five here. This USED to be the same figure
+    the capture path in cogs/ecology.py rolled, and the two were deliberately tied
+    together. THEY HAVE NOW DIVERGED ON PURPOSE: a wild catch never arrives on its
+    hidden ability at all, so that the Ability Patch and the coming raids are the only
+    two ways to reach one. A rival is a thing you fight rather than a thing you keep, so
+    the scarcity argument does not apply to it - and meeting one across the field is now
+    the only way a hidden ability turns up unbidden, which makes it worth meeting.
+
+    HIDDEN_ABILITY_CHANCE therefore describes rivals, and only rivals.
 
     The species table stores 'None' as a STRING for a species with no hidden ability,
     which is why that is tested rather than falsiness.
@@ -7482,8 +7491,18 @@ class BattleDashboard(discord.ui.View):
                     # Initialize an empty UI view to hold our buttons
                     post_battle_view = None 
 
+                    # The reserve this duel was started on, priced when it started. A
+                    # tired team still wins the duel and still gains the experience;
+                    # what thins is the funding and the anomaly finds. That split is
+                    # deliberate and it is the same one the expedition makes - the
+                    # specimen is never scaled, only the incidental haul, because a
+                    # progression system that quietly slows down is a system players
+                    # cannot see and therefore cannot plan around.
+                    haul = state.get('energy_haul', 1.0)
+
                     # 1. Calculate Research Funding (Eco Tokens)
                     tokens_earned = 100 + (len(state['npc_team']) * 250)
+                    tokens_earned = max(1, int(tokens_earned * haul))
 
                     # Happy Hour doubles the battle's takings. Applied to the reward
                     # itself and not to the scattered coins, which are picked up rather
@@ -7511,6 +7530,10 @@ class BattleDashboard(discord.ui.View):
                         rewards_log += f"🪙 **{coin_bonus}** of that was loose change scattered by {credited}!\n"
                     if happy_multiplier > 1:
                         rewards_log += f"🎉 Happy Hour **doubled** the reward!\n"
+                    if haul < 1.0:
+                        rewards_log += (f"🔅 Your team was running on reserves - funding and finds "
+                                        f"paid at **{int(round(haul * 100))}%**. "
+                                        f"Experience was not touched.\n")
                     rewards_log += f"📈 Surviving team members gained **{exp_per_specimen} EXP**!\n\n"
                     
                     # 🚨 ASYNCHRONOUS DATABASE TRANSACTION
@@ -7611,7 +7634,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # GEOLOGICAL ANOMALY: METEOR SHOWER
                         # ==========================================
-                        if random.random() <= 0.05: 
+                        if random.random() <= 0.05 * haul:
                             await db.execute("""
                                 INSERT INTO user_inventory (user_id, item_name, quantity) 
                                 VALUES (?, 'raw-keystone', 1) 
@@ -7623,7 +7646,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # BIOLOGICAL ANOMALY: MYCELIAL BLOOM
                         # ==========================================
-                        if random.random() <= 0.15: 
+                        if random.random() <= 0.15 * haul:
                             await db.execute("""
                                 INSERT INTO user_inventory (user_id, item_name, quantity) 
                                 VALUES (?, 'memory-spore', 1) 
@@ -7635,7 +7658,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # FIELD DATA RECOVERY: ENCRYPTED NOTES
                         # ==========================================
-                        if random.random() <= 0.10: 
+                        if random.random() <= 0.10 * haul:
                             await db.execute("""
                                 INSERT INTO user_inventory (user_id, item_name, quantity) 
                                 VALUES (?, 'encrypted-field-notes', 1) 
@@ -7647,7 +7670,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # RADIANT ANOMALY: SOLAR FLARE
                         # ==========================================
-                        if random.random() <= 0.07: 
+                        if random.random() <= 0.07 * haul:
                             await db.execute("""
                                 INSERT INTO user_inventory (user_id, item_name, quantity) 
                                 VALUES (?, 'sparkling-stone', 1) 
@@ -7659,7 +7682,7 @@ class BattleDashboard(discord.ui.View):
                         # ==========================================
                         # ATMOSPHERIC ANOMALY: ENERGY SMOG
                         # ==========================================
-                        if random.random() <= 0.08: 
+                        if random.random() <= 0.08 * haul:
                             await db.execute("""
                                 INSERT INTO user_inventory (user_id, item_name, quantity) 
                                 VALUES (?, 'wishing-fragment', 1) 
@@ -7798,71 +7821,63 @@ class Combat(commands.Cog):
         # This dictionary is now isolated to the Combat Cog
         self.active_battles = {}
         
-    async def check_and_consume_energy(self, user_id: str, cost: int = 10) -> tuple[bool, str]:
+    async def check_and_consume_energy(self, user_id: str,
+                                       cost: int = ENERGY_DUEL_COST):
         """
-        Lazy-evaluates stamina regeneration and attempts to consume the required cost.
-        Returns (Success_Boolean, Status_Message).
+        Bring the reserve up to date, spend `cost` from it, and price the duel.
+
+        Returns `(allowed, status_message, payout_multiplier)`.
+
+        `allowed` is now False ONLY for a trainer who is not registered. Running dry no
+        longer refuses the duel: the reserve goes negative and the multiplier falls
+        away, which is the soft cap the expedition already uses. The one hard stop that
+        remains is somebody with no row in `users`, which is a broken account rather
+        than a tired one.
         """
-        MAX_ENERGY = 100
-        REGEN_PER_HOUR = 10
-        SECONDS_IN_HOUR = 3600
-        
-        
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                async with db.execute("SELECT current_energy, last_energy_tick FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                async with db.execute(
+                        "SELECT current_energy, last_energy_tick FROM users "
+                        "WHERE user_id = ?", (user_id,)) as cursor:
                     row = await cursor.fetchone()
-            
-                # If they aren't in the DB, the @has_started check should catch them, but just in case:
-                if not row:
-                    return False, "⚠️ Unregistered Personnel: Run `!start` first."
-                    
-                current_energy, last_tick = row
-                now = int(time.time())
-                
-                # 1. CALCULATE LAZY REGENERATION
-                if current_energy < MAX_ENERGY:
-                    seconds_passed = now - last_tick
-                    hours_passed = seconds_passed // SECONDS_IN_HOUR
-                    
-                    if hours_passed > 0:
-                        energy_gained = int(hours_passed * REGEN_PER_HOUR)
-                        current_energy = min(MAX_ENERGY, current_energy + energy_gained)
-                        
-                        # We only fast-forward the tick by the exact hours consumed 
-                        # so they don't lose "partial" hours of progress!
-                        last_tick += (hours_passed * SECONDS_IN_HOUR)
-                        
-                        # If they capped out, reset the tick to now
-                        if current_energy == MAX_ENERGY:
-                            last_tick = now
 
-                # 2. CHECK FOR SUFFICIENT FUNDS
-                if current_energy < cost:
-                    # Calculate time until next tick
-                    next_tick_in = SECONDS_IN_HOUR - (now - last_tick)
-                    mins, secs = divmod(next_tick_in, 60)
-                    return False, f"🔋 **Ecosystem Fatigue:** Your team is exhausted. You have **{current_energy}/{MAX_ENERGY} Energy** (Need {cost}).\n*Next energy point regenerates in {mins}m {secs}s.*"
-                    
-                # 3. CONSUME ENERGY AND UPDATE DB
-                current_energy -= cost
-                # If they were at max energy, the timer for the next regen starts exactly right now!
-                if current_energy + cost == MAX_ENERGY:
-                    last_tick = now
-                    
-                await db.execute("""
-                        UPDATE users 
-                        SET current_energy = ?, last_energy_tick = ? 
-                        WHERE user_id = ?
-                    """, (current_energy, last_tick, user_id))
-                    
+                # The @has_started check should catch them, but just in case:
+                if not row:
+                    return False, "⚠️ Unregistered Personnel: Run `!start` first.", 1.0
+
+                now = int(time.time())
+                energy, last_tick = regenerate_energy(row[0], row[1], now)
+
+                # PRICED BEFORE THE SPEND. The duel being paid for is this one, so it is
+                # the reserve standing when it started that decides what it is worth.
+                haul = energy_yield(energy)
+
+                # Down it goes, into deficit if that is where it lands. The floor stops
+                # a long session digging a hole nobody can climb out of - past it the
+                # duels are simply free, at the floor rate.
+                energy = max(ENERGY_DEBT_FLOOR, energy - cost)
+
+                await db.execute(
+                    "UPDATE users SET current_energy = ?, last_energy_tick = ? "
+                    "WHERE user_id = ?", (energy, last_tick, user_id))
                 await db.commit()
-                
-                return True, f"🔋 Spent **{cost} Energy** (Remaining: {current_energy}/{MAX_ENERGY})"
-            
+
+                shown = max(0, energy)
+                line = (f"🔋 Spent **{cost} Energy** "
+                        f"(Remaining: {shown}/{ENERGY_MAX})")
+                note = describe_energy(energy)
+                if energy < 0:
+                    mins = max(1, int(round(-energy / ENERGY_REGEN_PER_HOUR * 60)))
+                    line = (f"🔅 **Running on reserves.** Your team is spent, so this "
+                            f"duel pays **{int(round(haul * 100))}%**. "
+                            f"A full recovery is about {mins // 60}h {mins % 60:02d}m away.")
+                elif note:
+                    line += f" · *{note}*"
+                return True, line, haul
+
         except Exception as e:
             print(f"Energy System Error: {e}")
-            return False, "❌ A critical error occurred while processing your stamina."
+            return False, "❌ A critical error occurred while processing your stamina.", 1.0
 
     async def build_npc_combatant(self, db, pokedex_id, name, level, moves, types):
         """
@@ -9208,59 +9223,59 @@ class Combat(commands.Cog):
                     # If we reach this point and THEY WERE CHARGING, clear the tags so the attack can land!
                     if is_currently_charging:
                         end_charge(attacker)
-                        # ==========================================
+                    # ==========================================
+                    
+                    # ==========================================
+                    # 🚨 ACCURACY, EVASION, & OHKO BYPASS
+                    # ==========================================
+                    is_ohko = raw_move_name in OHKO_MOVES and not attacker_is_maxed
+
+                    # Shared with the physics engine so the two copies cannot drift
+                    # A standing Lock-On is spent here and guarantees this one attack
+                    is_guaranteed = (raw_move_name in GUARANTEED_HIT_MOVES
+                                     or consume_lock_on(attacker))
+
+                    # Safely fetch abilities
+                    atk_ability = get_active_ability(attacker)
+                    def_ability = get_active_ability(defender)
+                    has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
+                    target_is_vulnerable = defender.get('volatile_statuses', {}).get('glaive_rush')
+                    
+                    move_acc = move.get('accuracy', 0)
+                    if not isinstance(move_acc, int): move_acc = 100 
+
+                    if not is_ohko and not has_no_guard and not target_is_vulnerable and not is_guaranteed:
                         
-                        # ==========================================
-                        # 🚨 ACCURACY, EVASION, & OHKO BYPASS
-                        # ==========================================
-                        is_ohko = raw_move_name in OHKO_MOVES and not attacker_is_maxed
+                        # Stages, the accuracy and evasion abilities, and Wonder Skin
+                        # all live in one shared function so the two engines' copies
+                        # of this cannot drift apart.
+                        final_acc = hit_chance(
+                            attacker, defender, move,
+                            weather=state.get('weather', {'type': 'none'})['type'],
+                            magic_room=state.get('field', {}).get('magic_room', 0) > 0)
 
-                        # Shared with the physics engine so the two copies cannot drift
-                        # A standing Lock-On is spent here and guarantees this one attack
-                        is_guaranteed = (raw_move_name in GUARANTEED_HIT_MOVES
-                                         or consume_lock_on(attacker))
+                        # 3. Roll the dice!
+                        if random.uniform(0, 100) > final_acc:
+                            combat_log += "💨 The attack missed!\n"
 
-                        # Safely fetch abilities
-                        atk_ability = get_active_ability(attacker)
-                        def_ability = get_active_ability(defender)
-                        has_no_guard = (atk_ability == 'no-guard' or def_ability == 'no-guard')
-                        target_is_vulnerable = defender.get('volatile_statuses', {}).get('glaive_rush')
-                        
-                        move_acc = move.get('accuracy', 0)
-                        if not isinstance(move_acc, int): move_acc = 100 
+                            # 🚨 STOMPING TANTRUM MEMORY: a whiff counts as a failure
+                            attacker['last_move_failed'] = True
 
-                        if not is_ohko and not has_no_guard and not target_is_vulnerable and not is_guaranteed:
-                            
-                            # Stages, the accuracy and evasion abilities, and Wonder Skin
-                            # all live in one shared function so the two engines' copies
-                            # of this cannot drift apart.
-                            final_acc = hit_chance(
-                                attacker, defender, move_stats,
-                                weather=state.get('weather', {'type': 'none'})['type'],
-                                magic_room=state.get('field', {}).get('magic_room', 0) > 0)
+                            # Blunder Policy answers an ACCURACY miss, which is
+                            # precisely what this branch is - a protect, an immunity
+                            # or a failed status move is not a blunder.
+                            combat_log += blunder_policy_on_miss(attacker)
 
-                            # 3. Roll the dice!
-                            if random.uniform(0, 100) > final_acc:
-                                combat_log += "💨 The attack missed!\n"
+                            # 🚨 CRASH DAMAGE (Miss)
+                            if raw_move_name in ['jump-kick', 'high-jump-kick']:
+                                crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
+                                attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
+                                combat_log += f"💥 {attacker['name'].capitalize()} kept going and crashed! (-{crash_dmg} HP)\n"
 
-                                # 🚨 STOMPING TANTRUM MEMORY: a whiff counts as a failure
-                                attacker['last_move_failed'] = True
-
-                                # Blunder Policy answers an ACCURACY miss, which is
-                                # precisely what this branch is - a protect, an immunity
-                                # or a failed status move is not a blunder.
-                                combat_log += blunder_policy_on_miss(attacker)
-
-                                # 🚨 CRASH DAMAGE (Miss)
-                                if raw_move_name in ['jump-kick', 'high-jump-kick']:
-                                    crash_dmg = max(1, math.floor(attacker.get('max_hp', 100) / 2))
-                                    attacker['current_hp'] = max(0, attacker['current_hp'] - crash_dmg)
-                                    combat_log += f"💥 {attacker['name'].capitalize()} kept going and crashed! (-{crash_dmg} HP)\n"
-
-                                # If a Rampage move misses, the rampage is disrupted!
-                                if 'rampage' in attacker.get('volatile_statuses', {}):
-                                    del attacker['volatile_statuses']['rampage']
-                                continue
+                            # If a Rampage move misses, the rampage is disrupted!
+                            if 'rampage' in attacker.get('volatile_statuses', {}):
+                                del attacker['volatile_statuses']['rampage']
+                            continue
 
                     # 🚨 LAST RESPECTS TALLY: refresh the attacker's casualty count so the
                     # physics engine can price the move without needing team access.
@@ -11439,14 +11454,16 @@ class Combat(commands.Cog):
         # ==========================================
         # ECOLOGICAL STAMINA CHECK
         # ==========================================
-        success, msg = await self.check_and_consume_energy(user_id, cost=10)
+        success, msg, energy_haul = await self.check_and_consume_energy(
+            user_id, cost=ENERGY_DUEL_COST)
 
         if not success:
-            # Player is out of energy! Send the error and cancel the battle.
+            # The only refusal left is a broken account. Being tired is no longer one.
             return await ctx.send(msg)
-        
-        # If success is True, the energy was successfully deducted. 
-        # We can append the remaining energy text to the start of the battle log!
+
+        # The duel goes ahead either way; `energy_haul` is what it will pay when it is
+        # won, and it is carried on the state because the rewards engine runs many turns
+        # later in a different object.
         combat_log = f"*{msg}*\n\n"
         # ==========================================
 
@@ -11609,7 +11626,14 @@ class Combat(commands.Cog):
                 'weather': {'type': 'none', 'duration': 0},
                 'adaptation': {'used': False, 'active': False, 'type': 'none', 'turns': 0, 'backup': {}},
                 'key_items': access_ledger,
-                
+
+                # What this duel will pay if it is won, decided by the reserve that
+                # was standing when it started. Carried here because the rewards
+                # engine runs many turns later, in the dashboard rather than in this
+                # command, and re-reading the meter there would price the duel by
+                # whatever the trainer had recovered while fighting it.
+                'energy_haul': energy_haul,
+
                 # ==========================================
                 # ENVIRONMENTAL HAZARD TRACKERS
                 # ==========================================
@@ -11641,8 +11665,10 @@ class Combat(commands.Cog):
             # ==========================================
             #  FIRE THE ON_ENTRY ABILITY HOOK
             # ==========================================
-            # 1. Start with your default opening string
-            combat_log = f"**{ctx.author.name}** vs. **Rival Survey Team**\n\n"
+            # 1. Start with your default opening string. The energy line is kept in
+            #    front of it - it was being computed and then thrown away here, so a
+            #    trainer never saw what the duel had cost or what it would pay.
+            combat_log += f"**{ctx.author.name}** vs. **Rival Survey Team**\n\n"
             combat_log += f"A wild rival appeared! They sent out **{n_lead['name'].capitalize()}**!\n"
             combat_log += f"Go, **{p_lead['name'].capitalize()}**!\n\n"
 

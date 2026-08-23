@@ -368,6 +368,14 @@ EQUIPMENT_CATALOG = {
     "z-ring":  {"name": "Z Ring", "price": 0, "desc": "Allows a pokemon to use Z moves with a Z-crystal in battle.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
     "encrypted-field-notes":  {"name": "Encrypted Field Notes", "price": 0, "desc": "Scan with `!analyze notes` to get a field directive.", "emoji": "📝", "category": "keyitems", "purchasable": False},
     "wishing-fragment":  {"name": "Wishing Fragment", "price": 0, "desc": "Exchange with `!refine` to make a Dynamax Band.", "emoji": "📝", "category": "keyitems", "purchasable": False},
+    # The other two refining materials. They have been droppable since the anomaly rolls
+    # were written and consumable by `!refine` for just as long, but neither had a
+    # catalog row - so `!inventory` showed a bare hyphenated slug with no name, no emoji
+    # and no hint of what it was for, and `!shop` could not describe something a player
+    # was already holding. Listed here for the same reason the Wishing Fragment is, and
+    # unpurchaseable for the same reason too: the anomaly roll IS the way to get one.
+    "raw-keystone":  {"name": "Raw Keystone", "price": 0, "desc": "Exchange with `!refine` to make a Mega Bracelet.", "emoji": "🌠", "category": "keyitems", "purchasable": False},
+    "sparkling-stone":  {"name": "Sparkling Stone", "price": 0, "desc": "Exchange with `!refine` to make a Z-Ring.", "emoji": "☀️", "category": "keyitems", "purchasable": False},
     "nugget":  {"name": "Nugget", "price": 0, "desc": "Exchange for Eco-Tokens", "emoji": "💵", "category": "keyitems", "purchasable": False, "sell_price": 5000},
     "memory-spore":  {"name": "Memory Spore", "price": 0, "desc": "Allows a pokemon to learn a tutor move.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
     

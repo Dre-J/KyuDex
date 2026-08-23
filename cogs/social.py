@@ -4,6 +4,9 @@ from utils.constants import DB_FILE
 from utils.accounts import wipe_user
 from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
                            log_trade, snapshot)
+from utils.limits import (ENERGY_MAX, ENERGY_BANK_CAP, ENERGY_REGEN_PER_HOUR,
+                          describe_energy, regenerate_energy)
+from utils.roster import bump_to_end_of_box
 from utils import checks, trading
 import time
 import aiosqlite
@@ -86,6 +89,12 @@ class GiftPokemonView(discord.ui.View):
                     "UPDATE caught_pokemon SET user_id = ? WHERE instance_id = ? AND user_id = ?",
                     (target_id, tag, author_id)
                 )
+
+                # 3. And put it at the END of their box. Without this it arrives
+                #    wearing the rowid it was CAUGHT with, which is very often lower
+                #    than the recipient's starter's - so the gift becomes their Box #1
+                #    and everything they own shifts up by one. See bump_to_end_of_box.
+                await bump_to_end_of_box(db, tag)
 
                 # 3. Safety Sweep: Remove from active partner if applicable
                 async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (author_id,)) as cursor:
@@ -579,6 +588,13 @@ class ActiveTradeView(discord.ui.View):
                                 if cursor.rowcount == 0:
                                     raise ValueError(f"Validation failed for Specimen `{tag[:8]}`.")
 
+                                # The same renumbering a gift does: a traded specimen
+                                # carries the rowid it was CAUGHT with, and box numbers
+                                # are counted over rowid. Without this it lands wherever
+                                # its original capture date puts it in its new owner's
+                                # box - very often in front of their starter.
+                                await bump_to_end_of_box(cursor, tag)
+
                             # 3. TRANSFER P2's SPECIMENS TO P1
                             for p in self.p2_offer:
                                 tag = p['tag']
@@ -604,6 +620,13 @@ class ActiveTradeView(discord.ui.View):
                                     
                                 if cursor.rowcount == 0:
                                     raise ValueError(f"Validation failed for Specimen `{tag[:8]}`.")
+
+                                # The same renumbering a gift does: a traded specimen
+                                # carries the rowid it was CAUGHT with, and box numbers
+                                # are counted over rowid. Without this it lands wherever
+                                # its original capture date puts it in its new owner's
+                                # box - very often in front of their starter.
+                                await bump_to_end_of_box(cursor, tag)
                                 
                             # 4. ACTIVE PARTNER SAFETY SWEEP
                             p1_tags = [p['tag'] for p in self.p1_offer]
@@ -923,7 +946,7 @@ class Social(commands.Cog):
                     "`!view [ID]`": "Inspect a specimen's biometrics, statistics, and genetic footprint.",
                     "`!nickname`": "Assign your pokemon a custom name",
                     "`!settag`": "Give your pokemon a special tag to help sorting.",
-                    "`!release`": "Re-Home a pokemon in exchange for Eco-Tokens.",
+                    "`!release`": "Re-Home a pokemon in exchange for Eco-Tokens. Takes several at once: `!release 4 7 12` or `!release 4-9`.",
                     "`!partner`": "Set a specific pokemon to be your partner.",
                     "`!equip`": "Assign an owned item to a specific pokemon.",
                     "`!unequip`": "Remove an owned item to a specific pokemon.",
@@ -1259,26 +1282,29 @@ class Social(commands.Cog):
             # ==========================================
             # LAZY-EVALUATION ENERGY MATH
             # ==========================================
-            MAX_ENERGY = 100
-            REGEN_PER_HOUR = 10
-            SECONDS_IN_HOUR = 3600
-            
+            # The arithmetic used to be written out here a second time, with its own
+            # copies of 100 and 10 and its own idea of when the tick advances. Two
+            # transcriptions of one rule agree only until one of them is edited, and
+            # this pair could not survive the reserve being allowed past a hundred.
+            # `!profile` and `!npcduel` now read the same function.
             now = int(time.time())
-            display_energy = db_energy
-            regen_text = "(MAX)"
-            
-            if db_energy < MAX_ENERGY:
-                seconds_passed = now - last_tick
-                hours_passed = seconds_passed // SECONDS_IN_HOUR
-                
-                # Calculate what their energy is *right now* based on time passed
-                energy_gained = int(hours_passed * REGEN_PER_HOUR)
-                display_energy = min(MAX_ENERGY, db_energy + energy_gained)
-                
-                if display_energy < MAX_ENERGY:
-                    next_tick_in = SECONDS_IN_HOUR - (seconds_passed % SECONDS_IN_HOUR)
-                    mins, secs = divmod(next_tick_in, 60)
-                    regen_text = f"(+10 in {mins}m {secs}s)"
+            display_energy, display_tick = regenerate_energy(db_energy, last_tick, now)
+
+            if display_energy >= ENERGY_BANK_CAP:
+                regen_text = "(BANKED)"
+            else:
+                next_tick_in = max(0, 3600 - (now - display_tick))
+                mins, secs = divmod(next_tick_in, 60)
+                regen_text = f"(+{ENERGY_REGEN_PER_HOUR} in {mins}m {secs}s)"
+
+            note = describe_energy(display_energy)
+            if note:
+                regen_text = f"{regen_text} · {note}"
+
+            # A deficit reads as an empty tank with a warning under it, not as a
+            # negative number - the meter is a fuel gauge, and a gauge that can read
+            # minus forty tells a player nothing they can act on.
+            meter = f"**{max(0, display_energy)} / {ENERGY_MAX}**"
             # ==========================================
             
             # Format the Visas beautifully for the UI
@@ -1302,7 +1328,7 @@ class Social(commands.Cog):
                 embed.description = f"📬 **You have {unread_count} unread update{'s' if unread_count > 1 else ''}!** Type `!inbox` to read them."
             
             # --- Inject the Stamina row ---
-            embed.add_field(name="🔋 Field Energy", value=f"**{display_energy} / {MAX_ENERGY}**\n*{regen_text}*", inline=False)
+            embed.add_field(name="🔋 Field Energy", value=f"{meter}\n*{regen_text}*", inline=False)
             
             embed.add_field(name="Global Eco-Tokens", value=f"🪙 {tokens:,}", inline=True)
             embed.add_field(name="Local Contribution", value=f"⭐ {contribution:,} points", inline=True)

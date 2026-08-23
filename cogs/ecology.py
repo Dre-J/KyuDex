@@ -40,7 +40,7 @@ from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
-                          parse_candy_request)
+                          parse_candy_request, parse_box_numbers, MAX_BULK_BOXES)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
@@ -822,37 +822,65 @@ class RegionSelect(discord.ui.Select):
         await interaction.response.edit_message(content=f"You selected **{selected_region}**. Now, choose your starting specimen:", view=view)
 
 class ReleaseConfirmView(discord.ui.View):
-    def __init__(self, ctx, db_file, pokemon_data, user_id):
+    """
+    The confirmation for a release of ONE OR MORE specimens.
+
+    It used to hold a single `(name, level, instance_id)` tuple. It holds a list of them
+    now, and the single-specimen case is simply a list of one - which is why there is no
+    second view and no branch anywhere below. The one thing that genuinely differs is
+    the wording, and that is decided by `len`.
+
+    THE RESOLUTION HAPPENS BEFORE THIS VIEW EXISTS, and that is the part that matters.
+    Box numbers are positions in a list, not names: delete box 4 and everything above it
+    slides down one, so releasing 4, 7 and 12 one at a time releases 4, then what USED
+    to be 8, then what used to be 14. Every number is resolved to an instance_id against
+    a single snapshot of the roster, and it is those ids that are deleted.
+    """
+
+    def __init__(self, ctx, db_file, specimens, user_id):
         super().__init__(timeout=60)
         self.ctx = ctx
         self.db_file = db_file
-        # pokemon_data contains (name, level, actual_tag)
-        self.pokemon_data = pokemon_data
+        # A list of (name, level, instance_id).
+        self.specimens = list(specimens)
         self.user_id = user_id
-        self.reward = 10 + (pokemon_data[1] * 3) # Calculate reward here
+        self.reward = sum(10 + (level * 3) for _name, level, _tag in self.specimens)
 
     @discord.ui.button(label="Confirm Release", style=discord.ButtonStyle.danger, custom_id="confirm_release")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("You cannot confirm this release.", ephemeral=True)
 
-        name, level, actual_tag = self.pokemon_data
-
-        # Disable buttons
         for child in self.children:
             child.disabled = True
-        
+
+        tags = [tag for _name, _level, tag in self.specimens]
+
         try:
             async with aiosqlite.connect(self.db_file) as db:
                 await db.execute("BEGIN TRANSACTION")
-                await db.execute("DELETE FROM caught_pokemon WHERE instance_id = ?", (actual_tag,))
+                # One statement rather than a loop, so a failure halfway cannot leave
+                # half a release done and the grant unpaid.
+                await db.execute(
+                    "DELETE FROM caught_pokemon WHERE instance_id IN "
+                    f"({','.join('?' for _ in tags)})", tags)
                 await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (self.reward, self.user_id))
                 await db.commit()
 
             embed = discord.Embed(title="🌿 Wildlife Reintroduced", color=discord.Color.green())
-            embed.description = f"**{self.ctx.author.name}** successfully rehabilitated and released their **{name.capitalize()}** back into the wild."
+            if len(self.specimens) == 1:
+                name = self.specimens[0][0]
+                embed.description = (f"**{self.ctx.author.name}** successfully rehabilitated "
+                                     f"and released their **{name.capitalize()}** back into the wild.")
+                embed.set_footer(text=f"Tag ID Deleted: {tags[0][:8]}")
+            else:
+                roll = "\n".join(f"• **{n.capitalize()}** (Lv. {lv})"
+                                 for n, lv, _t in self.specimens)
+                embed.description = (f"**{self.ctx.author.name}** successfully rehabilitated "
+                                     f"and released **{len(self.specimens)}** specimens back "
+                                     f"into the wild.\n\n{roll}")
+                embed.set_footer(text=f"{len(self.specimens)} Tag IDs deleted.")
             embed.add_field(name="Conservation Grant Awarded", value=f"🪙 +{self.reward} Eco-Tokens")
-            embed.set_footer(text=f"Tag ID Deleted: {actual_tag[:8]}")
 
             await interaction.response.edit_message(embed=embed, view=self)
 
@@ -864,10 +892,13 @@ class ReleaseConfirmView(discord.ui.View):
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("You cannot cancel this release.", ephemeral=True)
-            
+
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content="Release cancelled. The specimen remains in your PC.", embed=None, view=self)
+        noun = "specimen remains" if len(self.specimens) == 1 else "specimens remain"
+        await interaction.response.edit_message(
+            content=f"Release cancelled. The {noun} in your PC.", embed=None, view=self)
+
 
 class PokemonPaginator(discord.ui.View):
     def __init__(self, bot, user_id, current_index, total_pokemon, active_partner_id):
@@ -2624,14 +2655,40 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_not_in_trade()
     @checks.is_authorized()
-    async def release_pokemon(self, ctx, box_number: str):
+    async def release_pokemon(self, ctx, *boxes: str):
+        """
+        Release one specimen, or several at once.
+
+        `!release 4` - one, as before.
+        `!release 4 7 12` - three.
+        `!release 4-9` - a run of six.
+
+        EVERY NUMBER IS RESOLVED AGAINST ONE SNAPSHOT of the roster before anything is
+        deleted, and this is the whole reason a bulk release needs writing rather than
+        looping the single one. A box number is a POSITION, not a name: `ROW_NUMBER()
+        OVER(ORDER BY cp.rowid)`. Release box 4 and every number above it slides down
+        by one, so releasing 4, then 7, then 12 in sequence would release box 4, then
+        whatever used to be box 8, then whatever used to be box 14 - three animals, two
+        of them not the ones asked for, and no way to tell afterwards.
+
+        The exclusions are the same ones every other box command uses, and they are
+        applied in the same two places: the CTE hides anything deployed or sitting on
+        the GTS, so those specimens are not numbered and cannot be named; and the
+        partner and party checks refuse by name afterwards, so a trainer is told WHY
+        rather than being told the number does not exist.
+        """
         user_id = str(ctx.author.id)
-        
-        if not box_number.isdigit():
-            return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!release 4`).")
-            
+
+        numbers, complaint = parse_box_numbers(boxes)
+        if complaint:
+            return await ctx.send(complaint)
+
         async with aiosqlite.connect(DB_FILE) as db:
-            async with db.execute("""
+            # ONE snapshot, every number resolved against it. The placeholders are
+            # generated from the count rather than interpolated, so the numbers stay
+            # parameters.
+            placeholders = ','.join('?' for _ in numbers)
+            async with db.execute(f"""
                 WITH Roster AS (
                     SELECT s.name, cp.level, cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
                     FROM caught_pokemon cp
@@ -2639,34 +2696,75 @@ class Ecology(commands.Cog):
                     WHERE cp.user_id = ?
                     AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
                     AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                ) SELECT name, level, instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(box_number))) as cursor:
-                pokemon = await cursor.fetchone()
-            
-            if not pokemon:
-                return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`.")
-                
-            name, level, actual_tag = pokemon
-            
+                ) SELECT box_number, name, level, instance_id FROM Roster
+                  WHERE box_number IN ({placeholders})
+                  ORDER BY box_number
+            """, (user_id, *numbers)) as cursor:
+                rows = await cursor.fetchall()
+
+            found = {row[0]: row for row in rows}
+            missing = [n for n in numbers if n not in found]
+
+            if not found:
+                if len(numbers) == 1:
+                    return await ctx.send(f"❌ Could not find a specimen in Box `#{numbers[0]}`.")
+                return await ctx.send(
+                    "❌ None of those box numbers named a specimen you can release. "
+                    "Deployed specimens and anything on the GTS are not numbered.")
+
+            # The two locks that refuse by NAME rather than by absence.
             async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
                 partner_data = await cursor.fetchone()
-            
-            if partner_data and partner_data[0] == actual_tag:
-                return await ctx.send("⚠️ You cannot release your Active Partner! Use `!partner` to assign a new lead researcher first.")
+            partner_tag = partner_data[0] if partner_data else None
 
-            async with db.execute("SELECT slot FROM user_party WHERE user_id = ? AND instance_id = ?", (user_id, actual_tag)) as cursor:
-                party_data = await cursor.fetchone()
-            
-            if party_data:
-                return await ctx.send(f"🛡️ **Safety Lock:** You cannot release a specimen that is actively deployed in your fieldwork roster (Slot {party_data[0]}). Please remove it from your party first.")
+            async with db.execute(
+                    "SELECT instance_id, slot FROM user_party WHERE user_id = ?",
+                    (user_id,)) as cursor:
+                party_slots = {row[0]: row[1] for row in await cursor.fetchall()}
+
+            releasable, blocked = [], []
+            for number in sorted(found):
+                _box, name, level, tag = found[number]
+                if tag == partner_tag:
+                    blocked.append(f"`#{number}` **{name.capitalize()}** - your Active Partner")
+                elif tag in party_slots:
+                    blocked.append(f"`#{number}` **{name.capitalize()}** - deployed in roster slot {party_slots[tag]}")
+                else:
+                    releasable.append((name, level, tag))
+
+            for number in missing:
+                blocked.append(f"`#{number}` - no specimen at that number")
+
+        if not releasable:
+            notice = "\n".join(blocked)
+            return await ctx.send(
+                "🛡️ **Safety Lock:** nothing in that request can be released.\n\n"
+                f"{notice}\n\n*Use `!partner` to reassign a lead researcher, or "
+                "`!party remove` to stand a specimen down first.*")
 
         # --- Trigger the Confirmation UI ---
-        view = ReleaseConfirmView(ctx, DB_FILE, pokemon, user_id)
+        view = ReleaseConfirmView(ctx, DB_FILE, releasable, user_id)
+        if len(releasable) == 1:
+            name, level, _tag = releasable[0]
+            body = (f"Are you sure you want to release **{name.capitalize()}** "
+                    f"(Lv. {level})?")
+        else:
+            roll = "\n".join(f"• **{n.capitalize()}** (Lv. {lv})"
+                             for n, lv, _t in releasable)
+            body = (f"Are you sure you want to release these "
+                    f"**{len(releasable)}** specimens?\n\n{roll}")
+
         embed = discord.Embed(
-            title="⚠️ Confirm Reintroduction", 
-            description=f"Are you sure you want to release **{name.capitalize()}** (Lv. {level})?\n\n*This action is permanent and cannot be undone.*",
+            title="⚠️ Confirm Reintroduction",
+            description=f"{body}\n\n*This action is permanent and cannot be undone.*",
             color=discord.Color.red()
         )
+        embed.add_field(name="Conservation Grant",
+                        value=f"🪙 +{view.reward} Eco-Tokens", inline=False)
+        if blocked:
+            # Shown rather than silently dropped. A bulk command that quietly does less
+            # than it was asked to is the one that teaches people not to trust it.
+            embed.add_field(name="🛡️ Held back", value="\n".join(blocked), inline=False)
         await ctx.send(embed=embed, view=view)
 
     @commands.command(name="settag", aliases=["label"])
@@ -3560,10 +3658,15 @@ class Ecology(commands.Cog):
                     standard_str, hidden_str, raw_gender_rate, is_legendary, is_mythical = ability_data
                     standard_list = standard_str.split(",") if standard_str else ["Unknown"]
                     
-                    if hidden_str != "None" and random.random() <= 0.20:
-                        assigned_ability = hidden_str
-                    else:
-                        assigned_ability = random.choice(standard_list)   
+                    # A WILD CATCH NEVER ARRIVES ON ITS HIDDEN ABILITY. It used to, one
+                    # time in five, which made the scarcest thing in the roster the one
+                    # you got by catching enough of anything - and it left nothing for
+                    # the Ability Patch to sell or, later, for a raid to be worth
+                    # running. The hidden ability is now reached by exactly two routes:
+                    # an Ability Patch, bought at a price that respects the work, and
+                    # the raids that are coming. `hidden_str` is still read because the
+                    # Patch needs to know what it is aiming at.
+                    assigned_ability = random.choice(standard_list)
                     gender_rate = raw_gender_rate if raw_gender_rate is not None else 4
                 else:
                     gender_rate = 4
