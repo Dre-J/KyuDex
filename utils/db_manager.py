@@ -185,3 +185,55 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         return evolved_id, name
 
     return None
+
+async def evolution_family(db, species_name):
+    """
+    Every pokedex_id in one species' evolutionary line, as a sorted list.
+
+    WALKS BOTH DIRECTIONS, TRANSITIVELY. `.evo charizard` is far more useful meaning
+    "show me this whole line" than meaning "show me what Charizard evolves into", which
+    for a fully-evolved specimen is nothing at all - a filter that returns an empty list
+    for the most-searched-for member of a family is a filter nobody will use twice. The
+    broad reading also contains the narrow one, so nothing is lost by taking it.
+
+    Returns `(ids, resolved_name)`, or `([], None)` when the species is not recognised.
+
+    `evolution_rules` carries DUPLICATE rows for the branching families - Eevee has four
+    identical Sylveon rows, one per qualifying rule - so the walk is over a set. Without
+    that a `.evo eevee` would build an IN clause with fifteen entries for eight species.
+    """
+    name = str(species_name or '').strip().lower().replace(' ', '-')
+    if not name:
+        return [], None
+
+    async with db.execute(
+            "SELECT pokedex_id, name FROM base_pokemon_species WHERE LOWER(name) = ?",
+            (name,)) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        # A partial name, so `.evo char` finds Charmander. Ordered by pokedex_id so the
+        # earliest member wins, which is the one whose family a player means.
+        async with db.execute(
+                "SELECT pokedex_id, name FROM base_pokemon_species "
+                "WHERE LOWER(name) LIKE ? ORDER BY pokedex_id LIMIT 1",
+                (f"{name}%",)) as cursor:
+            row = await cursor.fetchone()
+    if not row:
+        return [], None
+
+    start, resolved = row[0], row[1]
+    seen, frontier = {start}, [start]
+    while frontier:
+        placeholders = ','.join('?' for _ in frontier)
+        async with db.execute(
+                f"SELECT evolved_species_id FROM evolution_rules "
+                f"WHERE base_species_id IN ({placeholders}) "
+                f"UNION "
+                f"SELECT base_species_id FROM evolution_rules "
+                f"WHERE evolved_species_id IN ({placeholders})",
+                (*frontier, *frontier)) as cursor:
+            neighbours = {r[0] for r in await cursor.fetchall() if r[0] is not None}
+        frontier = sorted(neighbours - seen)
+        seen.update(frontier)
+
+    return sorted(seen), resolved

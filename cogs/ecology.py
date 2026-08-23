@@ -41,7 +41,7 @@ from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES)
-from utils.filters import parse_filters, filter_help
+from utils.filters import filter_help, resolve_query
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
@@ -1442,11 +1442,15 @@ class SurveyPaginator(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
 class InventoryPaginator(discord.ui.View):
-    def __init__(self, ctx, rescued_pokemon, tokens):
+    def __init__(self, ctx, rescued_pokemon, tokens, applied=None):
         super().__init__(timeout=180)
         self.ctx = ctx
         self.rescued_pokemon = rescued_pokemon
         self.tokens = tokens
+        # What the filters ACTUALLY resolved to. Held here rather than stitched onto the
+        # embed by the caller, because the caller only ever saw page one - every later
+        # page silently lost the line saying what was being filtered.
+        self.applied = list(applied or [])
         self.current_page = 0
         self.items_per_page = 10
         self.max_pages = max(1, math.ceil(len(rescued_pokemon) / self.items_per_page))
@@ -1464,16 +1468,25 @@ class InventoryPaginator(discord.ui.View):
         end = start + self.items_per_page
         chunk = self.rescued_pokemon[start:end]
 
-        embed = discord.Embed(title=f"📋 {self.ctx.author.name}'s Ecological Survey", color=discord.Color.blue())
-        embed.set_thumbnail(url=self.ctx.author.avatar.url if self.ctx.author.avatar else self.ctx.author.default_avatar.url)
-        embed.add_field(name="Global Eco-Tokens", value=f"🪙 {self.tokens:,}", inline=False)
+        # NO THUMBNAIL, and no token field. The avatar told a trainer nothing they did
+        # not already know - they typed the command - and Discord reflows the whole
+        # description into a narrow column beside it, so a thumbnail cost every line
+        # roughly a third of its width. The token balance moved into the footer for the
+        # same reason: it is context, not content, and it was taking a full field.
+        embed = discord.Embed(
+            title=("📋 Filtered Survey Results" if self.applied
+                   else f"📋 {self.ctx.author.name}'s Ecological Survey"),
+            colour=discord.Colour.blue())
 
-        if chunk:
-            embed.description = "\n".join(chunk)
-        else:
-            embed.description = "*No specimens match this filter.*"
-            
-        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} | Total Results: {len(self.rescued_pokemon)}")
+        embed.description = ("\n".join(chunk) if chunk
+                             else "*No specimens match this filter.*")
+
+        footer = (f"Page {self.current_page + 1}/{self.max_pages}  ·  "
+                  f"{len(self.rescued_pokemon)} specimens  ·  "
+                  f"{self.tokens:,} Eco-Tokens")
+        if self.applied:
+            footer += "\n" + " · ".join(self.applied)
+        embed.set_footer(text=footer)
         return embed
 
     # --- ROW 0: PAGINATION CONTROLS ---
@@ -3386,7 +3399,16 @@ class Ecology(commands.Cog):
                                   colour=discord.Colour.green())
             return await ctx.send(embed=embed)
 
-        clauses, params, order_clause, applied, complaint = parse_filters(search_query)
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                # `.evo` is the one filter that needs the database to parse, so the whole
+                # query is resolved through the shared door rather than here.
+                (clauses, params, order_clause,
+                 applied, complaint) = await resolve_query(db, search_query)
+        except Exception as e:
+            print(f"PC filter parse error: {e}")
+            return await ctx.send("❌ A database error occurred while reading your filters.")
+
         if complaint:
             # ONE bad filter refuses the WHOLE query. A list that quietly ignored half
             # the request is the one that gets a specimen released by mistake.
@@ -3453,28 +3475,32 @@ class Ecology(commands.Cog):
             iv_percentage = int((iv_total / 186.0) * 100)
 
             display_name = f'"{nickname}" ({species_name.capitalize()})' if nickname else species_name.capitalize()
-            shiny_icon = "🌟" if is_shiny else "🌿"
+
+            # BADGES ONLY WHEN THERE IS SOMETHING TO SAY. Every line used to open with a
+            # herb - 🌿 for "not shiny" - which is a badge for the absence of a property,
+            # so a roster of five hundred ordinary specimens was five hundred identical
+            # emoji doing no work at all. The star stays because a shiny IS worth marking;
+            # the herb is gone, and the column it was padding closes up behind it.
+            marks = ""
+            if is_shiny:
+                marks += "🌟 "
+            if gmax:
+                # The red circle was a stand-in for a G-Max factor. The real emoji exists.
+                marks += f"{GMAX_ICON} "
+
             tag_display = f" `[{custom_tag}]`" if custom_tag else ""
-            gmax_display = " 🔴" if gmax else ""
             gender_display = {'M': " ♂", 'F': " ♀"}.get(gender, "")
 
-            line = (f"**#{box_number}** | {shiny_icon} **{display_name}**{gender_display}{gmax_display} "
-                    f"| Lvl {level} | IV: {iv_percentage}% | Tag: `{tag_id[:8]}`{tag_display}")
+            line = (f"`#{box_number:>3}` {marks}**{display_name}**{gender_display} "
+                    f"· Lv {level} · IV {iv_percentage}% · `{tag_id[:8]}`{tag_display}")
             lines.append(line)
 
-        view = InventoryPaginator(ctx, lines, tokens)
-        initial_embed = view.create_embed()
-
-        if applied:
-            # What ACTUALLY took effect, not what was typed. A filter that resolved to
-            # something other than the player expected - `.gender f` becoming `F`, a
-            # mention becoming an ID - is only debuggable if the line says so.
-            initial_embed.title = "📋 Filtered Survey Results"
-            initial_embed.set_footer(
-                text=f"{len(rows)} match · " + " · ".join(applied) + " | "
-                     + initial_embed.footer.text)
-
-        await ctx.send(embed=initial_embed, view=view)
+        # What ACTUALLY took effect, not what was typed. A filter that resolved to
+        # something other than the player expected - `.gender f` becoming `F`, a mention
+        # becoming an ID - is only debuggable if the line says so. Handed to the view so
+        # it survives paging, which it did not when the caller patched page one's footer.
+        view = InventoryPaginator(ctx, lines, tokens, applied)
+        await ctx.send(embed=view.create_embed(), view=view)
 
     @commands.command(name="catch")
     @checks.has_started()
