@@ -30,9 +30,10 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              ball_icon, BALL_FALLBACK, trait_badges, is_alpha_size,
                              GMAX_ICON, ALPHA_ICON,
                              MAX_SOUP, MAX_SOUP_COST, MAX_MUSHROOMS,
-                             MAX_SOUP_MUSHROOMS)
-from utils.limits import (EXPEDITION, EXPEDITION_DAILY_CAP, check_cap,
-                          record_use, describe_reset)
+                             MAX_SOUP_MUSHROOMS, NATURE_MINTS, NATURE_MULTIPLIERS,
+                             NEUTRAL_NATURES, mint_for)
+from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
+                          record_use, used_today, expedition_yield, describe_yield)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
 import re
 from utils import checks
@@ -1964,16 +1965,14 @@ class Ecology(commands.Cog):
                 #     mistyped biome or a locked sector does not read as "you are out
                 #     of expeditions" - by this line the trip is genuinely going to
                 #     happen unless the scanner comes back empty.
-                allowed, used_so_far, _ = await check_cap(
-                    db, user_id, EXPEDITION, EXPEDITION_DAILY_CAP)
-                if not allowed:
-                    refuse()
-                    return await ctx.send(
-                        f"🛰️ **Deployment Quota Reached:** You have run "
-                        f"**{used_so_far}/{EXPEDITION_DAILY_CAP}** expeditions today. "
-                        f"Field clearance renews in **{describe_reset()}**.\n"
-                        f"*Wild spawns in the habitat channel are unaffected — and "
-                        f"`!missions` still has fieldwork waiting.*")
+                # 3b. NO LONGER A WALL. This used to refuse the 41st expedition outright,
+                #     which is the bluntest possible answer and lands hardest on the
+                #     people playing the most. The trip always happens now; what decays,
+                #     past the soft cap, is the incidental haul - and that decay is
+                #     applied at the CATCH, because a trip that finds nothing has cost
+                #     nothing and should not count against anybody.
+                caught_today = await used_today(db, user_id, EXPEDITION_CATCH)
+                haul = expedition_yield(caught_today)
 
                 # 4. Generate the Biome-Specific Encounter (With Rarity Filter)
                 type_tuple = sql_type_tuple(EXPEDITION_BIOMES[biome]['types'])
@@ -2022,7 +2021,7 @@ class Ecology(commands.Cog):
                     trips_today = await record_use(db, user_id, EXPEDITION)
                     await db.commit()
                 else:
-                    trips_today = used_so_far
+                    trips_today = await used_today(db, user_id, EXPEDITION)
 
             if not spawn_data:
                 refuse()
@@ -2062,13 +2061,17 @@ class Ecology(commands.Cog):
                 description=f"You traverse the environment and isolate a biological signal...\n\nA wild {shiny_icon}**`{masked_display}`** {gender_icon(gender)} appeared!",
                 color=discord.Color.dark_green()
             )
-            # The allowance is only worth mentioning once it is nearly gone. Printing
+            # The slope is only worth mentioning once it is actually being felt. Printing
             # "3/40" on every card would turn a counter nobody will reach into a
-            # scoreboard everybody watches.
+            # scoreboard everybody watches - and there is no longer a number to run out
+            # of, only a haul that thins.
             footer = "This encounter is yours. Pick a ball, or leave it."
-            if trips_today >= EXPEDITION_DAILY_CAP - EXPEDITION_WARN_AT:
-                footer += (f" · {EXPEDITION_DAILY_CAP - trips_today} expedition(s) "
-                           f"left today")
+            slope = describe_yield(haul)
+            if slope:
+                footer += f" · {slope}"
+            elif trips_today >= EXPEDITION_SOFT_CAP - EXPEDITION_WARN_AT:
+                footer += (f" · {max(0, EXPEDITION_SOFT_CAP - trips_today)} more before "
+                           f"the haul starts thinning")
             embed.set_footer(text=footer)
             
             # ==========================================
@@ -3644,31 +3647,49 @@ class Ecology(commands.Cog):
                 if survey_row and survey_row[1] == survey_row[0]:
                     await ctx.send(f"📡 **Directive Complete:** You successfully surveyed the local **{target_species.capitalize().replace('-', ' ')}** population! Run `!claim` to receive your funding.")
 
-                found_notes = False 
+                found_notes = False
                 found_tokens = 0
                 found_berry = None
 
-                if random.random() <= 0.10: 
+                # DIMINISHING RETURNS, and only on an EXPEDITION catch. A specimen from
+                # the habitat channel is a shared event that somebody else could have
+                # taken, so it is never worth less for having been a busy day; a private
+                # expedition is a tap the player controls, and that is the one that needs
+                # a slope rather than a wall.
+                #
+                # The SPECIMEN is never touched - not its rarity, not its IVs, not its
+                # shininess. Only the incidental haul thins out, which is the difference
+                # between "you have surveyed enough today" and "stop playing".
+                haul = 1.0
+                if is_private_spawn:
+                    caught_today = await used_today(db, user_id, EXPEDITION_CATCH)
+                    haul = expedition_yield(caught_today)
+                    await record_use(db, user_id, EXPEDITION_CATCH)
+
+                if random.random() <= 0.10 * haul:
                     await db.execute("""
-                        INSERT INTO user_inventory (user_id, item_name, quantity) 
-                        VALUES (?, 'encrypted-field-notes', 1) 
-                        ON CONFLICT(user_id, item_name) 
+                        INSERT INTO user_inventory (user_id, item_name, quantity)
+                        VALUES (?, 'encrypted-field-notes', 1)
+                        ON CONFLICT(user_id, item_name)
                         DO UPDATE SET quantity = quantity + 1
                     """, (user_id,))
-                    found_notes = True 
-                    
-                if random.random() <= 0.40:
+                    found_notes = True
+
+                if random.random() <= 0.40 * haul:
                     berry_pool = list(CONSUMABLE_DATABASE.keys())
                     found_berry = random.choice(berry_pool)
                     await db.execute("""
-                        INSERT INTO user_inventory (user_id, item_name, quantity) 
-                        VALUES (?, ?, 1) 
-                        ON CONFLICT(user_id, item_name) 
+                        INSERT INTO user_inventory (user_id, item_name, quantity)
+                        VALUES (?, ?, 1)
+                        ON CONFLICT(user_id, item_name)
                         DO UPDATE SET quantity = quantity + 1
                     """, (user_id, found_berry))
 
-                if random.random() <= 0.50:
-                    found_tokens = random.randint(5, 150)
+                if random.random() <= 0.50 * haul:
+                    # Scaled as well as rolled for, so the slope is felt rather than
+                    # merely made less likely. At the floor this is still 1 token, never 0
+                    # - a payout that reaches exactly nothing is a wall wearing a hat.
+                    found_tokens = max(1, int(random.randint(5, 150) * haul))
                     await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (found_tokens, user_id))
 
                 await db.commit()
@@ -4451,6 +4472,15 @@ class Ecology(commands.Cog):
         if item_name in (MAX_SOUP, 'soup', 'maxsoup', 'max_soup'):
             return await self._serve_max_soup(ctx, box_number)
 
+        # A mint is fed the same way a vitamin is, so it belongs to this command too - but
+        # it moves no EV and shares none of the cap arithmetic below, so it is handed off
+        # before any of that. `!feed adamant 4` is what somebody will type, so the bare
+        # nature name is accepted alongside the full item name, exactly as `!feed pomeg 4`
+        # already is for the berries.
+        mint = item_name if item_name in NATURE_MINTS else mint_for(item_name)
+        if mint:
+            return await self._administer_mint(ctx, mint, box_number)
+
         # 1. Define the EV Mapping. Vitamins push a stat UP by 10 an item; Item Phase 7's
         #    six berries pull it DOWN by 10. One command rather than two, because the
         #    only thing that actually differs between the two directions is which way the
@@ -4595,6 +4625,90 @@ class Ecology(commands.Cog):
                                       "Notice: Consumption was halted early - the stat reached zero.")
 
             await ctx.send(embed=embed)
+
+    async def _administer_mint(self, ctx, mint: str, box_number: str):
+        """
+        A Nature Mint, which rewrites the stat spread a specimen was born with.
+
+        Same order as `!capsule`, `!patch` and the Max Soup: the change is proved possible
+        before the item is spent, so a mint fed to a specimen that already has that nature
+        stays in the pack. Nothing here is reversible for free - a mint costs 7,500 - and
+        that is exactly why it must not be spendable on a no-op.
+        """
+        user_id = str(ctx.author.id)
+        nature = NATURE_MINTS[mint]
+
+        if not box_number.isdigit():
+            return await ctx.send(f"⚠️ Usage: `!feed {mint} <box number>`")
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT quantity FROM user_inventory "
+                    "WHERE user_id = ? AND item_name = ?", (user_id, mint)) as cursor:
+                owned = await cursor.fetchone()
+
+            if not owned or owned[0] < 1:
+                return await ctx.send(
+                    f"🎒 You don't have a **{mint.replace('-', ' ').title()}**. "
+                    f"The lab sells them in `!market`.")
+
+            # Same Roster shape the vitamins use, so a deployed or deposited specimen is
+            # hidden from a mint for the reasons it is hidden from a Protein.
+            async with db.execute("""
+                WITH Roster AS (
+                    SELECT cp.instance_id, cp.nature, s.name,
+                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp
+                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                ) SELECT instance_id, nature, name FROM Roster WHERE box_number = ?
+            """, (user_id, int(box_number))) as cursor:
+                target = await cursor.fetchone()
+
+            if not target:
+                return await ctx.send(
+                    f"❌ Could not find a specimen in Box `#{box_number}`. Are they deployed?")
+
+            instance_id, current, species = target
+            pretty = species.replace('-', ' ').title()
+            current_clean = (current or '').strip().lower()
+
+            # A neutral nature is already Serious in everything but name, so a Serious
+            # Mint on a Hardy specimen would cost 7,500 to change a word.
+            if current_clean == nature or (nature == 'serious'
+                                           and current_clean in NEUTRAL_NATURES):
+                return await ctx.send(
+                    f"🌱 **{pretty}** already has a **{(current or 'Serious').title()}** "
+                    f"nature. The mint stays in your pack.")
+
+            await db.execute("UPDATE caught_pokemon SET nature = ? WHERE instance_id = ?",
+                             (nature.title(), instance_id))
+            if owned[0] - 1 <= 0:
+                await db.execute(
+                    "DELETE FROM user_inventory WHERE user_id = ? AND item_name = ?",
+                    (user_id, mint))
+            else:
+                await db.execute(
+                    "UPDATE user_inventory SET quantity = quantity - 1 "
+                    "WHERE user_id = ? AND item_name = ?", (user_id, mint))
+            await db.commit()
+
+        raised, lowered = NATURE_MULTIPLIERS[nature]
+        embed = discord.Embed(
+            title="🌱 Nature Realigned",
+            description=f"**{pretty}** ate the {mint.replace('-', ' ').title()}. Its "
+                        f"temperament shifted from **{(current or 'Serious').title()}** "
+                        f"to **{nature.title()}**.",
+            color=discord.Color.green())
+        if raised:
+            embed.add_field(name="Now favours", value=f"⬆️ {raised.replace('-', ' ').title()}")
+            embed.add_field(name="Now neglects", value=f"⬇️ {lowered.replace('-', ' ').title()}")
+        else:
+            embed.add_field(name="Temperament", value="Balanced — no stat favoured.")
+        embed.set_footer(text="The stat spread it was born with is gone for good.")
+        await ctx.send(embed=embed)
 
     async def _serve_max_soup(self, ctx, box_number: str):
         """

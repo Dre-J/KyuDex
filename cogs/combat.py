@@ -13,6 +13,7 @@ from utils.db_manager import check_evolution_trigger, check_condition_evolution
 from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
 from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
+                             BATTLE_IDLE_TIMEOUT,
                              TM_CATALOG, type_badges, type_icon,
                              PVP_LEVEL_CAPS, parse_level_cap,
                              Z_MOVE_NAMES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS,
@@ -2181,6 +2182,42 @@ async def check_for_evolution(db, user_id, specimen, combat_log):
 
     return None, None # No evolution occurred
 
+async def abandon_idle_battle(view, cog, user_ids, state, notice):
+    """
+    Tear a battle down because nobody came back to it. One function, both engines.
+
+    A battle lives in `cog.active_battles`, keyed by trainer. The PvE dashboard had a
+    300-second View timeout and NO on_timeout, so the buttons went dead while the entry
+    stayed in the dictionary for ever: the trainer was told they were already in an
+    expedition, with nothing on screen that still worked to leave it. `!forfeit` was the
+    only way out, on a message whose buttons had stopped responding.
+
+    PvP was worse. Its dashboard was `timeout=None` so it never expired at all, and both
+    players are mapped to the SAME state dictionary - one person closing Discord locked
+    out two, permanently.
+
+    Takes a LIST of ids because that is the difference between the two engines and the
+    only one: PvE hands in one trainer, PvP hands in both. Everything else is identical,
+    which is exactly why it is one function.
+    """
+    for user_id in user_ids:
+        cog.active_battles.pop(str(user_id), None)
+
+    for child in view.children:
+        child.disabled = True
+    view.stop()
+
+    # Leave the message on screen, visibly finished. Wrapped because the message may have
+    # been deleted, the channel may be gone, or the bot may have lost permission to edit
+    # it - none of which should stop the state above from being released.
+    try:
+        message = (state or {}).get('message_obj')
+        if message:
+            await message.edit(content=notice, view=view, attachments=[])
+    except Exception as exc:
+        print(f"DEBUG: could not tidy up the timed-out battle message: {exc}")
+
+
 def field_of(state):
     """
     The field dictionary, created on first use so every path shares one rather than
@@ -3132,10 +3169,21 @@ class MidTurnSwapMenu(discord.ui.View):
 
 class PvPDashboard(discord.ui.View):
     def __init__(self, cog, state):
-        super().__init__(timeout=None)
+        # Was timeout=None, which meant a duel NEVER expired - and because both players
+        # are mapped to the same state dictionary, one person closing Discord locked out
+        # two of them for good.
+        super().__init__(timeout=BATTLE_IDLE_TIMEOUT)
         self.cog = cog
         self.state = state
         self.turn_created = state['turn_number'] # 🛡️ Stamp the menu with the current turn!
+
+    async def on_timeout(self):
+        """Release BOTH duellists. The state is shared, so half a teardown strands one."""
+        await abandon_idle_battle(
+            self, self.cog,
+            [self.state.get('p1_id'), self.state.get('p2_id')], self.state,
+            "⏳ **Duel abandoned.** Neither researcher returned to the field in time. "
+            "No result was recorded.")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Authentication layer: Only P1 and P2 can interact with this dashboard."""
@@ -4421,10 +4469,19 @@ class ForfeitConfirm(discord.ui.View):
 
 class BattleDashboard(discord.ui.View):
     def __init__(self, cog, user_id, ctx):
-        super().__init__(timeout=300)
+        super().__init__(timeout=BATTLE_IDLE_TIMEOUT)
         self.cog = cog
         self.user_id = str(user_id)
         self.ctx = ctx
+
+    async def on_timeout(self):
+        """Nobody came back. Release the trainer rather than stranding them."""
+        await abandon_idle_battle(
+            self, self.cog, [self.user_id],
+            self.cog.active_battles.get(self.user_id),
+            "⏳ **Expedition abandoned.** You were away too long, so the specimens "
+            "went back to what they were doing. Nothing was lost - start another with "
+            "`!battle`.")
     
     @classmethod
     async def create(cls, cog, user_id, ctx):
