@@ -4654,22 +4654,23 @@ class Ecology(commands.Cog):
                     f"🍲 **{pretty}** already carries the Gigantamax factor. "
                     f"The soup would be wasted, so it stays in your pack.")
 
-            # Full name first, base name second - the same order fetch_adaptation_forms
-            # uses, so a form named below the base (toxtricity-amped) still finds
-            # toxtricity-gmax instead of failing.
-            stems = [species]
-            if '-' in species:
-                stems.append(species.split('-')[0])
-
-            gmax_form = None
-            for stem in stems:
-                async with db.execute(
-                        "SELECT name FROM base_pokemon_species WHERE name LIKE ? "
-                        "ORDER BY name LIMIT 1", (f"{stem}-gmax%",)) as cursor:
-                    row = await cursor.fetchone()
-                if row:
-                    gmax_form = row[0]
-                    break
+            # The FULL name only, with no fall back to the base name. This shipped with
+            # the base-name fallback fetch_adaptation_forms uses, and that was wrong here:
+            # `meowth-galar` and `meowth-alola` both fell through to `meowth-gmax`, so a
+            # Galarian Meowth could be awakened into a form it has never had. Alternate
+            # forms mostly do NOT Gigantamax, and the ones that do - toxtricity-amped -
+            # have a `-gmax` row under their own full name, so the fallback bought nothing
+            # and cost correctness.
+            #
+            # Deliberately NOT shared with fetch_adaptation_forms. That function is asked
+            # "what can this specimen turn into", where falling back to the base is right
+            # for a Mega Stone; this one is asked "is this species eligible at all", where
+            # it is not.
+            async with db.execute(
+                    "SELECT name FROM base_pokemon_species WHERE name LIKE ? "
+                    "ORDER BY name LIMIT 1", (f"{species}-gmax%",)) as cursor:
+                row = await cursor.fetchone()
+            gmax_form = row[0] if row else None
 
             if not gmax_form:
                 return await ctx.send(

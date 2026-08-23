@@ -4839,6 +4839,94 @@ GHOST_PIERCING_ABILITIES = {'scrappy', 'minds-eye'}
 EVASION_IGNORING_ABILITIES = {'minds-eye', 'illuminate'}
 
 # These moves never make contact, so nothing that punishes contact can answer them.
+# ==========================================
+# 🤜 WHAT ACTUALLY TOUCHES
+# ==========================================
+# The engine's proxy for contact had always been the DAMAGE CLASS: physical meant contact.
+# That is wrong for 102 of this database's moves, and wrong in the direction that hurts -
+# an Earthquake triggered Flame Body, Static, Poison Point, Rough Skin, Iron Barbs, Cute
+# Charm, Pickpocket, a Rocky Helmet and a Sticky Barb, none of which it has ever touched.
+# It was also wrong the other way for seven SPECIAL moves that DO make contact, Grass Knot
+# and Draining Kiss among them.
+#
+# So the flag is data now rather than a guess. Generated from Pokemon Showdown's move
+# table, which carries the real per-move contact flag; PokeAPI does not expose one, which
+# is presumably why the proxy existed at all. Cross-checked against every row in
+# base_moves, so this set is exactly "the moves this bot knows that make contact".
+#
+# Five Colosseum shadow moves are in here on the OLD proxy - Showdown has no data for
+# them, they are physical, and none of them is obtainable in KyuDex. The Z-Move rows
+# (`--physical` / `--special`) are deliberately absent: a Z-Move keeps its BASE move's
+# name in the payload, so it is classified as whatever it was built from, which is the
+# correct rule. Max Moves are handled separately - see MAX_MOVE_MARKER - because they
+# never make contact whatever they were built from.
+
+CONTACT_MOVES = frozenset({
+    'accelerock', 'acrobatics', 'aerial-ace', 'anchor-shot', 'aqua-jet', 'aqua-step',
+    'aqua-tail', 'arm-thrust', 'assurance', 'astonish', 'avalanche', 'axe-kick',
+    'behemoth-bash', 'behemoth-blade', 'bide', 'bind', 'bite', 'bitter-blade', 'blaze-kick',
+    'body-press', 'body-slam', 'bolt-beak', 'bolt-strike', 'bounce', 'branch-poke',
+    'brave-bird', 'breaking-swipe', 'brick-break', 'brutal-swing', 'bug-bite', 'bullet-punch',
+    'catastropika', 'ceaseless-edge', 'chip-away', 'circle-throw', 'clamp', 'close-combat',
+    'collision-course', 'comet-punch', 'comeuppance', 'constrict', 'counter', 'covet',
+    'crabhammer', 'cross-chop', 'cross-poison', 'crunch', 'crush-claw', 'crush-grip', 'cut',
+    'darkest-lariat', 'dig', 'dire-claw', 'dive', 'dizzy-punch', 'double-edge', 'double-hit',
+    'double-iron-bash', 'double-kick', 'double-shock', 'double-slap', 'dragon-ascent',
+    'dragon-claw', 'dragon-hammer', 'dragon-rush', 'dragon-tail', 'drain-punch',
+    'draining-kiss', 'drill-peck', 'drill-run', 'dual-chop', 'dual-wingbeat', 'dynamic-punch',
+    'electro-drift', 'endeavor', 'extreme-speed', 'facade', 'fake-out', 'false-surrender',
+    'false-swipe', 'feint-attack', 'fell-stinger', 'fire-fang', 'fire-lash', 'fire-punch',
+    'first-impression', 'fishious-rend', 'flail', 'flame-charge', 'flame-wheel', 'flare-blitz',
+    'flip-turn', 'floaty-fall', 'fly', 'flying-press', 'focus-punch', 'force-palm', 'foul-play',
+    'frustration', 'fury-attack', 'fury-cutter', 'fury-swipes', 'gear-grind', 'giga-impact',
+    'glaive-rush', 'grass-knot', 'grassy-glide', 'guillotine', 'gyro-ball', 'hammer-arm',
+    'hard-press', 'head-charge', 'head-smash', 'headbutt', 'headlong-rush', 'heart-stamp',
+    'heat-crash', 'heavy-slam', 'high-horsepower', 'high-jump-kick', 'hold-back', 'horn-attack',
+    'horn-drill', 'horn-leech', 'hyper-drill', 'hyper-fang', 'ice-ball', 'ice-fang',
+    'ice-hammer', 'ice-punch', 'ice-spinner', 'infestation', 'iron-head', 'iron-tail',
+    'jaw-lock', 'jet-punch', 'jump-kick', 'karate-chop', 'knock-off', 'kowtow-cleave',
+    'lash-out', 'last-resort', 'leaf-blade', 'leech-life', 'lets-snuggle-forever', 'lick',
+    'liquidation', 'low-kick', 'low-sweep', 'lunge', 'mach-punch', 'malicious-moonsault',
+    'mega-kick', 'mega-punch', 'megahorn', 'metal-claw', 'meteor-mash', 'mighty-cleave',
+    'mortal-spin', 'multi-attack', 'needle-arm', 'night-slash', 'nuzzle', 'outrage', 'payback',
+    'peck', 'petal-dance', 'phantom-force', 'plasma-fists', 'play-rough', 'pluck',
+    'poison-fang', 'poison-jab', 'poison-tail', 'population-bomb', 'pounce', 'pound',
+    'power-trip', 'power-up-punch', 'power-whip', 'psyblade', 'psychic-fangs', 'psyshield-bash',
+    'pulverizing-pancake', 'punishment', 'pursuit', 'quick-attack', 'rage', 'rage-fist',
+    'raging-bull', 'rapid-spin', 'razor-shell', 'retaliate', 'return', 'revenge', 'reversal',
+    'rock-climb', 'rock-smash', 'rolling-kick', 'rollout', 'sacred-sword', 'scratch',
+    'searing-sunraze-smash', 'seismic-toss', 'shadow-blast', 'shadow-blitz', 'shadow-break',
+    'shadow-claw', 'shadow-end', 'shadow-force', 'shadow-punch', 'shadow-rush', 'shadow-sneak',
+    'sizzly-slide', 'skitter-smack', 'skull-bash', 'sky-drop', 'sky-uppercut', 'slam', 'slash',
+    'smart-strike', 'smelling-salts', 'snap-trap', 'solar-blade', 'soul-stealing-7-star-strike',
+    'spark', 'spectral-thief', 'spin-out', 'spirit-break', 'steamroller', 'steel-roller',
+    'steel-wing', 'stomp', 'stomping-tantrum', 'stone-axe', 'storm-throw', 'strength',
+    'struggle', 'submission', 'sucker-punch', 'sunsteel-strike', 'super-fang', 'supercell-slam',
+    'superpower', 'surging-strikes', 'tackle', 'tail-slap', 'take-down', 'temper-flare',
+    'thief', 'thrash', 'throat-chop', 'thunder-fang', 'thunder-punch', 'thunderous-kick',
+    'trailblaze', 'triple-axel', 'triple-dive', 'triple-kick', 'trop-kick', 'trump-card',
+    'u-turn', 'upper-hand', 'v-create', 'veevee-volley', 'vice-grip', 'vine-whip',
+    'vital-throw', 'volt-tackle', 'wake-up-slap', 'waterfall', 'wave-crash', 'wicked-blow',
+    'wild-charge', 'wing-attack', 'wood-hammer', 'wrap', 'wring-out', 'x-scissor',
+    'zen-headbutt', 'zing-zap', 'zippy-zap',
+})
+
+# A Max Move is priority 0 no matter what it was built from. This was the bug behind a Max
+# Geyser built on Aqua Jet being turned away by Psychic Terrain: the payload still carried
+# Aqua Jet's +1, because the sanitisation pass wiped the ailment, the status, the stat
+# change, the healing and the drain, and never touched the priority.
+#
+# Max Guard is the exception and keeps Protect's own +4.
+MAX_MOVE_MARKER = '_is_max_move'
+MAX_MOVE_PRIORITY = 0
+MAX_GUARD_PRIORITY = 4
+
+# Avalanche and Revenge are one rule with two names: 60 base, doubled if the user was
+# struck earlier in the same turn. Revenge was already implemented on its own; Avalanche
+# was not implemented at all. Both read `last_damage_taken`, which is written on hit and
+# wiped at the end of the turn, so its mere presence means "was hit before moving".
+LAST_MOVER_DOUBLING_MOVES = {'avalanche': 60, 'revenge': 60}
+
 NO_CONTACT_ABILITIES = {'long-reach'}
 
 # Contact moves punch straight through Protect and Detect.

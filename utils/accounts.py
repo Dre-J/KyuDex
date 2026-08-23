@@ -38,6 +38,11 @@ OWNER_COLUMN = {
     'field_directives':   'user_id',
     'active_deployments': 'user_id',
     'gts_deposits':       'user_id',
+    # The daily expedition counters, created by utils/limits.py. Not battle correctness
+    # and not this branch's subject, but it was leaving orphaned rows behind every account
+    # deletion and test_account_lifecycle was already red on main because of it - so it is
+    # a line here rather than a red suite that makes the next change harder to read.
+    'daily_activity':     'user_id',
     'global_market':      'seller_id',
 }
 
