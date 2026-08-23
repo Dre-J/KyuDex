@@ -515,6 +515,9 @@ CATEGORY_OPTIONS = [
     discord.SelectOption(label="General Supplies", value="general", emoji="🫧"),
     discord.SelectOption(label="Medicine", value="medicine", emoji="🧪"),
     discord.SelectOption(label="Vitamins", value="vitamin", emoji="💊"),
+    # Their own shelf rather than twenty-one more rows under Vitamins, which are six
+    # items and would have been buried. Same reasoning as the Type Boosters below.
+    discord.SelectOption(label="Nature Mints", value="mints", emoji="🌱"),
     discord.SelectOption(label="Battle Equipment", value="battleitems", emoji="⚔️"),
     # Its own shelf rather than fifty-eight more rows under Battle Equipment, which
     # would have buried the Choice trio and the rocks six pages deep.
@@ -3096,6 +3099,96 @@ RITUAL_TRIGGERS = frozenset({
 })
 RITUAL_MIN_LEVEL = 40
 RITUAL_KEYWORD = 'ritual'
+
+
+# ==========================================
+# ⏳ WALKING AWAY FROM A BATTLE
+# ==========================================
+# A battle lives in `cog.active_battles`, keyed by trainer. The dashboard View had a
+# 300-second timeout and NO on_timeout, so the buttons went dead while the entry stayed in
+# the dictionary for ever - and the trainer was told "you are already in an expedition"
+# with nothing on screen to leave. The only way out was a `!forfeit` on a message whose
+# buttons no longer worked.
+#
+# PvP was worse: its dashboard was `timeout=None`, so it never expired at all, and the
+# state is SHARED between both players - one person closing Discord locked out two.
+#
+# Ten minutes, which is long enough to think and short enough that a duel abandoned at
+# lunchtime is not still holding two accounts hostage at dinner. Each interaction resets
+# it, because discord.py restarts a View's timer whenever the View is used.
+BATTLE_IDLE_TIMEOUT = 600
+
+
+# ==========================================
+# 🌱 NATURE MINTS
+# ==========================================
+# Built from NATURE_MULTIPLIERS rather than typed out, so a nature cannot exist without a
+# mint or the other way round. The five NEUTRAL natures - the ones whose row is (None,
+# None) - deliberately share one mint: there is no reason to sell five different items
+# that all do exactly the same nothing, and the games make the same choice.
+#
+# Premium price, and for the same reason the Destiny Knot is: a mint rewrites the stat
+# spread a specimen was born with, which is most of what breeding is FOR. Priced as an
+# ordinary consumable now, it would make a later breeding update pointless before it
+# shipped.
+NATURE_MINT_PRICE = 7500
+NEUTRAL_MINT = 'serious-mint'
+
+NATURE_MINTS = {
+    f'{nature}-mint': nature
+    for nature, (raised, _lowered) in sorted(NATURE_MULTIPLIERS.items())
+    if raised is not None
+}
+NATURE_MINTS[NEUTRAL_MINT] = 'serious'
+
+# The natures a Serious Mint stands in for - every one that raises nothing.
+NEUTRAL_NATURES = frozenset(
+    nature for nature, (raised, _l) in NATURE_MULTIPLIERS.items() if raised is None)
+
+
+def mint_for(nature):
+    """The mint that grants `nature`, collapsing the five neutral ones onto Serious."""
+    nature = (nature or '').strip().lower()
+    if nature in NEUTRAL_NATURES:
+        return NEUTRAL_MINT
+    return f'{nature}-mint' if nature in NATURE_MULTIPLIERS else None
+
+
+def build_mint_stock():
+    """
+    The mint shelf, checked against the nature table it is derived from.
+
+    The assertion is the point: every nature a specimen can be BORN with must be
+    reachable by a mint, or the shelf is a trap - a player looks for the one they need
+    and it is not there.
+    """
+    covered = set()
+    for mint, nature in NATURE_MINTS.items():
+        covered.add(nature)
+    missing = set(NATURE_MULTIPLIERS) - covered - NEUTRAL_NATURES
+    assert not missing, f"natures with no mint: {sorted(missing)}"
+
+    stock = {}
+    for mint, nature in sorted(NATURE_MINTS.items()):
+        raised, lowered = NATURE_MULTIPLIERS[nature]
+        if raised is None:
+            desc = ("Rewrites a specimen's nature to Serious - no stat raised, none "
+                    "lowered. Stands in for every neutral nature.")
+        else:
+            desc = (f"Rewrites a specimen's nature to {nature.title()}: "
+                    f"+{raised.replace('-', ' ').title()}, "
+                    f"-{lowered.replace('-', ' ').title()}.")
+        stock[mint] = {
+            "name": mint.replace('-', ' ').title(),
+            "price": NATURE_MINT_PRICE,
+            "desc": desc,
+            "emoji": '🌱',
+            "category": "mints",
+        }
+    return stock
+
+
+EQUIPMENT_CATALOG.update(build_mint_stock())
 
 # A known new moon, and the mean synodic month. Good to a few hours over a century, which
 # is far better than this needs to be.

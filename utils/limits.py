@@ -37,10 +37,53 @@ TABLE = 'daily_activity'
 # them together means a typo at the call site is visible next to the real ones.
 EXPEDITION = 'expedition'
 
+# Successful expedition CATCHES, counted separately from trips. A trip that finds nothing
+# costs nothing, which is the whole reason this is a second counter rather than a reading
+# of the first.
+EXPEDITION_CATCH = 'expedition-catch'
+
 # 40 trips, against a 5-minute cooldown that already spaces them over three hours and
 # twenty minutes. The cap is the backstop for a whole day of play, not the throttle -
 # most players will never reach it, and the ones who do have been at it a long time.
+#
+# NO LONGER A WALL. It used to refuse the 41st expedition outright, which is the bluntest
+# possible answer and the one that punishes exactly the people playing the most. It is a
+# SOFT cap now: the trips keep coming and the specimens keep being caught, and what decays
+# is the incidental haul - the tokens, the berry, the field notes. Somebody who wants to
+# keep surveying can keep surveying; they just stop being paid for volume.
 EXPEDITION_DAILY_CAP = 40
+EXPEDITION_SOFT_CAP = EXPEDITION_DAILY_CAP
+
+# Every twenty catches past the cap, the incidental haul halves. A floor rather than zero,
+# because a reward that reaches exactly nothing is a wall wearing a different hat - and
+# somebody who has caught two hundred things in a day should still get SOMETHING for the
+# two hundred and first.
+EXPEDITION_DIMINISH_HALF_LIFE = 20
+EXPEDITION_DIMINISH_FLOOR = 0.10
+
+
+def expedition_yield(catches_today):
+    """
+    The multiplier on an expedition's incidental rewards, given today's catch count.
+
+    1.0 up to and including the soft cap, then halving every
+    EXPEDITION_DIMINISH_HALF_LIFE catches, never below EXPEDITION_DIMINISH_FLOOR.
+
+    `catches_today` is the count BEFORE this catch, so the 41st catch is the first one
+    that decays - which is what "diminishing returns after 40" says.
+    """
+    excess = (catches_today or 0) - EXPEDITION_SOFT_CAP
+    if excess < 0:
+        return 1.0
+    factor = 0.5 ** (excess / float(EXPEDITION_DIMINISH_HALF_LIFE))
+    return max(EXPEDITION_DIMINISH_FLOOR, factor)
+
+
+def describe_yield(multiplier):
+    """A short phrase for the footer, or None while nothing is being withheld."""
+    if multiplier >= 0.999:
+        return None
+    return f"diminishing returns · {int(round(multiplier * 100))}% haul"
 
 
 def today():
