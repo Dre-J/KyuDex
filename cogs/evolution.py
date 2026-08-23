@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
-from utils.constants import DB_FILE, current_skies
+from utils.constants import (DB_FILE, current_skies, RITUAL_TRIGGERS,
+                             RITUAL_MIN_LEVEL, RITUAL_KEYWORD)
 from utils import checks
 from utils.directives import credit_evolution
 import aiosqlite
@@ -132,7 +133,46 @@ class Evolution(commands.Cog):
 
                         evo_data = held_route[:4]
 
+                # THE RITUAL ROUTE. A handful of evolutions are triggered by things this
+                # world has no equivalent of at all - Legends Arceus' Strong Style, the
+                # Isle of Armor's two Towers, Basculin's recoil swim upriver. Rather than
+                # pretend to model them, a specimen whose only route is one of those can
+                # be pushed through it by hand once it is experienced enough.
+                #
+                # The level is an admitted stand-in and is named in constants rather than
+                # buried here, so it reads as the substitution it is.
+                ritual = None
+                if not evo_data and formatted_item == RITUAL_KEYWORD:
+                    placeholders = ','.join('?' * len(RITUAL_TRIGGERS))
+                    async with db.execute(f"""
+                        SELECT er.evolved_species_id, s.name, s.standard_abilities,
+                               s.hidden_ability, er.trigger_name
+                        FROM evolution_rules er
+                        JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+                        WHERE er.base_species_id = ?
+                        AND er.trigger_name IN ({placeholders})
+                    """, (current_pokedex_id, *sorted(RITUAL_TRIGGERS))) as cursor:
+                        ritual_rules = await cursor.fetchall()
+
+                    if ritual_rules:
+                        async with db.execute(
+                                "SELECT level FROM caught_pokemon WHERE instance_id = ?",
+                                (db_tag_id,)) as cursor:
+                            lvl = await cursor.fetchone()
+                        if (lvl[0] if lvl else 0) < RITUAL_MIN_LEVEL:
+                            return await ctx.send(
+                                f"🕯️ **{current_name.capitalize()}** is not seasoned "
+                                f"enough for that. The rite asks for level "
+                                f"**{RITUAL_MIN_LEVEL}**; it is level **{lvl[0] if lvl else 0}**.")
+                        ritual = ritual_rules[0]
+                        evo_data = ritual[:4]
+
                 if not evo_data:
+                    if formatted_item == RITUAL_KEYWORD:
+                        return await ctx.send(
+                            f"🕯️ There is no rite for a **{current_name.capitalize()}**. "
+                            f"`!evolve <specimen> ritual` is only for the few whose real "
+                            f"trigger this world cannot stage.")
                     return await ctx.send(f"⚠️ A **{formatted_item.replace('-', ' ').title()}** has no biological effect on a **{current_name.capitalize()}**.")
 
                 new_pokedex_id, evolved_into_name, post_std_abs_raw, post_hidden_ab = evo_data
@@ -164,7 +204,7 @@ class Evolution(commands.Cog):
                 # 4. Check Inventory - the STONE route only. A held item was already proved
                 #    to be on the specimen a few lines up, and it is not in the pack to be
                 #    found: a Razor Claw a Sneasel is wearing left the bag when it was given.
-                if held_route is None:
+                if held_route is None and ritual is None:
                     async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, formatted_item)) as cursor:
                         inv_data = await cursor.fetchone()
 
@@ -178,7 +218,7 @@ class Evolution(commands.Cog):
                     # Claw stays on the Weavile that grew around it, which is both what the
                     # games do and the only answer that leaves the specimen's held_item
                     # column pointing at something it is still wearing.
-                    if held_route is None:
+                    if held_route is None and ritual is None:
                         await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
                     
                     # 🚨 UPDATE THE SPECIMEN'S GENETICS AND ABILITY
@@ -200,7 +240,9 @@ class Evolution(commands.Cog):
             # Outside the DB Context Manager: Build the UI
             embed = discord.Embed(title="🧬 Metamorphosis Complete!", color=discord.Color.gold())
             
-            if held_route is None:
+            if ritual is not None:
+                base_desc = f"**{ctx.author.name}** walked their **{current_name.capitalize()}** through the old rite...\n\nWhatever it met out there, it came back a **{evolved_into_name.capitalize()}**!"
+            elif held_route is None:
                 base_desc = f"**{ctx.author.name}** exposed their **{current_name.capitalize()}** to a {formatted_item.replace('-', ' ').title()}...\n\nIt rapidly adapted and evolved into a **{evolved_into_name.capitalize()}**!"
             else:
                 base_desc = f"**{ctx.author.name}**'s **{current_name.capitalize()}**, still holding its {formatted_item.replace('-', ' ').title()}, shuddered and grew...\n\nIt evolved into a **{evolved_into_name.capitalize()}**!"
@@ -213,9 +255,13 @@ class Evolution(commands.Cog):
                 base_desc += "\n\n📡 **Directive Complete:** Kinetic Maturation Study concluded! Run `!claim` to receive your funding."
                 
             embed.description = base_desc
-            spent = ("1x " + formatted_item.replace('-', ' ').title() + " Consumed"
-                     if held_route is None
-                     else formatted_item.replace('-', ' ').title() + " Retained")
+            # The stone is used up; a held item is retained; a rite costs nothing at all.
+            if ritual is not None:
+                spent = f"Rite of {ritual[4].replace('-', ' ').title()}"
+            elif held_route is None:
+                spent = "1x " + formatted_item.replace('-', ' ').title() + " Consumed"
+            else:
+                spent = formatted_item.replace('-', ' ').title() + " Retained"
             embed.set_footer(text=f"Tag ID: {db_tag_id[:8]} | {spent}")
             
             await ctx.send(embed=embed)
