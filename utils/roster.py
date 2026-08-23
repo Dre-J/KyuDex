@@ -443,6 +443,32 @@ async def party_counts(db, user_id):
             return {DEFAULT_PARTY: (await cursor.fetchone())[0]}
 
 
+# MOVED HERE FROM cogs/combat.py, where it sat above the battle engine purely because
+# that is where it was first needed. Both things it calls - `active_party` and
+# `has_party_column` - already live in this file, and leaving it in a cog meant any
+# OTHER cog wanting the active roster had to import the whole battle engine to get it.
+# combat.py imports it from here now; its six call sites are unchanged.
+async def party_filter(db, user_id, alias='up'):
+    """
+    The WHERE fragment and parameters restricting a roster query to the active party.
+
+    Returned as a fragment rather than baked into each query because five separate
+    places build a team out of `user_party`, and a sixth would otherwise be written
+    without the scope - which is exactly how a trainer would end up fighting with two
+    rosters' worth of specimens.
+
+    An un-migrated database has one party and gets an empty fragment, so every one of
+    those five keeps working untouched.
+    """
+    try:
+        if await has_party_column(db):
+            prefix = f"{alias}." if alias else ""
+            return f"AND {prefix}party_name = ?", (await active_party(db, user_id),)
+    except Exception:
+        pass
+    return "", ()
+
+
 async def has_party_column(db):
     """Whether this database has had the multi-party migration run."""
     async with db.execute("PRAGMA table_info(user_party)") as cursor:

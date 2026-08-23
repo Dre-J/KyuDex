@@ -255,23 +255,31 @@ async def _has_column(db, table, column):
         return any(row[1] == column for row in await cursor.fetchall())
 
 
-async def ensure_timezone_column(db):
+async def _ensure_column(db, table, column, decl):
     """
-    Add `users.timezone` if it is missing. Does NOT commit.
+    Add a column if it is missing. Does NOT commit. Returns whether it is there now.
 
-    Called only from the WRITE path. A read must never alter the schema - that is how a
+    Called only from WRITE paths. A read must never alter the schema - that is how a
     module ends up writing to whatever database happened to be configured at import
-    time, which this codebase has been bitten by once already. The column therefore
-    appears the first time somebody actually sets a timezone, and until then every read
-    simply falls through to the guild's setting.
+    time, which this codebase has been bitten by once already. Each preference column
+    therefore appears the first time somebody actually sets that preference, and until
+    then every read falls through to its default.
+
+    The column NAME and DECLARATION are interpolated because SQLite cannot bind an
+    identifier; both are literals from this module and neither is ever player input.
     """
-    if await _has_column(db, 'users', 'timezone'):
+    if await _has_column(db, table, column):
         return True
     try:
-        await db.execute("ALTER TABLE users ADD COLUMN timezone TEXT")
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         return True
     except Exception:
         return False
+
+
+async def ensure_timezone_column(db):
+    """Add `users.timezone` if it is missing. Does NOT commit."""
+    return await _ensure_column(db, 'users', 'timezone', 'TEXT')
 
 
 async def get_timezone(db, user_id):
@@ -313,6 +321,64 @@ async def clear_timezone(db, user_id):
         return True
     except Exception:
         return False
+
+
+# ==========================================
+# HOW `!profile` IS DRAWN
+# ==========================================
+# An image card is the nicer thing to look at and the worse thing on a slow connection,
+# on a screen reader, and anywhere text needs to be selectable or searchable. Neither is
+# right for everybody, so it is a preference rather than a decision.
+#
+# THE DEFAULT IS THE IMAGE, because that is the feature; the embed is the escape hatch
+# for anyone who wants text they can select, or who is on mobile data.
+CARD_IMAGE = 'image'
+CARD_EMBED = 'embed'
+CARD_STYLES = (CARD_IMAGE, CARD_EMBED)
+DEFAULT_CARD_STYLE = CARD_IMAGE
+
+# Spellings people actually type, mapped to the two the column stores.
+CARD_STYLE_WORDS = {
+    'image': CARD_IMAGE, 'img': CARD_IMAGE, 'card': CARD_IMAGE, 'picture': CARD_IMAGE,
+    'pic': CARD_IMAGE, 'graphic': CARD_IMAGE, 'render': CARD_IMAGE,
+    'embed': CARD_EMBED, 'text': CARD_EMBED, 'plain': CARD_EMBED,
+    'classic': CARD_EMBED, 'compact': CARD_EMBED, 'old': CARD_EMBED,
+}
+
+
+def resolve_card_style(text):
+    """`(style, complaint)` from whatever they typed. Exactly one is ever set."""
+    word = str(text or '').strip().lower()
+    style = CARD_STYLE_WORDS.get(word)
+    if style:
+        return style, None
+    return None, (f"🖼️ `{text}` is not a card style. Use `!settings card image` for the "
+                  f"rendered card, or `!settings card embed` for plain text.")
+
+
+async def get_card_style(db, user_id):
+    """This trainer's chosen style, defaulting to the image. Never raises, never writes."""
+    try:
+        if not await _has_column(db, 'users', 'card_style'):
+            return DEFAULT_CARD_STYLE
+        async with db.execute("SELECT card_style FROM users WHERE user_id = ?",
+                              (str(user_id),)) as cursor:
+            row = await cursor.fetchone()
+    except Exception:
+        return DEFAULT_CARD_STYLE
+    stored = (row[0] if row else None) or ''
+    return stored if stored in CARD_STYLES else DEFAULT_CARD_STYLE
+
+
+async def set_card_style(db, user_id, style):
+    """Store it. Returns False if the database cannot hold it. Does NOT commit."""
+    if style not in CARD_STYLES:
+        return False
+    if not await _ensure_column(db, 'users', 'card_style', 'TEXT'):
+        return False
+    await db.execute("UPDATE users SET card_style = ? WHERE user_id = ?",
+                     (style, str(user_id)))
+    return True
 
 
 async def resolve_timezone(db, user_id, guild_id=None):

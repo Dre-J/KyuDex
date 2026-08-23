@@ -106,9 +106,15 @@ def describe_yield(multiplier):
 #    reserve. Somebody who plays every third day used to watch two days of regeneration
 #    evaporate against the ceiling. They now come back to a real session.
 ENERGY_MAX = 100            # a full reserve; what "rested" means, and the regen target
-ENERGY_BANK_CAP = 200       # regeneration keeps going past full, to here
 ENERGY_REGEN_PER_HOUR = 10
 ENERGY_DUEL_COST = 10
+
+# THE BANK CAP IS NOW A FLOOR, NOT A FIXED NUMBER. It used to be a flat 200 for
+# everybody; a trainer's level raises it, in tiers, up to a ceiling - see
+# `utils/levels.energy_bank_cap`, which owns that curve because it is the thing levels
+# are FOR. This name survives as the base so that every caller which does not know a
+# level (and there were several) keeps behaving exactly as it did.
+ENERGY_BANK_CAP = 200
 
 # The deficit is capped at one whole reserve. Past that a duellist is at the floor and
 # stays there however long they keep going - a slope that bottoms out, not a pit. The
@@ -138,36 +144,47 @@ def energy_yield(energy_before):
     return max(ENERGY_FATIGUE_FLOOR, factor)
 
 
-def describe_energy(energy):
+def describe_energy(energy, bank_cap=None):
     """A short phrase for the meter, or None while there is nothing to say about it."""
     if energy is None:
         return None
     if energy < 0:
         return f"running on reserves · {int(round(energy_yield(energy) * 100))}% payout"
     if energy > ENERGY_MAX:
-        return f"banked · {energy - ENERGY_MAX} over a full reserve"
+        cap = bank_cap or ENERGY_BANK_CAP
+        return f"banked · {energy - ENERGY_MAX} over a full reserve (max {cap})"
     return None
 
 
-def regenerate_energy(energy, last_tick, now):
+def regenerate_energy(energy, last_tick, now, bank_cap=None):
     """
     `(energy, last_tick)` brought up to date, without touching a database.
 
     Whole hours only, and the tick is advanced by exactly the hours that were paid out
     so a part-hour of progress is never thrown away. Extracted from the cog so the two
     places that show this meter cannot compute it differently - which they did.
+
+    `bank_cap` is the trainer's own ceiling, which their level raises. It DEFAULTS to
+    the base so a caller that has no level to hand behaves exactly as it did before
+    levels existed - which matters, because a default of None silently regenerating to
+    zero would empty every reserve in the game.
     """
+    cap = int(bank_cap or ENERGY_BANK_CAP)
     energy = energy or 0
     last_tick = last_tick or 0
-    if energy >= ENERGY_BANK_CAP:
+    if energy >= cap:
         # Already brimming. The tick is pulled forward so that the moment they spend,
         # the next hour starts from now rather than from whenever they last capped.
-        return ENERGY_BANK_CAP, now
+        #
+        # NOT clamped down to `cap`. A trainer whose level fell - a wipe, or a tier
+        # being retuned - would otherwise have energy confiscated by a display refresh.
+        # They keep what they banked and simply stop accruing until they spend it.
+        return energy, now
     hours = max(0, (now - last_tick) // 3600)
     if hours:
-        energy = min(ENERGY_BANK_CAP, energy + int(hours * ENERGY_REGEN_PER_HOUR))
+        energy = min(cap, energy + int(hours * ENERGY_REGEN_PER_HOUR))
         last_tick += hours * 3600
-        if energy >= ENERGY_BANK_CAP:
+        if energy >= cap:
             last_tick = now
     return energy, last_tick
 

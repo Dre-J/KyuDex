@@ -16,7 +16,32 @@ bot.remove_command('help')
 async def on_ready():
     print(f'Logged in as {bot.user.name}!')
     print('Environmental monitoring systems online.')
+    await warm_profile_assets()
     await warm_battle_scenes()
+
+
+async def warm_profile_assets():
+    """
+    Load the profile card's backgrounds, badges and trainer art once.
+
+    Same reasoning as the battle scenes below, and the same placement: after login, on a
+    worker thread, and never fatal. Five 4000px backgrounds and 650 trainer sprites is a
+    couple of seconds of decode that the first `!profile` of each restart would otherwise
+    pay for in front of a player.
+
+    PARTY SPRITES ARE DELIBERATELY NOT WARMED. There are thirteen hundred species and a
+    card draws six; they load lazily and stay cached, so what ends up in memory is what
+    this server's players actually field rather than the whole Pokedex.
+    """
+    if os.getenv("KYU_NO_PREWARM"):
+        return
+    try:
+        import profile_card
+        await asyncio.to_thread(profile_card.ASSETS.warm)
+    except Exception as e:
+        # A card that cannot find its art falls back to the embed. Booting matters more.
+        print(f"⚠️ WARNING: Could not warm profile assets ({e}). "
+              f"Profiles will fall back to embeds.")
 
 
 async def warm_battle_scenes():
