@@ -1,10 +1,10 @@
 """
 profile_card.py — PIL profile card renderer for KyuDex.
 
-Design notes for the Pi 3:
+Design notes:
   * Assets (fonts, backgrounds, sprites) are loaded ONCE at startup and kept in
-    memory. Never call Image.open() on the hot path — SD-card I/O per render is
-    the single biggest avoidable cost on a Pi.
+    memory. Never call Image.open() on the hot path — decoding a 4000px
+    background per render is the single biggest avoidable cost here, on any host.
   * render_profile_card() is synchronous and CPU-bound. Never await it directly
     on the event loop; use render_profile_card_async(), which pushes the work to
     a thread pool. PIL releases the GIL for most heavy ops, so threads help.
@@ -275,9 +275,9 @@ class AssetCache:
         One party sprite, resolved and cached on first use.
 
         LAZY, not warmed. There are thirteen hundred species and a warmed cache of all
-        of them at party size is roughly 28MB of RGBA that a Pi would be holding for the
-        six a given card actually draws. The cache never expires because the art never
-        changes; it simply fills with whatever the server's players actually field.
+        of them at party size is roughly 28MB of RGBA held to draw the six a given card
+        actually uses. The cache never expires because the art never changes; it simply
+        fills with whatever the server's players actually field.
 
         Resolution goes through `utils.sprites.resolve_sprite`, which already knows about
         shiny and female variants and about the twelve species with no art at all -

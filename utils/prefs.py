@@ -327,8 +327,8 @@ async def clear_timezone(db, user_id):
 # HOW `!profile` IS DRAWN
 # ==========================================
 # An image card is the nicer thing to look at and the worse thing on a slow connection,
-# on a screen reader, and on a Pi that has to render it. Neither is right for everybody,
-# so it is a preference rather than a decision.
+# on a screen reader, and anywhere text needs to be selectable or searchable. Neither is
+# right for everybody, so it is a preference rather than a decision.
 #
 # THE DEFAULT IS THE IMAGE, because that is the feature; the embed is the escape hatch
 # for anyone who wants text they can select, or who is on mobile data.

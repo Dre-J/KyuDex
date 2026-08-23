@@ -369,8 +369,8 @@ class Account(commands.Cog):
         How `!profile` is drawn. `!settings card image` or `!settings card embed`.
 
         The image is the default because it is the feature. The embed exists because an
-        image is the worse answer on a slow connection, on a screen reader, and on a
-        host that has to render it - none of which is a minority worth ignoring.
+        image is the worse answer on a slow connection, on a screen reader, and anywhere
+        the numbers want copying out - none of which is a minority worth ignoring.
         """
         user_id = str(ctx.author.id)
 
