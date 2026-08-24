@@ -11,13 +11,21 @@ attachment under a NEW signed URL, while the embed you just sent still points at
 one. The picture then either renders from a dying link or falls out of the embed entirely
 and shows up as a bare file underneath it.
 
-Two places hit this. The PvP dashboard updates its footer when the first player locks in a
-move, and the caught-spawn card is rewritten when somebody catches it - both fetch, edit
-and re-attach. PvE never did, only because it regenerates and re-uploads the scene on
-every single turn, which rebinds the name by accident rather than on purpose.
+The caught-spawn card hits this: it is rewritten when somebody catches the spawn, which
+means fetching, editing and re-attaching. PvE battles never did, only because they
+regenerate and re-upload the scene on every single turn, which rebinds the name by
+accident rather than on purpose.
 
-One helper, used by both: re-point the embed at the file by NAME before editing, and hand
-the existing attachments straight back.
+The PvP dashboard used to hit it too, and was the reason this helper was written - the
+scene vanished the moment the first player locked in a move. It no longer fetches at
+all: updating who a duel is waiting on now edits the message CONTENT and nothing else,
+so the embed and its attachment are never in the payload to be re-issued. That is the
+better fix wherever it is available, because it cannot go wrong rather than going right
+carefully. This helper is for the cases that genuinely must rewrite an embed they only
+have a fetched copy of.
+
+Re-point the embed at the file by NAME before editing, and hand the existing attachments
+straight back.
 """
 
 
