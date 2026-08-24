@@ -13,11 +13,13 @@ can conjure Master Balls.
 id and what actually changed. An admin tool whose effects cannot be reconstructed later
 is how a duplication bug becomes unprovable - the same argument as the trade ledger.
 """
+import json
+
 import aiosqlite
 import discord
 from discord.ext import commands
 
-from utils import audit
+from utils import audit, learnsets
 from utils.constants import DB_FILE, EQUIPMENT_CATALOG
 from utils.formulas import get_xp_requirement
 from utils.machines import grant_tm, find_tm
@@ -501,6 +503,289 @@ class Admin(commands.Cog):
                     ("Species", species_name),
                     ("Level", f"{old_level} → {new_level}"),
                     ("Experience", f"reset to {new_xp} ({growth_rate})")])
+
+    # ==========================================
+    # 📚 LEARNSETS
+    # ==========================================
+    # **EDITS GO TO A FILE, NOT TO THE TABLE.** A command that writes movepool rows
+    # straight into the database leaves that data with no source of truth: six months on
+    # nobody knows whether Greninja has Nasty Plot because the import said so, because
+    # somebody added it by hand, or because they added it twice - and a rebuild from
+    # source loses the difference either way.
+    #
+    # So `add` and `remove` edit `data/movepool_overrides.json`, which lives in the repo
+    # and diffs like code, and `sync` rebuilds the live table from the pristine base
+    # snapshot plus that file. Idempotent, re-runnable, and a bad batch is reverted by
+    # deleting a line rather than by remembering what it used to say.
+    @commands.group(name="learnset", aliases=["learnsets"], invoke_without_command=True)
+    @commands.is_owner()
+    async def learnset(self, ctx):
+        """[OWNER] Movepool overrides. `!learnset check|list|add|remove|sync|import`"""
+        overrides, problems = learnsets.load_overrides()
+        adds = sum(len(e['add']) for e in overrides.values())
+        removes = sum(len(e['remove']) for e in overrides.values())
+
+        embed = discord.Embed(
+            title="📚 Movepool overrides",
+            description=(f"`{learnsets.OVERRIDES_PATH}`\n"
+                         f"**{len(overrides)}** species · **{adds}** added · "
+                         f"**{removes}** removed"),
+            colour=discord.Colour.dark_teal())
+        embed.add_field(
+            name="Commands",
+            value=("`!learnset check <species> <move>` — why a move is or is not "
+                   "teachable\n"
+                   "`!learnset list [species]` — what the file currently says\n"
+                   "`!learnset add <species> <move> [method] [level]`\n"
+                   "`!learnset remove <species> <move>`\n"
+                   "`!learnset import <source>` — attach a JSON dump\n"
+                   "`!learnset sync` — dry run · `!learnset sync confirm` — apply"),
+            inline=False)
+        if problems:
+            embed.add_field(name="⚠️ Problems in the file",
+                            value="\n".join(f"• {p}" for p in problems[:8]),
+                            inline=False)
+        await ctx.send(embed=embed)
+
+    @learnset.command(name="check")
+    @commands.is_owner()
+    async def learnset_check(self, ctx, species: str, *, move: str):
+        """[OWNER] Every route a species has to a move, and what a trainer would be told."""
+        move = move.strip().lower().replace(' ', '-')
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT pokedex_id, name FROM base_pokemon_species "
+                    "WHERE LOWER(name) = ?", (species.strip().lower(),)) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                return await ctx.send(f"❌ `{species}` is not a species.")
+            pid, name = row
+            routes = await learnsets.routes_for(db, pid, move)
+            async with db.execute(
+                    "SELECT source FROM species_movepool WHERE pokedex_id = ? "
+                    "AND move_name = ?", (pid, move)) as cursor:
+                sources = [r[0] for r in await cursor.fetchall()] \
+                    if await learnsets.has_column(db, 'species_movepool', 'source') else []
+
+        if not routes:
+            return await ctx.send(
+                f"🚫 **{name.title()}** has no route to `{move}` at all.\n"
+                f"*Add one with `!learnset add {name.lower()} {move}`.*")
+
+        lines = []
+        for method, level in sorted(routes.items()):
+            at = f" at level {level}" if method == learnsets.LEVEL_UP and level else ""
+            reachable = "✅" if method in learnsets.ROUTE_ORDER else "🔒"
+            lines.append(f"{reachable} `{method}`{at}")
+
+        embed = discord.Embed(
+            title=f"📚 {name.title()} → {move.replace('-', ' ').title()}",
+            description="\n".join(lines), colour=discord.Colour.dark_teal())
+        # Shown at three levels, because "can it learn this" has a different answer for a
+        # hatchling and a veteran and that is the thing most likely to confuse a report.
+        for level in (5, 50, 100):
+            route = learnsets.route_for(routes, level)
+            verdict = (f"**{route.method}**" if route.method
+                       else (learnsets.explain(route, name, move) or route.reason))
+            embed.add_field(name=f"At level {level}", value=verdict, inline=False)
+        if sources:
+            embed.set_footer(text="Sources: " + ", ".join(sorted(set(
+                s or learnsets.SOURCE_IMPORT for s in sources))))
+        await ctx.send(embed=embed)
+
+    @learnset.command(name="list")
+    @commands.is_owner()
+    async def learnset_list(self, ctx, species: str = None):
+        """[OWNER] What the override file currently says."""
+        overrides, problems = learnsets.load_overrides()
+        if species:
+            key = species.strip().lower()
+            entry = overrides.get(key)
+            if not entry:
+                return await ctx.send(f"📄 No overrides recorded for `{key}`.")
+            overrides = {key: entry}
+        if not overrides:
+            return await ctx.send("📄 The override file is empty.")
+
+        lines = []
+        for name, entry in sorted(overrides.items()):
+            bits = []
+            for add in entry['add']:
+                at = f"@{add['level']}" if add['level'] else ""
+                bits.append(f"+{add['move']} ({add['method']}{at})")
+            bits += [f"-{m}" for m in entry['remove']]
+            lines.append(f"**{name}** — {', '.join(bits)}  *[{entry['source']}]*")
+
+        body = "\n".join(lines)
+        if len(body) > 3800:
+            body = body[:3800] + f"\n…and more ({len(lines)} species in total)."
+        embed = discord.Embed(title="📄 Movepool overrides", description=body,
+                              colour=discord.Colour.dark_teal())
+        if problems:
+            embed.add_field(name="⚠️ Problems",
+                            value="\n".join(f"• {p}" for p in problems[:6]),
+                            inline=False)
+        await ctx.send(embed=embed)
+
+    @learnset.command(name="add")
+    @commands.is_owner()
+    async def learnset_add(self, ctx, species: str, move: str,
+                           method: str = None, level: int = 0):
+        """[OWNER] Record a move a species should be able to learn. Writes to the FILE."""
+        species = species.strip().lower()
+        move = move.strip().lower().replace(' ', '-')
+        method = (method or learnsets.DEFAULT_ADD_METHOD).strip().lower()
+        if method not in learnsets.VALID_ADD_METHODS:
+            return await ctx.send(
+                f"❌ `{method}` is not a route a trainer can walk. Use one of: "
+                + ", ".join(f"`{m}`" for m in learnsets.VALID_ADD_METHODS))
+
+        overrides, _ = learnsets.load_overrides()
+        entry = overrides.setdefault(
+            species, {'add': [], 'remove': [], 'source': 'manual',
+                      'note': f'added by {ctx.author.name}'})
+        if any(a['move'] == move and a['method'] == method for a in entry['add']):
+            return await ctx.send(f"📄 `{species}` already gains `{move}` via `{method}`.")
+        entry['add'].append({'move': move, 'method': method, 'level': int(level or 0)})
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            problems = await learnsets.validate(db, {species: entry})
+        if problems:
+            return await ctx.send("❌ Not recorded:\n"
+                                  + "\n".join(f"• {p}" for p in problems[:5]))
+
+        learnsets.save_overrides(overrides)
+        await ctx.send(f"📄 Recorded: **{species}** gains `{move}` via `{method}`"
+                       + (f" at level {level}" if level else "")
+                       + f".\n*Run `!learnset sync` to see what it would change.*")
+
+    @learnset.command(name="remove")
+    @commands.is_owner()
+    async def learnset_remove(self, ctx, species: str, *, move: str):
+        """[OWNER] Record a move a species should NOT be able to learn. Writes to the FILE."""
+        species = species.strip().lower()
+        move = move.strip().lower().replace(' ', '-')
+
+        overrides, _ = learnsets.load_overrides()
+        entry = overrides.setdefault(
+            species, {'add': [], 'remove': [], 'source': 'manual',
+                      'note': f'removed by {ctx.author.name}'})
+        # An addition and a removal of the same move cancel rather than fighting: taking
+        # back a mistake is the common case, and the alternative is an override file that
+        # validates as contradictory and refuses to sync.
+        was_added = [a for a in entry['add'] if a['move'] == move]
+        if was_added:
+            entry['add'] = [a for a in entry['add'] if a['move'] != move]
+            if not entry['add'] and not entry['remove']:
+                overrides.pop(species, None)
+            learnsets.save_overrides(overrides)
+            return await ctx.send(f"📄 Withdrew the addition of `{move}` for **{species}**.")
+
+        if move in entry['remove']:
+            return await ctx.send(f"📄 `{species}` already has `{move}` removed.")
+        entry['remove'].append(move)
+        learnsets.save_overrides(overrides)
+        await ctx.send(f"📄 Recorded: **{species}** loses `{move}`.\n"
+                       f"*Run `!learnset sync` to see what it would change.*")
+
+    @learnset.command(name="import")
+    @commands.is_owner()
+    async def learnset_import(self, ctx, *, source: str = "bulk import"):
+        """[OWNER] Fold an attached JSON dump into the override file.
+
+        The path that matters when a generation lands: nobody types three hundred
+        commands the week Gen 10 arrives, but a community spreadsheet appears within
+        days. Attach it as JSON keyed by species name.
+        """
+        if not ctx.message.attachments:
+            return await ctx.send(
+                "📎 Attach a JSON file keyed by species name, e.g.\n"
+                "```json\n{\"greninja\": [\"nasty-plot\", \"u-turn\"]}\n```")
+        try:
+            blob = await ctx.message.attachments[0].read()
+            payload = json.loads(blob.decode('utf-8'))
+        except Exception as e:
+            return await ctx.send(f"❌ Could not read that attachment: `{e}`")
+        if not isinstance(payload, dict):
+            return await ctx.send("❌ The dump must be an object keyed by species name.")
+
+        overrides, _ = learnsets.load_overrides()
+        overrides, added = learnsets.merge_bulk(overrides, payload, source=source)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            problems = await learnsets.validate(db, overrides)
+        if problems:
+            # NOT SAVED. A dump with a typo'd move name would otherwise become rows that
+            # nothing can teach and nothing would ever report - which is exactly the
+            # failure the validation step exists to catch while it is still only a typo.
+            return await ctx.send(
+                f"❌ **{len(problems)} problem(s)** — nothing was saved:\n"
+                + "\n".join(f"• {p}" for p in problems[:10])
+                + (f"\n*…and {len(problems) - 10} more.*" if len(problems) > 10 else ""))
+
+        learnsets.save_overrides(overrides)
+        await ctx.send(f"📄 Folded in **{added}** entries from `{source}` across "
+                       f"**{len(payload)}** species.\n"
+                       f"*Run `!learnset sync` to see what it would change.*")
+
+    @learnset.command(name="sync")
+    @commands.is_owner()
+    async def learnset_sync(self, ctx, confirm: str = None):
+        """[OWNER] Rebuild the movepool from the base snapshot plus the override file.
+
+        A DRY RUN unless you type `!learnset sync confirm`. This rewrites every row in
+        `species_movepool`; something that large should have to be asked twice.
+        """
+        apply = str(confirm or '').strip().lower() in ('confirm', 'yes', 'apply', 'go')
+
+        overrides, file_problems = learnsets.load_overrides()
+        async with aiosqlite.connect(DB_FILE) as db:
+            problems = file_problems + await learnsets.validate(db, overrides)
+            if problems and apply:
+                return await ctx.send(
+                    f"❌ **{len(problems)} problem(s)** — nothing was changed:\n"
+                    + "\n".join(f"• {p}" for p in problems[:10]))
+
+            report = await learnsets.sync(db, overrides, dry_run=not apply)
+            if apply:
+                await db.commit()
+
+        embed = discord.Embed(
+            title="📚 Learnset sync" + ("" if apply else " — dry run"),
+            colour=discord.Colour.green() if apply else discord.Colour.blurple())
+        embed.add_field(name="Base snapshot",
+                        value=f"{report['base']:,} rows"
+                              + (" *(seeded just now)*" if report['seeded'] else ""),
+                        inline=True)
+        embed.add_field(name="Added", value=f"{report['added']:,} rows", inline=True)
+        # Rows, not rules: one `remove` line takes out every route to that move.
+        embed.add_field(
+            name="Removed",
+            value=(f"{report['removed']:,} rows"
+                   + (f"\n*from {report['remove_rules']} rule(s)*"
+                      if report['remove_rules'] else "")),
+            inline=True)
+        embed.add_field(name="Live table",
+                        value=f"{report['final']:,} rows"
+                              + ("" if apply else " *(would be)*"), inline=False)
+        if report['skipped']:
+            embed.add_field(
+                name=f"Skipped ({len(report['skipped'])})",
+                value="\n".join(f"• {s}" for s in report['skipped'][:6]), inline=False)
+        if problems:
+            embed.add_field(name=f"⚠️ Problems ({len(problems)})",
+                            value="\n".join(f"• {p}" for p in problems[:6]), inline=False)
+        if not apply:
+            embed.set_footer(text="Nothing was written. Run `!learnset sync confirm` to apply.")
+        await ctx.send(embed=embed)
+
+        if apply:
+            await audit.post_admin_action(
+                self.bot, action="Learnset sync", actor=ctx.author,
+                colour=discord.Colour.dark_teal(),
+                fields=[("Base", f"{report['base']:,} rows"),
+                        ("Overrides", f"+{report['added']} / -{report['removed']}"),
+                        ("Live table", f"{report['final']:,} rows")])
 
 
 async def setup(bot):
