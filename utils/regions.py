@@ -67,10 +67,31 @@ REGIONS = {
                'starters': ((906, 'Sprigatito', '🌿 Grass'),
                             (909, 'Fuecoco', '🔥 Fire'),
                             (912, 'Quaxly', '💧 Water'))},
+
+    # **A PLACE YOU CAN TRAVEL TO, NOT ONE YOU CAN START FROM**, and the empty starter
+    # tuple is what says so rather than a flag beside it.
+    #
+    # Hisui is Sinnoh a very long time ago, and SEVEN of the twelve region-dependent
+    # evolutions in the rulebook produce a Hisuian form - Typhlosion, Samurott,
+    # Lilligant, Braviary, Sliggoo, Avalugg and Decidueye. Without it as a destination
+    # those seven stay unreachable no matter how the rules are gated, which would leave
+    # this whole feature covering five evolutions instead of twelve.
+    #
+    # It cannot have starters. Its real trio - Rowlet, Cyndaquil and Oshawott - already
+    # belongs to Alola, Johto and Unova, and the region a trainer is FROM is recovered
+    # from their starter for everybody who registered before the column existed. Sharing
+    # a starter would turn that exact recovery into a coin toss.
+    'hisui':  {'label': 'Hisui', 'gen': 8, 'emoji': '🏔️',
+               'starters': ()},
 }
 
 REGION_ORDER = tuple(REGIONS)
 DEFAULT_REGION = 'kanto'
+
+# The regions `!start` offers, which is every region somebody can be FROM. Derived from
+# the table rather than listed again, so a region added without starters cannot appear
+# in the registration menu as three empty options.
+STARTABLE_REGIONS = tuple(k for k in REGION_ORDER if REGIONS[k]['starters'])
 
 # pokedex_id -> region key, built from the table above so it cannot fall behind it.
 STARTER_REGION = {pid: key
@@ -250,3 +271,71 @@ async def trainer_region(db, user_id):
     if starter is None:
         return DEFAULT_REGION, ''
     return (await region_of_specimen(db, starter)) or DEFAULT_REGION, ''
+
+
+async def current_region(db, user_id):
+    """Just the region key. The shape the evolution rulebook wants.
+
+    A thin wrapper on `trainer_region` so a call site reads like the `trainer_skies`
+    call beside it, rather than unpacking a tuple and throwing half of it away.
+    """
+    key, _stored = await trainer_region(db, user_id)
+    return key
+
+
+# ==========================================
+# 🧭 CHANGING REGION
+# ==========================================
+# **FREE, AND DELIBERATELY SO.** Nothing was tied to region when this was decided, so a
+# toll would have been friction in front of a cosmetic label. That changed the moment
+# regional evolutions landed in the same release: a trainer can now switch to Alola,
+# evolve a Cubone into an Alolan Marowak, and switch home the same minute.
+#
+# That is the owner's call and it is a defensible one - the regional forms are
+# collectables rather than power, and a wall in front of them mostly punishes whoever
+# has least time. If they ever start feeling cheap, the gate goes here and nowhere else:
+# set `REGION_SWITCH_COOLDOWN_DAYS` and `may_switch_region` starts refusing. Every caller
+# already asks it.
+REGION_SWITCH_COOLDOWN_DAYS = 0
+
+
+async def regional_forms(db, region):
+    """
+    What evolves differently in this region, as a readable list. '' when nothing does.
+
+    Read off `evolution_rules` rather than written out, so the answer cannot drift from
+    the rules that actually fire - and so it says nothing at all on a database where the
+    migration has not been run yet, which is the truth there.
+    """
+    region = str(region or '').strip().lower()
+    if not region:
+        return ''
+    try:
+        if not await has_column(db, 'evolution_rules', 'region'):
+            return ''
+        async with db.execute("""
+            SELECT b.name, v.name
+            FROM evolution_rules e
+            JOIN base_pokemon_species b ON b.pokedex_id = e.base_species_id
+            JOIN base_pokemon_species v ON v.pokedex_id = e.evolved_species_id
+            WHERE e.region = ?
+            ORDER BY b.pokedex_id
+        """, (region,)) as cursor:
+            rows = await cursor.fetchall()
+    except Exception:
+        return ''
+    return "\n".join(
+        f"• **{base.replace('-', ' ').title()}** → "
+        f"*{evolved.replace('-', ' ').title()}*" for base, evolved in rows)
+
+
+async def may_switch_region(db, user_id):
+    """`None` if this trainer may change region now, or the complaint saying why not.
+
+    Always permits today. It exists so the decision has ONE home the day it stops being
+    free, rather than a cooldown being threaded through the command that changes it and
+    forgotten by whatever changes it next.
+    """
+    if REGION_SWITCH_COOLDOWN_DAYS <= 0:
+        return None
+    return None  # pragma: no cover - the cooldown is not switched on

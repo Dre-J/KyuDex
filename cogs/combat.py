@@ -12,6 +12,7 @@ from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_
 from utils.db_manager import check_evolution_trigger, check_condition_evolution
 from utils.machines import owns_tm, owned_tms, price_of
 from utils import learnsets
+from utils.regions import current_region
 from utils.duels import (can_field_a_side, describe_format, duel_roster,
                          parse_duel_format)
 
@@ -2256,7 +2257,8 @@ async def check_for_evolution(db, user_id, specimen, combat_log, guild_id=None):
     evo_data = await check_evolution_trigger(
         db, current_pokedex_id, current_level, happiness,
         await trainer_skies(db, user_id, guild_id),
-        resolve_persisted_item(specimen), known_moves)
+        resolve_persisted_item(specimen), known_moves,
+        region=await current_region(db, user_id))
 
     # 2. If an evolution is found, return the prompt and the new species ID!
     if evo_data:

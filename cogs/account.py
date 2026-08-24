@@ -34,6 +34,9 @@ from utils.prefs import (CARD_BIOME_AUTO, CARD_EMBED, CARD_IMAGE, COMMON_ZONES,
                          resolve_biome_word, resolve_card_biome, resolve_card_style,
                          resolve_timezone, resolve_zone, set_card_biome,
                          set_card_style, set_timezone)
+from utils.regions import (REGION_ORDER, REGIONS, may_switch_region,
+                          region_label, regional_forms, resolve_region_word,
+                          set_region, trainer_region)
 from utils.trading import LOG_RETENTION_DAYS, purge_expired_logs
 
 # Long enough to read the list, short enough that nobody wanders off mid-confirmation.
@@ -508,6 +511,81 @@ class Account(commands.Cog):
         return await ctx.send(
             f"🗺️ Your profile card is now dressed in **{biome_label(chosen)}**. "
             f"Run `!profile` to see it.")
+
+    @settings.command(name="region", aliases=["regions", "travel", "relocate"])
+    @checks.has_started()
+    async def settings_region(self, ctx, *, region: str = None):
+        """
+        Where you are doing fieldwork. `!settings region alola`
+
+        Region decides which form some species evolve into - a Cubone raised in Alola
+        becomes an Alolan Marowak, a Petilil given a Sun Stone in Hisui becomes a
+        Hisuian Lilligant. Switching is free and immediate.
+        """
+        user_id = str(ctx.author.id)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            current, stored = await trainer_region(db, user_id)
+            here = await regional_forms(db, current)
+
+        if region is None:
+            # WHAT IT CHANGES, listed. A setting whose only visible effect is a word on
+            # a profile card would look cosmetic, and somebody would find out it was not
+            # by evolving the wrong thing.
+            lines = []
+            for key in REGION_ORDER:
+                mark = "➤ **" if key == current else "　"
+                close = "**" if key == current else ""
+                extra = ""
+                if not REGIONS[key]['starters']:
+                    extra = " · *no starters — a place to travel, not to begin*"
+                lines.append(f"{mark}{region_label(key)}{close}{extra}")
+
+            embed = discord.Embed(
+                title="🗾 Fieldwork Region",
+                description="\n".join(lines),
+                colour=discord.Colour.blurple())
+            embed.add_field(
+                name=f"Evolving in {region_label(current)}",
+                value=here or "*Nothing evolves differently here.*",
+                inline=False)
+            embed.set_footer(
+                text=("From your starter — set one with !settings region <name>"
+                      if not stored else "!settings region <name> to move"))
+            return await ctx.send(embed=embed)
+
+        chosen, complaint = resolve_region_word(region)
+        if complaint:
+            return await ctx.send(complaint)
+        if chosen == current and stored:
+            return await ctx.send(
+                f"🗾 You are already working in **{region_label(chosen)}**.")
+
+        # ONE PLACE DECIDES whether a move is allowed. It always says yes today - see
+        # `REGION_SWITCH_COOLDOWN_DAYS` - and exists so that if switching ever needs a
+        # cost, it grows here rather than in whichever command happens to change it.
+        async with aiosqlite.connect(DB_FILE) as db:
+            refusal = await may_switch_region(db, user_id)
+            if refusal:
+                return await ctx.send(refusal)
+            saved = await set_region(db, user_id, chosen)
+            await db.commit()
+            forms = await regional_forms(db, chosen)
+
+        if not saved:
+            return await ctx.send(
+                "⚠️ This database cannot store the preference yet, so it was not saved.")
+
+        embed = discord.Embed(
+            title=f"🗾 Now working in {region_label(chosen)}",
+            description=(f"Moved from {region_label(current)}. "
+                         f"Nothing you own changes — this decides what your specimens "
+                         f"evolve INTO from here on."),
+            colour=discord.Colour.green())
+        embed.add_field(name="Evolving here",
+                        value=forms or "*Nothing evolves differently here.*",
+                        inline=False)
+        await ctx.send(embed=embed)
 
     @settings.command(name="timezone", aliases=["tz", "time"])
     @checks.has_started()

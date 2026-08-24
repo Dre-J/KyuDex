@@ -38,7 +38,7 @@ from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_re
 import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
-from utils.regions import (REGION_ORDER, REGIONS, region_label, set_region,
+from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
                            starters_for)
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
@@ -812,7 +812,10 @@ class RegionSelect(discord.ui.Select):
                 description=(f"Gen {REGIONS[key]['gen']}: "
                              + ", ".join(name for _pid, name, _d in starters_for(key))),
                 emoji=REGIONS[key]['emoji'])
-            for key in REGION_ORDER
+            # STARTABLE, not every region. Hisui is somewhere a trainer can travel to
+            # and not somewhere anyone is from - it has no starter trio, so offering it
+            # here would be three empty options and a dead end.
+            for key in STARTABLE_REGIONS
         ]
         super().__init__(placeholder="Choose a research region...", min_values=1, max_values=1, options=options)
 

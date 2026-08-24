@@ -1,6 +1,8 @@
 import discord
 from discord.ext import commands
 from utils.prefs import trainer_skies
+from utils.db_manager import stone_evolution
+from utils.regions import current_region
 from utils.constants import (DB_FILE, current_skies, RITUAL_TRIGGERS,
                              RITUAL_MIN_LEVEL, RITUAL_KEYWORD)
 from utils import checks
@@ -75,15 +77,17 @@ class Evolution(commands.Cog):
                 
                 # 3. Check the Metamorphosis Rulebook
                 # 🚨 ADDED: s.standard_abilities, s.hidden_ability to the evolution target!
-                async with db.execute("""
-                    SELECT er.evolved_species_id, s.name, s.standard_abilities, s.hidden_ability
-                    FROM evolution_rules er
-                    JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
-                    WHERE er.base_species_id = ?
-                    AND er.trigger_name = 'use-item'
-                    AND er.item_name = ?
-                """, (current_pokedex_id, formatted_item)) as cursor:
-                    evo_data = await cursor.fetchone()
+                # THE REGION DECIDES WHICH FORM A STONE PRODUCES, and until now nothing
+                # decided it at all - this was a bare `fetchone()` with no ORDER BY, so
+                # Alolan Raichu, Alolan Exeggutor and Hisuian Lilligant were unreachable
+                # by whatever order SQLite happened to return rows in.
+                #
+                # `stone_evolution` lives in utils/db_manager.py beside the level-up
+                # rulebook, so both halves of "what does this evolve into" are asked in
+                # one place and a test can drive the real query rather than a copy.
+                evo_data = await stone_evolution(
+                    db, current_pokedex_id, formatted_item,
+                    region=await current_region(db, user_id))
 
                 # THE HELD-ITEM ROUTE. A Razor Claw is not a stone: in the games the
                 # specimen levels up while HOLDING it, and the item survives. So this

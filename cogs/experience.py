@@ -5,6 +5,7 @@ import time
 import random
 from utils.constants import DB_FILE, current_skies
 from utils.prefs import trainer_skies
+from utils.regions import current_region
 from utils.db_manager import check_evolution_trigger
 from utils.formulas import get_xp_requirement
 from utils.accounts import levelup_pings_enabled
@@ -163,7 +164,12 @@ class PassiveExperienceCog(commands.Cog):
                             await trainer_skies(
                                 db, user_id,
                                 message.guild.id if message.guild else None),
-                            held_item, known_moves)
+                            held_item, known_moves,
+                            # Where the trainer is, which decides whether a Cubone
+                            # becomes a Marowak or an Alolan one. Read the same way the
+                            # skies above are, so both conditions this rulebook gates on
+                            # arrive from the same shape of call.
+                            region=await current_region(db, user_id))
 
                         if match:
                             evolved_id = match[0]
