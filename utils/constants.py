@@ -74,18 +74,106 @@ def get_species_base_attack(pokemon):
     return SPECIES_BASE_ATTACK.get((pokemon or {}).get('pokedex_id'), _DEFAULT_BASE_ATTACK)
 
 # ==========================================
+# 🌑 THE THREE FAMILIES THAT ARE NOT ORDINARY MOVES
+# ==========================================
+# base_moves is PokeAPI's whole move table, which means it carries three families that
+# no specimen may ever reach for by name: the Shadow moves out of Colosseum and XD, the
+# Max Moves, and the signature Z-Moves. They are declared here, once, because more than
+# one rule needs them - the Metronome pool, the mimicry family and Sketch all do.
+#
+# The Shadow list is WRITTEN OUT rather than matched on the 'shadow-' prefix. base_moves
+# holds 24 moves beginning with that word and only 18 of them are Shadow moves; Shadow
+# Ball, Bone, Claw, Force, Punch and Sneak are perfectly ordinary and a prefix test would
+# have quietly banned Shadow Ball from Metronome and from Sketch.
+SHADOW_MOVES = frozenset({
+    'shadow-blast', 'shadow-blitz', 'shadow-bolt', 'shadow-break', 'shadow-chill',
+    'shadow-down', 'shadow-end', 'shadow-fire', 'shadow-half', 'shadow-hold',
+    'shadow-mist', 'shadow-panic', 'shadow-rave', 'shadow-rush', 'shadow-shed',
+    'shadow-sky', 'shadow-storm', 'shadow-wave',
+})
+
+# The nineteen Max Moves base_moves carries. A Max Move is BUILT by the engines out of a
+# base move and marked with MAX_MOVE_MARKER, so these names are never the payload's own
+# name in play - they are here to keep them out of the pools that read base_moves.
+MAX_MOVE_NAMES = frozenset({
+    'max-airstream', 'max-darkness', 'max-flare', 'max-flutterby', 'max-geyser',
+    'max-guard', 'max-hailstorm', 'max-knuckle', 'max-lightning', 'max-mindstorm',
+    'max-ooze', 'max-overgrowth', 'max-phantasm', 'max-quake', 'max-rockfall',
+    'max-starfall', 'max-steelspike', 'max-strike', 'max-wyrmwind',
+})
+
+# The signature Z-Moves, which unlike the eighteen elemental ones (Z_MOVE_NAMES, further
+# down) do have rows in base_moves and so are reachable by name.
+Z_MOVE_SIGNATURES = frozenset({
+    '10-000-000-volt-thunderbolt', 'catastropika', 'clangorous-soulblaze',
+    'extreme-evoboost', 'genesis-supernova', 'guardian-of-alola',
+    'light-that-burns-the-sky', 'malicious-moonsault', 'menacing-moonraze-maelstrom',
+    'oceanic-operetta', 'pulverizing-pancake', 'searing-sunraze-smash',
+    'sinister-arrow-raid', 'soul-stealing-7-star-strike', 'splintered-stormshards',
+    'stoked-sparksurfer',
+})
+
+# The Starmobiles' five signature moves, which Sketch is specifically barred from.
+STARMOBILE_MOVES = frozenset({
+    'blazing-torque', 'combat-torque', 'magical-torque', 'noxious-torque',
+    'wicked-torque',
+})
+
+# ==========================================
 # 🎲 THE METRONOME POOL
 # ==========================================
 # Every move Metronome may roll, indexed once at import rather than queried per use.
-# The exclusions are the moves that would either recurse into another random pick or
-# have nothing sensible to copy.
-METRONOME_EXCLUDED = {
-    'assist', 'copycat', 'me-first', 'metronome', 'mimic', 'mirror-move', 'sketch',
-    'sleep-talk', 'nature-power', 'struggle', 'transform', 'skill-swap', 'role-play',
-    'quash', 'after-you', 'instruct', 'baneful-bunker', 'belch', 'counter',
-    'covet', 'destiny-bond', 'detect', 'endure', 'feint', 'focus-punch', 'follow-me',
-    'helping-hand', 'mirror-coat', 'protect', 'rage-powder', 'snore', 'thief',
-}
+#
+# The list below is Bulbapedia's "Unselectable moves" table read at the GENERATION IX
+# column - the ruleset KyuDex otherwise models - plus the prose above that table, which
+# bars every Max Move and every Z-Move outright. It replaced a hand-written set of 32
+# that let Metronome roll `max-flare`, `catastropika` and all 18 Shadow moves.
+#
+# Two things worth knowing before editing it:
+#
+#   * The table is PER GENERATION and moves move between columns. Nine of these are
+#     barred in Generation IX but callable again in Legends: Z-A - Breaking Swipe,
+#     Chilling Water, Make It Rain, Overdrive, Rage Fist, Shed Tail, Snarl, Steel Beam
+#     and Trailblaze. Reading the table as one flat list gets them wrong in one
+#     direction and Dark Void, Double Team and Oblivion Wing wrong in the other.
+#   * Role Play and Skill Swap were excluded here and are NOT on the table at all.
+#     Metronome may call both, and formulas.py implements both, so they were dropped.
+#
+# Nihil Light belongs on this list and is deliberately absent: it is a Legends: Z-A move
+# with no Generation IX ruling, and base_moves has no row for it yet either.
+METRONOME_EXCLUDED = frozenset({
+    'after-you', 'apple-acid', 'armor-cannon', 'assist', 'astral-barrage',
+    'aura-wheel', 'baneful-bunker', 'beak-blast', 'behemoth-bash', 'behemoth-blade',
+    'belch', 'bestow', 'blazing-torque', 'body-press', 'branch-poke',
+    'breaking-swipe', 'celebrate', 'chatter', 'chilling-water', 'chilly-reception',
+    'clangorous-soul', 'collision-course', 'combat-torque', 'comeuppance', 'copycat',
+    'counter', 'covet', 'crafty-shield', 'decorate', 'destiny-bond',
+    'detect', 'diamond-storm', 'doodle', 'double-iron-bash', 'double-shock',
+    'dragon-ascent', 'dragon-energy', 'drum-beating', 'dynamax-cannon', 'electro-drift',
+    'endure', 'eternabeam', 'false-surrender', 'feint', 'fiery-wrath',
+    'fillet-away', 'fleur-cannon', 'focus-punch', 'follow-me', 'freeze-shock',
+    'freezing-glare', 'glacial-lance', 'grav-apple', 'helping-hand', 'hold-hands',
+    'hyper-drill', 'hyperspace-fury', 'hyperspace-hole', 'ice-burn', 'instruct',
+    'jet-punch', 'jungle-healing', 'kings-shield', 'life-dew', 'light-of-ruin',
+    'magical-torque', 'make-it-rain', 'mat-block', 'me-first', 'meteor-assault',
+    'mimic', 'mind-blown', 'mirror-coat', 'mirror-move', 'moongeist-beam',
+    'nature-power', 'natures-madness', 'noxious-torque', 'obstruct', 'order-up',
+    'origin-pulse', 'overdrive', 'photon-geyser', 'plasma-fists', 'population-bomb',
+    'pounce', 'power-shift', 'precipice-blades', 'protect', 'pyro-ball',
+    'quash', 'quick-guard', 'rage-fist', 'rage-powder', 'raging-bull',
+    'raging-fury', 'relic-song', 'revival-blessing', 'ruination', 'salt-cure',
+    'secret-sword', 'shed-tail', 'shell-trap', 'silk-trap', 'sketch',
+    'sleep-talk', 'snap-trap', 'snarl', 'snatch', 'snore',
+    'snowscape', 'spectral-thief', 'spicy-extract', 'spiky-shield', 'spirit-break',
+    'spotlight', 'steam-eruption', 'steel-beam', 'strange-steam', 'struggle',
+    'sunsteel-strike', 'surging-strikes', 'switcheroo', 'techno-blast', 'tera-starstorm',
+    'thief', 'thousand-arrows', 'thousand-waves', 'thunder-cage', 'thunderous-kick',
+    'tidy-up', 'trailblaze', 'transform', 'trick', 'twin-beam',
+    'v-create', 'wicked-blow', 'wicked-torque', 'wide-guard',
+    # Metronome itself is barred by the prose rather than the table: a second finger-wag
+    # would just roll again.
+    'metronome',
+}) | SHADOW_MOVES | MAX_MOVE_NAMES | Z_MOVE_SIGNATURES
 
 METRONOME_POOL = []
 
@@ -5292,6 +5380,14 @@ CONTACT_MOVES = frozenset({
 MAX_MOVE_MARKER = '_is_max_move'
 MAX_MOVE_PRIORITY = 0
 MAX_GUARD_PRIORITY = 4
+
+# A Z-Move keeps its BASE move's name in the payload for exactly the same reason a Max
+# Move does - PP deduction and the move-restriction checks both look the move back up by
+# that name - so "was this a Z-Move?" cannot be answered by reading the name either.
+# apply_z_mutation stamps this, and the engines carry it onto the attacker as
+# LAST_MOVE_WAS_Z so that Sketch can refuse a Z-Move a turn later.
+Z_MOVE_MARKER = '_is_z_move'
+LAST_MOVE_WAS_Z = 'last_move_was_z'
 
 # Avalanche and Revenge are one rule with two names: 60 base, doubled if the user was
 # struck earlier in the same turn. Revenge was already implemented on its own; Avalanche
