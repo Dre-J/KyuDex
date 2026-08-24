@@ -22,6 +22,8 @@ walks the live schema and fails on any table holding a user column that no map m
 so a table added in six months cannot silently escape the cascade.
 """
 
+from utils.db_manager import has_column
+
 # Tables that name a trainer directly, and the column that does the naming.
 OWNER_COLUMN = {
     'users':              'user_id',
@@ -111,9 +113,9 @@ async def _instance_ids(db, user_id):
         return [row[0] for row in await cursor.fetchall()]
 
 
-async def _has_column(db, table, column):
-    async with db.execute(f"PRAGMA table_info({table})") as cursor:
-        return any(row[1] == column for row in await cursor.fetchall())
+# One implementation, in `utils/db_manager.py`. This was a byte-identical copy of the
+# one in `utils/prefs.py`; the private name stays so the call sites below are unchanged.
+_has_column = has_column
 
 
 async def _has_table(db, table):

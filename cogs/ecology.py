@@ -38,6 +38,8 @@ from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_re
 import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
+from utils.regions import (REGION_ORDER, REGIONS, region_label, set_region,
+                           starters_for)
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES)
@@ -627,30 +629,21 @@ class ReturnMissionsView(discord.ui.View):
     
 class StarterSelect(discord.ui.Select):
     def __init__(self, region: str):
-        self.region = region
-        
-        # Define the ecological starters by region
-        starters = {
-            'Kanto': [('Bulbasaur', '1', '🌿 Grass/Poison'), ('Charmander', '4', '🔥 Fire'), ('Squirtle', '7', '💧 Water')],
-            'Johto': [('Chikorita', '152', '🌿 Grass'), ('Cyndaquil', '155', '🔥 Fire'), ('Totodile', '158', '💧 Water')],
-            # 258 is Mudkip. This row said 'Totodile', so the Hoenn water starter was
-            # offered under the Johto one's name while handing over the right species.
-            'Hoenn': [('Treecko', '252', '🌿 Grass'), ('Torchic', '255', '🔥 Fire'), ('Mudkip', '258', '💧 Water')],
-            'Sinnoh': [('Turtwig', '387', '🌿 Grass'), ('Chimchar', '390', '🔥 Fire'), ('Piplup', '393', '💧 Water')],
-            'Unova': [('Snivy', '495', '🌿 Grass'), ('Tepig', '498', '🔥 Fire'), ('Oshawott', '501', '💧 Water')],
-            'Kalos': [('Chespin', '650', '🌿 Grass'), ('Fennekin', '653', '🔥 Fire'), ('Froakie', '656', '💧 Water')],
-            'Alola': [('Rowlet', '722', '🌿 Grass'), ('Litten', '725', '🔥 Fire'), ('Popplio', '728', '💧 Water')],
-            'Galar': [('Grookey', '810', '🌿 Grass'), ('Scorbunny', '813', '🔥 Fire'), ('Sobble', '816', '💧 Water')],
-            'Paldea': [('Sprigatito', '906', '🌿 Grass'), ('Fuecoco', '909', '🔥 Fire'), ('Quaxly', '912', '💧 Water')]
-            # You can easily add Hoenn, Sinnoh, etc., right here!
-        }
-        
+        # The region key, not the label - it is what gets stored, and normalising here
+        # means the callback never has to wonder which spelling it was handed.
+        self.region = str(region or '').strip().lower()
+
+        # THE TRIO COMES FROM `utils/regions.py`. It used to be written out here AND in
+        # RegionSelect's option list, and the two had already fallen out of step: the
+        # Hoenn row offered its water starter under Totodile's name while handing over
+        # Mudkip. Two lists that must agree, with nothing checking that they do.
         options = [
-            discord.SelectOption(label=name, value=p_id, description=desc)
-            for name, p_id, desc in starters.get(region, [])
+            discord.SelectOption(label=name, value=str(pid), description=desc)
+            for pid, name, desc in starters_for(self.region)
         ]
-        
-        super().__init__(placeholder=f"Select your {region} partner...", min_values=1, max_values=1, options=options)
+
+        super().__init__(placeholder=f"Select your {region_label(self.region, emoji=False)} partner...",
+                         min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         pokedex_id = int(self.values[0])
@@ -681,6 +674,16 @@ class StarterSelect(discord.ui.Select):
                 # lacked was the first upgrade, at zero tokens.
                 await grant_starter_licence(db, user_id, STARTER_TOKENS, STARTER_ITEMS,
                                             STARTER_TMS)
+
+                # THE REGION, WRITTEN DOWN. `!start` has always asked which region a
+                # trainer is from and has never recorded the answer - `self.region` was
+                # carried this far and dropped. It gates regional evolutions, so it has
+                # to survive the menu. Failure here is not fatal: `resolve_region`
+                # recovers the same answer from the starter species below, which is what
+                # every trainer who registered before this line existed relies on.
+                if not await set_region(db, user_id, self.region):
+                    print(f"⚠️ Could not store region '{self.region}' for {user_id}; "
+                          f"it will be derived from their starter instead.")
 
                 # ==========================================
                 # 2. GENERATE THE BIOLOGICAL SPECIMEN
@@ -800,27 +803,30 @@ class StarterSelect(discord.ui.Select):
 
 class RegionSelect(discord.ui.Select):
     def __init__(self):
+        # DERIVED, so the menu cannot describe a trio the next menu does not offer, and
+        # so nine identical yellow circles stop standing in for nine different places.
         options = [
-            discord.SelectOption(label="Kanto", description="Gen 1: Bulbasaur, Charmander, Squirtle", emoji="🟡"),
-            discord.SelectOption(label="Johto", description="Gen 2: Chikorita, Cyndaquil, Totodile", emoji="🟡"),
-            discord.SelectOption(label="Hoenn", description="Gen 3: Treecko, Torchic, Mudkip", emoji="🟡"),
-            discord.SelectOption(label="Sinnoh", description="Gen 4: Turtwig, Chimchar, Piplup", emoji="🟡"),
-            discord.SelectOption(label="Unova", description="Gen 5: Snivy, Tepig, Oshawott", emoji="🟡"),
-            discord.SelectOption(label="Kalos", description="Gen 6: Chespin, Fennekin, Froakie", emoji="🟡"),
-            discord.SelectOption(label="Alola", description="Gen 7: Rowlet, Litten, Popplio", emoji="🟡"),
-            discord.SelectOption(label="Galar", description="Gen 8: Grookey, Scorbunny, Sobble", emoji="🟡"),
-            discord.SelectOption(label="Paldea", description="Gen 9: Sprigatito, Fuecoco, Quaxly", emoji="🟡"),
+            discord.SelectOption(
+                label=REGIONS[key]['label'],
+                value=key,
+                description=(f"Gen {REGIONS[key]['gen']}: "
+                             + ", ".join(name for _pid, name, _d in starters_for(key))),
+                emoji=REGIONS[key]['emoji'])
+            for key in REGION_ORDER
         ]
         super().__init__(placeholder="Choose a research region...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         selected_region = self.values[0]
-        
+
         # Create a new view with the Starter select menu for that specific region!
         view = discord.ui.View()
         view.add_item(StarterSelect(selected_region))
-        
-        await interaction.response.edit_message(content=f"You selected **{selected_region}**. Now, choose your starting specimen:", view=view)
+
+        await interaction.response.edit_message(
+            content=f"You selected **{region_label(selected_region)}**. "
+                    f"Now, choose your starting specimen:",
+            view=view)
 
 class ReleaseConfirmView(discord.ui.View):
     """

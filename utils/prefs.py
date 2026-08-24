@@ -38,6 +38,7 @@ import datetime
 import difflib
 
 from utils.constants import BIOME_ORDER
+from utils.db_manager import ensure_column, has_column
 
 DEFAULT_TIMEZONE = 'UTC'
 
@@ -252,31 +253,12 @@ def resolve_zone(text):
 # ==========================================
 # READING AND WRITING THE PREFERENCE
 # ==========================================
-async def _has_column(db, table, column):
-    async with db.execute(f"PRAGMA table_info({table})") as cursor:
-        return any(row[1] == column for row in await cursor.fetchall())
-
-
-async def _ensure_column(db, table, column, decl):
-    """
-    Add a column if it is missing. Does NOT commit. Returns whether it is there now.
-
-    Called only from WRITE paths. A read must never alter the schema - that is how a
-    module ends up writing to whatever database happened to be configured at import
-    time, which this codebase has been bitten by once already. Each preference column
-    therefore appears the first time somebody actually sets that preference, and until
-    then every read falls through to its default.
-
-    The column NAME and DECLARATION are interpolated because SQLite cannot bind an
-    identifier; both are literals from this module and neither is ever player input.
-    """
-    if await _has_column(db, table, column):
-        return True
-    try:
-        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-        return True
-    except Exception:
-        return False
+# The schema helpers used to be written out here. They now live in `utils/db_manager.py`
+# because `utils/accounts.py` had a byte-identical copy of `_has_column` and
+# `utils/regions.py` was about to make a third. The private names are kept as aliases so
+# every call site below - and the rule that a READ must never migrate - is unchanged.
+_has_column = has_column
+_ensure_column = ensure_column
 
 
 async def ensure_timezone_column(db):

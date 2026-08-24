@@ -7,21 +7,28 @@ from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
 from utils.limits import (ENERGY_MAX, ENERGY_BANK_CAP, ENERGY_REGEN_PER_HOUR,
                           describe_energy, regenerate_energy)
 from utils.constants import BIOME_ORDER, biome_label, current_skies
-from utils.prefs import (CARD_IMAGE, SOURCE_USER, get_card_biome, get_card_style,
-                         nudge_if_default, now_in, resolve_card_biome,
-                         resolve_timezone)
+from utils.prefs import (CARD_IMAGE, SOURCE_USER, describe_zone, get_card_biome,
+                         get_card_style, nudge_if_default, now_in,
+                         resolve_card_biome, resolve_timezone)
 from utils.levels import (contribution_for_level, energy_bank_cap,
                           trainer_level)
+from utils.regions import DEFAULT_REGION, region_label, trainer_region
 from utils.roster import party_filter
 from profile_card import build_profile_card, render_profile_card_async
 import io
 from utils.roster import bump_to_end_of_box
 from utils import checks, trading
 import asyncio
+import datetime
 import time
 from collections import OrderedDict
 import aiosqlite
 import re
+
+# The green the profile embed is drawn in. `discord.Colour.green()` is the palette's
+# flat green and sits oddly beside the card's artwork; this is the deeper one used in
+# the mock the embed was rebuilt from.
+PROFILE_COLOUR = discord.Colour(0x41F097)
 
 
 # ==========================================
@@ -1437,10 +1444,18 @@ class Social(commands.Cog):
         # is no longer held - which is why nothing downstream trusts it.
         stored_biome = await get_card_biome(db, user_id)
 
+        # Stored if they have one, recovered from their starter if not - see
+        # `utils/regions.py`. Every trainer who registered before the column existed
+        # falls into the second case, and the nine starter trios are disjoint, so the
+        # recovery is exact rather than a guess.
+        region, region_stored = await trainer_region(db, user_id)
+
         return {
             'target': target,
             'card_biome': stored_biome,
             'biome': resolve_card_biome(stored_biome, visas),
+            'region': region,
+            'region_stored': region_stored,
             'unread': unread,
             'tokens': tokens,
             'visas': visas,
@@ -1462,14 +1477,29 @@ class Social(commands.Cog):
 
     @staticmethod
     def _profile_embed(ctx, target, d):
-        """The text rendering. Same numbers, no assets, no Pillow."""
+        """
+        The text rendering. Same numbers, no assets, no Pillow.
+
+        LAID OUT AS AN AUTHOR LINE AND A ROW OF FIGURES rather than as a title and a
+        column of them. The two headline meters - level and energy - stay full width
+        because they carry a bar; the four totals go inline, which puts them on one
+        line on a desktop and stops the embed running to two screens on a phone.
+
+        The avatar goes in the thumbnail. It is the only free way for the embed to say
+        whose profile this is: `display_avatar.url` is a string Discord already has, so
+        unlike the image card there is nothing to download.
+        """
         level, span = d['level'], max(1, contribution_for_level(d['level'] + 1)
                                       - contribution_for_level(d['level']))
         into = d['lifetime'] - contribution_for_level(level)
 
-        embed = discord.Embed(
-            title=f"🌿 {target.display_name}'s Ecological Profile",
-            colour=discord.Colour.green())
+        embed = discord.Embed(colour=PROFILE_COLOUR,
+                              timestamp=datetime.datetime.now(datetime.timezone.utc))
+        embed.set_author(name=f"{target.display_name} · Ecological Profile",
+                         icon_url=getattr(target.display_avatar, 'url', None))
+        thumb = getattr(getattr(target, 'display_avatar', None), 'url', None)
+        if thumb:
+            embed.set_thumbnail(url=thumb)
 
         if d['unread'] and target == ctx.author:
             embed.description = (f"📬 **You have {d['unread']} unread "
@@ -1482,6 +1512,9 @@ class Social(commands.Cog):
                    f"*{d['lifetime']:,} lifetime contribution*"),
             inline=False)
 
+        # `describe_energy` writes the banked and the running-on-reserves phrasing, and
+        # the image card reads the same function. Spelling "100 over a full reserve" out
+        # again here is how the two meters would start disagreeing about the same number.
         shown = max(0, d['energy'])
         note = describe_energy(d['energy'], d['bank_cap']) or ""
         embed.add_field(
@@ -1491,33 +1524,49 @@ class Social(commands.Cog):
                    + (f"\n*{note}*" if note else "")),
             inline=False)
 
+        # THE ZONE IS NAMED, not just the hour. "1:22 · day" alone is unreadable to
+        # anybody checking whether their own evening is what the game thinks it is -
+        # which is the entire question a time-gated evolution makes them ask.
         sky_icon = "🌙" if 'night' in d['skies'] else "☀️"
-        embed.add_field(name=f"{sky_icon} Clock",
-                        value=f"{d['clock']} · {'/'.join(d['skies'])}", inline=True)
-        embed.add_field(name="🪙 Eco-Tokens", value=f"{d['tokens']:,}", inline=True)
-        embed.add_field(name="🐾 Specimens", value=f"{d['caught']:,} · ✨ {d['shinies']:,}",
+        embed.add_field(
+            name=f"{sky_icon} Your Clock",
+            # The BARE zone name, not `describe_zone` - that renders the current time and
+            # the offset too, and the current time is already the first thing on this
+            # line. It is also the string somebody would type straight back into
+            # `!settings timezone`, which a prettified one is not.
+            value=f"**{d['clock']}** · {'/'.join(d['skies'])}\n"
+                  f"*Time zone: {d['zone']}*",
+            inline=False)
+
+        # HOME REGION sits with the other totals rather than in a field of its own. It
+        # is an identity, not a score, and the row is where somebody's eye already is.
+        embed.add_field(name="Home Region",
+                        value=region_label(d.get('region') or DEFAULT_REGION),
                         inline=True)
+        embed.add_field(name="Global Eco-Tokens", value=f"🪙 {d['tokens']:,}",
+                        inline=True)
+        embed.add_field(name="Local Contribution",
+                        value=f"⭐ {d['local_contribution']:,} points", inline=True)
+        embed.add_field(name="Specimens Rescued", value=f"🐾 {d['caught']:,} total",
+                        inline=True)
+        embed.add_field(name="Shiny", value=f"✨ {d['shinies']:,}", inline=True)
 
         # `biome_label` rather than a local map. This was the fourth copy of the five
         # sector names in the codebase and the one most likely to fall behind, because
         # nothing that reads it would fail if it did - a stale entry here just quietly
         # renders `Apex` without its dragon.
         visas_display = " • ".join(biome_label(v) for v in d['visas']) or "—"
-        embed.add_field(name="🛂 Sector Clearance", value=f"**{visas_display}**",
+        # The chosen sector goes INSIDE the clearance field rather than in one of its
+        # own. It is a footnote to the list above it - which sector of these you wear -
+        # and a whole field for one word made it look like a separate achievement. Shown
+        # only when it has been chosen: telling somebody on the default "Canopy, because
+        # that is as far as you have got" reads as a rebuke.
+        if d.get('card_biome'):
+            visas_display += f"\n*Card dressed in {biome_label(d['biome'])}.*"
+        embed.add_field(name="🛂 Sector Clearance (Visas)", value=visas_display,
                         inline=False)
 
-        # The chosen sector is shown ONLY when it has been chosen. Somebody on the
-        # default is not making a decision they need reporting back to them, and a line
-        # saying "Canopy, because that is as far as you have got" reads as a rebuke.
-        if d.get('card_biome'):
-            embed.add_field(
-                name="🎨 Card Sector",
-                value=(f"**{biome_label(d['biome'])}** · `!settings biome auto` "
-                       f"follows your deepest clearance instead."),
-                inline=False)
-
-        footer = (f"{ctx.guild.name} · {d['local_contribution']:,} local contribution"
-                  if ctx.guild else "")
+        footer = ctx.guild.name if ctx.guild else ""
         if d['zone_source'] != SOURCE_USER:
             footer += ("  |  Set yours with `!settings timezone` so day/night matches "
                        "your own evening.")
