@@ -11,6 +11,7 @@ from utils.formulas import record_battle_conditions, advance_field_tenure, apply
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.db_manager import check_evolution_trigger, check_condition_evolution
 from utils.machines import owns_tm, owned_tms, price_of
+from utils import learnsets
 from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
                              BATTLE_IDLE_TIMEOUT,
                              TM_CATALOG, type_badges, type_icon,
@@ -993,59 +994,31 @@ async def teaching_route(db, user_id, species_name, pokedex_id, level, move):
     including `machine`, so every TM move in the game was free the moment the species
     could learn it at all. The TM shelf in the market sold what `!learn` gave away.
 
-    The routes are read in the order the games read them:
-
-    - a move it has GROWN INTO is free
-    - otherwise, a move that comes off a MACHINE costs the machine
-    - otherwise the complaint names the actual obstacle, because "not physically
-      capable" is wrong three different ways: too young, tutor-only, and egg-only are
-      all things a player can do something about
+    **THE ROUTE TABLE NOW LIVES IN `utils/learnsets.py`**, because this was not the only
+    place asking the question - `!tutor` ran its own `learn_method IN ('level-up',
+    'tutor')`, a different answer to the same question in a second place. Worse, the
+    branches here covered FOUR of the ten methods the movepool actually records, so a
+    move whose only route was `train` - Generation 8's Technical Records, 3,837
+    species-and-move pairs - was refused as "not physically capable" while the row sat
+    in the database saying otherwise.
 
     A machine route is checked against the TM case and nothing is spent - a TM is
     permanent, so holding it is the whole of the question.
     """
-    pretty = str(move).replace('-', ' ').title()
-    name = str(species_name).replace('-', ' ').capitalize()
+    routes = await learnsets.routes_for(db, pokedex_id, move)
+    owns = await owns_tm(db, user_id, move) if learnsets.MACHINE in routes else False
 
-    async with db.execute("""
-        SELECT learn_method, MIN(level_learned)
-        FROM species_movepool
-        WHERE pokedex_id = ? AND move_name = ?
-        GROUP BY learn_method
-    """, (pokedex_id, move)) as cursor:
-        routes = {row[0]: (row[1] or 0) for row in await cursor.fetchall()}
+    route = learnsets.route_for(routes, level, owns_machine=owns)
 
-    if not routes:
-        return None, (f"❌ Biological mismatch: A **{name}** is not physically capable "
-                      f"of learning `{pretty}`.")
-
-    if 'level-up' in routes and level >= routes['level-up']:
-        return 'level-up', None
-
-    if 'machine' in routes:
-        if await owns_tm(db, user_id, move):
-            return 'machine', None
-        cost = price_of(move)
-        price = f" It costs 🪙 **{cost:,}**, once, forever." if cost else ""
-        return None, (f"💿 `{pretty}` is a **TM move** for {name}, and you do not own "
-                      f"that TM.{price} Buy it with `!buy {move}`, or look it up with "
-                      f"`!tmshop {move}`. `!tech` lists what you already hold.")
-
-    # It DOES learn it by level-up, just not yet - and it has no machine route to skip
-    # the wait with.
-    if 'level-up' in routes:
-        return None, (f"📈 Your **{name}** needs to reach **Level "
-                      f"{routes['level-up']}** before it can master `{pretty}`.")
-
-    if 'tutor' in routes:
-        return None, (f"🧠 `{pretty}` is a tutor move. Use `!tutor <tag> {move}` — it "
-                      f"costs 500 Eco Tokens and a Memory Spore.")
-
-    if 'egg' in routes:
-        return None, (f"🥚 `{pretty}` is an egg move for {name}. It is inherited, not "
-                      f"taught.")
-
-    return None, (f"❌ Biological mismatch: A **{name}** cannot learn `{pretty}`.")
+    # A paid route is not something `!learn` can spend on the trainer's behalf, so it
+    # points at the door rather than opening it. `!tutor` asks the same question of the
+    # same table and gets the same answer, which is the point of the shared module.
+    hint = learnsets.paid_route_hint(route, move)
+    if hint:
+        return None, hint
+    if route.method:
+        return route.method, None
+    return None, learnsets.explain(route, species_name, move, tm_price=price_of(move))
 
 
 def floats_on_arrival(pokemon, state, owner_str="", magic_room=False):
@@ -8060,21 +8033,31 @@ class Combat(commands.Cog):
                 # ==========================================
                 # 3. BIOLOGICAL COMPATIBILITY CHECK
                 # ==========================================
-                async with db.execute("""
-                    SELECT learn_method, level_learned 
-                    FROM species_movepool 
-                    WHERE pokedex_id = ? AND move_name = ? 
-                    AND learn_method IN ('level-up', 'tutor')
-                """, (p_id, requested_move)) as cursor:
-                    pool_data = await cursor.fetchone()
-                
-                if not pool_data:
+                # THE SAME TABLE `!learn` READS. This used to run its own
+                # `learn_method IN ('level-up', 'tutor')`, which is the same question
+                # asked a second way - and it excluded `train` outright, so every
+                # Generation 8 Technical Record move was refused here as "biologically
+                # incapable" as well as by `!learn`. There was nowhere left to teach it.
+                routes = await learnsets.routes_for(db, p_id, requested_move)
+                route = learnsets.route_for(routes, current_level, owns_machine=False)
+
+                if not routes:
                     return await ctx.send(f"🧬 **Genetic Incompatibility:** **{species_name.capitalize()}** is biologically incapable of learning `{requested_move.replace('-', ' ').title()}` via tutoring.")
-                    
-                learn_method, level_learned = pool_data
-                
-                if learn_method == 'level-up' and current_level < level_learned:
-                    return await ctx.send(f"⚠️ **Maturation Error:** **{species_name.capitalize()}** must reach Level {level_learned} before its biology can support `{requested_move.replace('-', ' ').title()}`.")
+
+                # The tutor teaches what it has grown into and what it can be paid to
+                # remember. A machine move is the TM shelf's business and an egg move is
+                # inherited, so both are refused here in the words `!learn` would use.
+                if route.method not in (learnsets.LEVEL_UP, learnsets.TUTOR,
+                                        learnsets.RECORD):
+                    complaint = learnsets.explain(
+                        learnsets.route_for(routes, current_level, owns_machine=False,
+                                            allow_paid=True),
+                        species_name, requested_move, tm_price=price_of(requested_move))
+                    if route.reason == learnsets.TOO_YOUNG:
+                        return await ctx.send(f"⚠️ **Maturation Error:** **{species_name.capitalize()}** must reach Level {route.level} before its biology can support `{requested_move.replace('-', ' ').title()}`.")
+                    return await ctx.send(complaint or f"🧬 **Genetic Incompatibility:** **{species_name.capitalize()}** cannot be tutored `{requested_move.replace('-', ' ').title()}`.")
+
+                learn_method = route.method
 
                 # ==========================================
                 # 4. RESOURCE VERIFICATION
