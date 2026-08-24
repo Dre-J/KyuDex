@@ -1,6 +1,7 @@
 import sqlite3
 # Assuming you define DB_FILE = "ecosystem.db" in constants.py
-from utils.constants import DB_FILE, SPECIAL_SKIES, CONDITION_TRIGGERS 
+from utils.constants import (DB_FILE, SPECIAL_SKIES, CONDITION_TRIGGERS,
+                             RITUAL_TRIGGERS) 
 
 def get_connection():
     """A simple helper so you never have to type the DB name repeatedly."""
@@ -259,6 +260,29 @@ async def stone_evolution(db, pokedex_id, item_name, region=None):
 
     async with db.execute(sql, params) as cursor:
         return await cursor.fetchone()
+
+
+async def ritual_routes(db, pokedex_id):
+    """
+    Every ritual route out of one species, in a DEFINED order.
+
+    The cog ran this query inline with no ORDER BY and took row zero, which is how Kubfu
+    could only ever become Single Strike Urshifu: SQLite handed back the Tower of
+    Darkness rule first and the Tower of Waters one was never seen. Ordering by id is
+    not what fixes that - `choose_ritual` is - but an unordered query behind a choice is
+    a coin flip waiting to be reintroduced.
+    """
+    placeholders = ','.join('?' * len(RITUAL_TRIGGERS))
+    async with db.execute(f"""
+        SELECT er.evolved_species_id, s.name, s.standard_abilities,
+               s.hidden_ability, er.trigger_name
+        FROM evolution_rules er
+        JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+        WHERE er.base_species_id = ?
+          AND er.trigger_name IN ({placeholders})
+        ORDER BY er.id
+    """, (pokedex_id, *sorted(RITUAL_TRIGGERS))) as cursor:
+        return await cursor.fetchall()
 
 
 async def evolution_family(db, species_name):
