@@ -31,7 +31,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              GMAX_ICON, ALPHA_ICON,
                              MAX_SOUP, MAX_SOUP_COST, MAX_MUSHROOMS,
                              MAX_SOUP_MUSHROOMS, NATURE_MINTS, NATURE_MULTIPLIERS,
-                             NEUTRAL_NATURES, mint_for)
+                             NEUTRAL_NATURES, mint_for,
+                             EQUIPMENT_CATALOG, resolve_item_key)
 from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
                           record_use, used_today, expedition_yield, describe_yield)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
@@ -47,6 +48,9 @@ from utils.filters import filter_help, resolve_query
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
                                 resolve_language, species_for_name)
+from utils.forms import (describe_options, form_item, is_held_form_item, is_fused,
+                         perform)
+from utils.species import pretty_species
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
 from utils.directives import credit_evolution
@@ -870,6 +874,22 @@ class ReleaseConfirmView(discord.ui.View):
 
         try:
             async with aiosqlite.connect(self.db_file) as db:
+                # A FUSED SPECIMEN IS CARRYING ANOTHER ONE. Releasing Kyurem-White would
+                # delete the host and strand the Reshiram inside it in `fused_specimens`
+                # with nothing to attach it back to - the one path in the repo that can
+                # orphan a fusion, which is why it is the one path that has a guard.
+                # Everything else about a fused specimen (trading, depositing) is fine,
+                # because the record follows the host rather than its owner.
+                for _name, _level, tag in self.specimens:
+                    if await is_fused(db, tag):
+                        for child in self.children:
+                            child.disabled = False
+                        return await interaction.response.edit_message(
+                            content=(f"⚠️ **{_name.capitalize()}** is fused and is "
+                                     f"holding another specimen inside it. Separate "
+                                     f"them with `!form` before releasing it."),
+                            view=self)
+
                 await db.execute("BEGIN TRANSACTION")
                 # One statement rather than a loop, so a failure halfway cannot leave
                 # half a release done and the grant unpaid.
@@ -2996,8 +3016,14 @@ class Ecology(commands.Cog):
     @checks.is_authorized()
     async def use_item(self, ctx, *, item_input: str):
         # --- DATA SANITIZATION ---
-        formatted_item = item_input.strip().lower().replace(" ", "").replace("-", "")
-        
+        # Was `.replace(" ", "").replace("-", "")`, which turned "DNA Splicers" into
+        # `dnasplicers` and then looked THAT up in user_inventory - where names are
+        # stored hyphenated. 72 of the 82 item names in the live inventory carry a
+        # hyphen, so this command had never worked for any of them. The one item it
+        # could find was the Purifier, which is a single word, and the Purifier is the
+        # only thing the dispatcher below handles.
+        formatted_item = resolve_item_key(item_input) or item_input.strip().lower()
+
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
         
@@ -3052,6 +3078,19 @@ class Ecology(commands.Cog):
                     
                     await ctx.send(embed=embed)
 
+                # --- A FORM ITEM WANTS A SPECIMEN ---
+                elif form_item(formatted_item) or is_held_form_item(formatted_item):
+                    label = EQUIPMENT_CATALOG.get(formatted_item, {}).get(
+                        'name', item_input.title())
+                    if is_held_form_item(formatted_item):
+                        return await ctx.send(
+                            f"🧬 A **{label}** is held, not used — give it to the "
+                            f"specimen with `!give` and it takes its Origin Forme the "
+                            f"moment it enters a battle.")
+                    return await ctx.send(
+                        f"🧬 A **{label}** has to be pointed at a specimen. "
+                        f"Try `!form <box number> {formatted_item}`.")
+
                 # --- INVALID DEPLOYMENT ---
                 else:
                     return await ctx.send(f"⚠️ `{item_input.title()}` is a passive item and cannot be deployed directly from the backpack.")
@@ -3061,6 +3100,92 @@ class Ecology(commands.Cog):
                     await db.rollback()
                 print(f"Error deploying item: {e}")
                 await ctx.send("An error occurred while deploying the item. No items were consumed.")
+
+    # ==========================================
+    # 🧬 THE FORM ITEMS
+    # ==========================================
+    @commands.command(name="form", aliases=["reshape", "fuse"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def change_form(self, ctx, target: str = None, *, request: str = None):
+        """
+        Change a specimen's form with a form item.
+
+            !form 12 gracidea              -> the other Shaymin forme
+            !form 12 meteorite attack      -> straight to a named forme
+            !form 12 zygarde-cube 50       -> one axis of Zygarde's grid
+            !form 12 zygarde-cube moves    -> what only the Cube can teach
+            !form 12 dna-splicers 14       -> fuse box 12 with box 14
+            !form 12 dna-splicers separate -> give the other one back
+            !form 12                       -> what this specimen's items could do
+
+        The item is NOT consumed. A Gracidea that vanished the first time it was used
+        would make Sky Forme a one-way door, and these cost 10,000 apiece.
+        """
+        user_id = str(ctx.author.id)
+        words = (request or '').split()
+        item_words, argument = [], None
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            row, complaint = await locate_specimen(
+                db, user_id, target,
+                "cp.instance_id, cp.pokedex_id, s.name, cp.nickname, cp.ability")
+            if complaint:
+                return await ctx.send(complaint)
+            instance_id, pokedex_id, species, nickname, ability = row
+            shown = nickname or pretty_species(species)
+
+            # The item name may be several words ("reins of unity"), and anything after
+            # it is the argument. Longest match first so "rotom catalog mow" does not
+            # resolve to "rotom".
+            for take in range(len(words), 0, -1):
+                candidate = resolve_item_key(" ".join(words[:take]))
+                if candidate and (form_item(candidate) or is_held_form_item(candidate)):
+                    item_words, argument = words[:take], " ".join(words[take:]) or None
+                    break
+
+            if not item_words:
+                return await ctx.send(
+                    await describe_options(db, species, shown, instance_id))
+
+            item = resolve_item_key(" ".join(item_words))
+            if is_held_form_item(item):
+                label = EQUIPMENT_CATALOG.get(item, {}).get('name', item)
+                return await ctx.send(
+                    f"🧬 A **{label}** is held, not used. `!give {target} {item}` and "
+                    f"**{shown}** takes its Origin Forme the moment it enters a battle.")
+
+            async with db.execute(
+                    "SELECT quantity FROM user_inventory "
+                    "WHERE user_id = ? AND item_name = ?", (user_id, item)) as cursor:
+                held = await cursor.fetchone()
+            if not held or held[0] < 1:
+                label = EQUIPMENT_CATALOG.get(item, {}).get('name', item)
+                return await ctx.send(
+                    f"🎒 You don't have a **{label}** in your field pack. "
+                    f"The Form Items shelf in `!shop` stocks them.")
+
+            # A fusion has to find the OTHER specimen, and box numbers are utils.roster's
+            # business rather than utils.forms'. Handing the lookup in keeps the rulebook
+            # drivable by a test that has a database and no cog.
+            async def find_partner(_db, owner, typed):
+                return await locate_specimen(
+                    _db, owner, typed,
+                    "cp.instance_id, cp.pokedex_id, s.name, cp.nickname")
+
+            try:
+                message = await perform(
+                    db, user_id, item, instance_id, species, shown, ability, argument,
+                    locate=find_partner)
+                await db.commit()
+            except Exception as e:
+                if db.in_transaction:
+                    await db.rollback()
+                print(f"Form change error: {e}")
+                return await ctx.send(
+                    "⚠️ Something went wrong reshaping that specimen. "
+                    "Nothing was changed.")
+            await ctx.send(message)
 
     # --- Setup Habitat Channel ---
     @commands.command(name="sethabitat")

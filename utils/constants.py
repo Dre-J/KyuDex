@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import re as _re
 import discord
 # ==========================================
 # THE BOTANICAL DATABASE (Consumables)
@@ -468,14 +469,33 @@ EQUIPMENT_CATALOG = {
     "memory-spore":  {"name": "Memory Spore", "price": 0, "desc": "Allows a pokemon to learn a tutor move.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
     
     # Form Items
-    "reveal-glass":  {"name": "Reveal Glass", "price": 0, "desc": "Allows the weather trio to switch between forms.", "emoji": "🧬", "category": "formitems", "purchasable": False},
-    "dna-splicers":  {"name": "DNA Splicers", "price": 0, "desc": "Allows Kyurem to fuse with Reshiram or Zekrom.", "emoji": "🧬", "category": "formitems", "purchasable": False},
+    "reveal-glass":  {"name": "Reveal Glass", "price": 0, "desc": "Turns Tornadus, Thundurus, Landorus or Enamorus between their Incarnate and Therian Formes. Use with `!form`.", "emoji": "🧬", "category": "formitems", "purchasable": False},
+    "dna-splicers":  {"name": "DNA Splicers", "price": 0, "desc": "Fuses Kyurem with Reshiram or Zekrom, and separates them again. Use with `!form`.", "emoji": "🧬", "category": "formitems", "purchasable": False},
     "rusted-sword":  {"name": "Rusted Sword", "price": 0, "desc": "Zacian takes its Crowned form while holding this.", "emoji": "⚔️", "category": "formitems", "purchasable": False},
     "rusted-shield":  {"name": "Rusted Shield", "price": 0, "desc": "Zamazenta takes its Crowned form while holding this.", "emoji": "🛡️", "category": "formitems", "purchasable": False},
     "red-orb":  {"name": "Red Orb", "price": 0, "desc": "Groudon undergoes Primal Reversion while holding this.", "emoji": "🔴", "category": "formitems", "purchasable": False},
     "blue-orb":  {"name": "Blue Orb", "price": 0, "desc": "Kyogre undergoes Primal Reversion while holding this.", "emoji": "🔵", "category": "formitems", "purchasable": False},
     "booster-energy":  {"name": "Booster Energy", "price": 0, "desc": "Runs a Paradox specimen's Protosynthesis or Quark Drive when the field will not. Single use.", "emoji": "🧪", "category": "formitems", "purchasable": False},
-    
+
+    # The three Gen 8 Orbs. HELD rather than used: each reshapes its holder on entry and
+    # lifts two of its elements by 20%, which is the Griseous Orb's machinery exactly -
+    # so they are rows in SPECIES_FORM_ITEMS and SPECIES_TYPE_BOOST_ITEMS and the battle
+    # engine already reads both. Nothing in `!form` touches them.
+    "adamant-crystal": {"name": "Adamant Crystal", "price": 0, "desc": "Dialga takes its Origin Forme while holding this, and its Dragon and Steel moves do 20% more damage.", "emoji": "💠", "category": "formitems", "purchasable": False},
+    "lustrous-globe":  {"name": "Lustrous Globe", "price": 0, "desc": "Palkia takes its Origin Forme while holding this, and its Dragon and Water moves do 20% more damage.", "emoji": "🔮", "category": "formitems", "purchasable": False},
+    "griseous-core":   {"name": "Griseous Core", "price": 0, "desc": "Giratina takes its Origin Forme while holding this, and its Dragon and Ghost moves do 20% more damage.", "emoji": "🟣", "category": "formitems", "purchasable": False},
+
+    # The ten used from the bag with `!form`. Unpurchaseable for the same reason the
+    # seven above are: a legendary's form item is not shop stock.
+    "meteorite":       {"name": "Meteorite", "price": 0, "desc": "Shifts Deoxys between its Normal, Attack, Defense and Speed Formes. Use with `!form`.", "emoji": "☄️", "category": "formitems", "purchasable": False},
+    "rotom-catalog":   {"name": "Rotom Catalog", "price": 0, "desc": "Lets Rotom possess a Heat, Wash, Frost, Fan or Mow appliance. Use with `!form`.", "emoji": "📖", "category": "formitems", "purchasable": False},
+    "gracidea":        {"name": "Gracidea", "price": 0, "desc": "Turns Shaymin between its Land and Sky Formes. Use with `!form`.", "emoji": "💐", "category": "formitems", "purchasable": False},
+    "prison-bottle":   {"name": "Prison Bottle", "price": 0, "desc": "Releases Hoopa's true power - and seals it away again. Use with `!form`.", "emoji": "🏺", "category": "formitems", "purchasable": False},
+    "zygarde-cube":    {"name": "Zygarde Cube", "price": 0, "desc": "Reassembles Zygarde between 10% and 50%, switches Aura Break and Power Construct, and teaches its three signature moves. Use with `!form`.", "emoji": "🟩", "category": "formitems", "purchasable": False},
+    "n-lunarizer":     {"name": "N-Lunarizer", "price": 0, "desc": "Fuses Necrozma with Lunala into Dawn Wings, and separates them again. Use with `!form`.", "emoji": "🌙", "category": "formitems", "purchasable": False},
+    "n-solarizer":     {"name": "N-Solarizer", "price": 0, "desc": "Fuses Necrozma with Solgaleo into Dusk Mane, and separates them again. Use with `!form`.", "emoji": "☀️", "category": "formitems", "purchasable": False},
+    "reins-of-unity":  {"name": "Reins of Unity", "price": 0, "desc": "Lets Calyrex ride Glastrier or Spectrier, and dismount again. Dismounting costs it the moves only its steed could learn. Use with `!form`.", "emoji": "🎠", "category": "formitems", "purchasable": False},
+
     # Evolution Items
     "water-stone":    {"name": "Water Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is clear, blue and glistens.", "emoji": "💎", "category": "evoitems"},
     "leaf-stone":    {"name": "Leaf Stone", "price": 500, "desc": "A stone that makes certain pokemon evolve. It is green and mossy.", "emoji": "💎", "category": "evoitems"},
@@ -1515,6 +1535,11 @@ SPECIES_TYPE_BOOST_ITEMS = {
     'adamant-orb':  {'species': 'dialga',   'types': {'dragon', 'steel'}},
     'lustrous-orb': {'species': 'palkia',   'types': {'dragon', 'water'}},
     'griseous-orb': {'species': 'giratina', 'types': {'dragon', 'ghost'}},
+    # The Generation 8 replacements for the three above. Same shape, same species, same
+    # two elements - Legends: Arceus renamed the item and nothing else about it.
+    'adamant-crystal': {'species': 'dialga',   'types': {'dragon', 'steel'}},
+    'lustrous-globe':  {'species': 'palkia',   'types': {'dragon', 'water'}},
+    'griseous-core':   {'species': 'giratina', 'types': {'dragon', 'ghost'}},
     # ITEM PHASE 10: Ogerpon's three masks. `types: None` means EVERY element, which the
     # Orbs never needed - a mask lifts all of Ogerpon's moves rather than two of them.
     'cornerstone-mask': {'species': 'ogerpon', 'types': None},
@@ -1529,6 +1554,15 @@ SPECIES_ORB_MULTIPLIER = 1.2
 SPECIES_FORM_ITEMS = {
     'griseous-orb':  {'species': 'giratina', 'form': 'giratina-origin',
                       'flavour': 'was drawn into its Origin Forme'},
+    # Dialga and Palkia had no entry-form item at all until now - only Giratina did,
+    # because only Giratina's Orb reshapes its holder in Generation 4. The Adamant
+    # Crystal and Lustrous Globe give the other two the same thing.
+    'adamant-crystal': {'species': 'dialga', 'form': 'dialga-origin',
+                        'flavour': 'unfolded into its Origin Forme'},
+    'lustrous-globe':  {'species': 'palkia', 'form': 'palkia-origin',
+                        'flavour': 'unfolded into its Origin Forme'},
+    'griseous-core':   {'species': 'giratina', 'form': 'giratina-origin',
+                        'flavour': 'was drawn into its Origin Forme'},
     'red-nectar':    {'species': 'oricorio', 'form': 'oricorio-baile',
                       'flavour': 'drank deep and danced the Baile style'},
     'yellow-nectar': {'species': 'oricorio', 'form': 'oricorio-pom-pom',
@@ -1601,6 +1635,11 @@ PHASE6_EMOJI = {
 }
 
 
+# The three Generation 8 Orbs. They belong to the same two engine tables as their
+# Generation 4 twins, but not to the Phase 6 shop shelf - see build_phase6_stock.
+GEN8_ORB_ITEMS = frozenset({'adamant-crystal', 'lustrous-globe', 'griseous-core'})
+
+
 def build_phase6_stock():
     """
     The Phase 6 shelf, checked against the tables the engine reads.
@@ -1612,9 +1651,15 @@ def build_phase6_stock():
     # shape - so they are subtracted here rather than being given a second home. This
     # assertion is about Phase 6's OWN shelf, and folding them in would have made it
     # quietly stop meaning that.
+    #
+    # The three Generation 8 Orbs are subtracted for the same reason and a second one:
+    # they are not shop stock at all. Their Generation 4 twins sit on this 450-token
+    # shelf, but an Adamant Crystal is a key item and is listed unpurchaseable in
+    # EQUIPMENT_CATALOG. This assertion fired the moment they were added to the engine
+    # tables, which is exactly what it is for - it just wanted telling where they went.
     implemented = ((set(SPECIES_STAT_ITEMS) | set(SPECIES_CRIT_ITEMS)
                     | set(SPECIES_TYPE_BOOST_ITEMS) | set(SPECIES_FORM_ITEMS))
-                   - set(PHASE10_DESCRIPTIONS))
+                   - set(PHASE10_DESCRIPTIONS) - GEN8_ORB_ITEMS)
     missing = implemented - set(PHASE6_DESCRIPTIONS)
     assert not missing, f"Phase 6 items with no shop entry: {sorted(missing)}"
     extra = set(PHASE6_DESCRIPTIONS) - implemented
@@ -2616,6 +2661,118 @@ def build_phase8_stock():
 
 
 EQUIPMENT_CATALOG.update(build_phase8_stock())
+
+
+# ==========================================
+# 🏺 THE FORM SHELF
+# ==========================================
+# Every form item was priced 0 and unpurchaseable, which meant the only way to hold one
+# was for an admin to hand it over. The eighteen Silvally Memories were the exception at
+# 600 apiece, and they are the reason this table starts where it does: a Memory changes
+# what Silvally IS, and nobody thought that needed locking away.
+#
+# Priced in one table rather than on seventeen rows because the rows are scattered - some
+# are hand-written in EQUIPMENT_CATALOG, some arrive from a build_ function - and because
+# a tier is a decision worth being able to read in one place.
+#
+# The ceiling before this was the Ability Patch at 12,000, with the Z-Crystals at 9,000.
+#
+#   RESHAPERS take a legendary somewhere it cannot otherwise go and KEEP it there -
+#   Origin Dialga, Primal Groudon, Crowned Zacian, a fused Kyurem. Premium tier, above
+#   anything else in the shop.
+#
+#   SWITCHERS move a specimen between forms it already has. Deoxys is still Deoxys. Dear,
+#   but not the dearest thing on the shelf.
+#
+#   The Booster Energy is neither: it is a single-use battle consumable that happens to
+#   live in this category, and pricing it like a Rusted Sword would be absurd.
+FORM_RESHAPER_PRICE = 15000
+FORM_SWITCHER_PRICE = 10000
+
+FORM_ITEM_PRICES = {
+    # Reshapers - fusions, Origin Formes, Primal Reversion, Crowned formes.
+    'dna-splicers': FORM_RESHAPER_PRICE,
+    'n-lunarizer': FORM_RESHAPER_PRICE,
+    'n-solarizer': FORM_RESHAPER_PRICE,
+    'reins-of-unity': FORM_RESHAPER_PRICE,
+    'adamant-crystal': FORM_RESHAPER_PRICE,
+    'lustrous-globe': FORM_RESHAPER_PRICE,
+    'griseous-core': FORM_RESHAPER_PRICE,
+    'red-orb': FORM_RESHAPER_PRICE,
+    'blue-orb': FORM_RESHAPER_PRICE,
+    'rusted-sword': FORM_RESHAPER_PRICE,
+    'rusted-shield': FORM_RESHAPER_PRICE,
+    # Switchers - the same specimen, wearing a different shape.
+    'meteorite': FORM_SWITCHER_PRICE,
+    'gracidea': FORM_SWITCHER_PRICE,
+    'prison-bottle': FORM_SWITCHER_PRICE,
+    'reveal-glass': FORM_SWITCHER_PRICE,
+    'rotom-catalog': FORM_SWITCHER_PRICE,
+    'zygarde-cube': FORM_SWITCHER_PRICE,
+    # A single-use consumable that lives in this category by accident of what it does.
+    'booster-energy': 800,
+}
+
+
+def stock_the_form_shelf():
+    """
+    Put every form item on sale, and refuse to let a new one arrive without a price.
+
+    The assertion is the point. A form item added later with no row here would otherwise
+    default to price 0 and `purchasable` unset - which reads as "free" to `!shop` and as
+    a bug to everyone else.
+    """
+    listed = {key for key, entry in EQUIPMENT_CATALOG.items()
+              if entry.get('category') == 'formitems'}
+    unpriced = {key for key in listed
+                if key not in FORM_ITEM_PRICES and not EQUIPMENT_CATALOG[key].get('price')}
+    assert not unpriced, f"form items with no price: {sorted(unpriced)}"
+    unknown = set(FORM_ITEM_PRICES) - listed
+    assert not unknown, f"priced items that are not form items: {sorted(unknown)}"
+
+    for key, price in FORM_ITEM_PRICES.items():
+        EQUIPMENT_CATALOG[key]['price'] = price
+        EQUIPMENT_CATALOG[key]['purchasable'] = True
+    return len(FORM_ITEM_PRICES)
+
+
+stock_the_form_shelf()
+
+
+# ==========================================
+# 🔎 WHAT THE PLAYER MEANT BY AN ITEM NAME
+# ==========================================
+# `!use` normalised what a player typed by deleting spaces AND hyphens - "DNA Splicers"
+# became `dnasplicers` - and then looked that up in user_inventory, where item names are
+# stored HYPHENATED. 72 of the 82 item names in the live inventory table carry a hyphen,
+# so `!use` had never once worked for any of them. The only item it could find was the
+# Purifier, which is one word, and the Purifier is the only thing its dispatcher handled.
+#
+# The rule is the one utils/species.py already uses for species: compare on letters and
+# digits only, so "DNA Splicers", "dna splicers", "dna-splicers" and "dnasplicers" all
+# agree - but keep the CANONICAL hyphenated key as the answer, because that is what the
+# database is keyed on.
+#
+# Built on first use rather than at import: Phases 9 and 10 add to EQUIPMENT_CATALOG
+# further down this file, and an index built here would have missed them.
+_ITEM_KEYS_BY_NORMAL = {}
+
+
+def normalise_item(text):
+    """Letters and digits only - the form two item names are compared in."""
+    return _re.sub(r'[^a-z0-9]', '', str(text or '').lower())
+
+
+def resolve_item_key(text):
+    """The catalogue key for what a player typed, or None."""
+    if not _ITEM_KEYS_BY_NORMAL:
+        for key, entry in EQUIPMENT_CATALOG.items():
+            _ITEM_KEYS_BY_NORMAL.setdefault(normalise_item(key), key)
+        # Display names too, so "Great Ball" reaches `greatball`. Added second and with
+        # setdefault so a display name can never shadow a real key.
+        for key, entry in EQUIPMENT_CATALOG.items():
+            _ITEM_KEYS_BY_NORMAL.setdefault(normalise_item(entry.get('name')), key)
+    return _ITEM_KEYS_BY_NORMAL.get(normalise_item(text))
 
 
 # ==========================================
