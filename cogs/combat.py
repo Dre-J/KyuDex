@@ -40,6 +40,7 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              TM_CATALOG, type_badges, type_icon,
                              PVP_LEVEL_CAPS, parse_level_cap,
                              Z_MOVE_NAMES, Z_CRYSTAL_TYPES, SIGNATURE_Z_CRYSTALS,
+                             Z_MOVE_MARKER, LAST_MOVE_WAS_Z,
                              signature_z_for, z_move_power,
                              mega_stone_binds_to, is_mega_stone,
                              MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY,
@@ -2017,7 +2018,16 @@ def apply_z_mutation(move, upgrade):
     negative control that made Extreme Evoboost ALSO deal Last Resort's damage escaped
     every suite. The three shapes a Z-Move comes in are decided here, once.
     """
-    if not move or not upgrade:
+    if not move:
+        return move
+
+    # Marked BEFORE the upgrade is inspected, and unconditionally: this function is only
+    # ever reached from the two engines' Z branches, so being here at all is what makes
+    # this a Z-Move. Marking inside the `upgrade` branches instead would have left a
+    # Z-Move with no upgrade row unmarked - and then sketchable, which is the bug.
+    move[Z_MOVE_MARKER] = True
+
+    if not upgrade:
         return move
 
     if upgrade.get('boost'):
@@ -6355,6 +6365,12 @@ class BattleDashboard(discord.ui.View):
                         # Encore copies whatever actually resolved here; Conversion 2
                         # reads the element off it.
                         attacker['last_move_used'] = raw_move_name
+                        # ...and Sketch needs to know whether that name was thrown as a
+                        # Z-Move, because the payload keeps the BASE move's name and the
+                        # name alone therefore cannot tell it. Written every turn rather
+                        # than only when true, or one Z-Move would mark the specimen
+                        # unsketchable for the rest of the battle.
+                        attacker[LAST_MOVE_WAS_Z] = bool(move_stats.get(Z_MOVE_MARKER))
                         # Last Resort counts what has RESOLVED, not what was
                         # picked - a move flinched away must not unlock it.
                         record_move_used(attacker, raw_move_name)
@@ -9634,6 +9650,9 @@ class Combat(commands.Cog):
                     # Encore copies whatever actually resolved here; Conversion 2
                     # reads the element off it.
                     attacker['last_move_used'] = raw_move_name
+                    # The PvP half of the Z-Move provenance Sketch reads - see the PvE
+                    # engine's copy of this line for why the name cannot carry it.
+                    attacker[LAST_MOVE_WAS_Z] = bool(move.get(Z_MOVE_MARKER))
                     # Last Resort counts what has RESOLVED, not what was
                     # picked - a move flinched away must not unlock it.
                     record_move_used(attacker, raw_move_name)
