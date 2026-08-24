@@ -37,6 +37,8 @@ spawn on a schedule - this is the place to add one.
 import datetime
 import difflib
 
+from utils.constants import BIOME_ORDER
+
 DEFAULT_TIMEZONE = 'UTC'
 
 # Where a resolved timezone came from, so the caller can say so.
@@ -378,6 +380,97 @@ async def set_card_style(db, user_id, style):
         return False
     await db.execute("UPDATE users SET card_style = ? WHERE user_id = ?",
                      (style, str(user_id)))
+    return True
+
+
+# ==========================================
+# WHICH SECTOR THE CARD IS DRAWN IN
+# ==========================================
+# The card has always painted itself in the DEEPEST visa the trainer holds, which meant
+# the background and the badge strip along the bottom were the same fact twice. Letting
+# the trainer choose among the sectors they have actually cleared makes the badges the
+# record and the background the expression, and costs no new gate: `unlocked_visas` is
+# already written by the Warden fights and already read by `!profile`.
+#
+# **THE STORED CHOICE IS NEVER TRUSTED.** `resolve_card_biome` re-checks it against the
+# visas held RIGHT NOW, on every single read, and that is not defensive habit - it closes
+# a real hole. `utils/accounts.py` resets `unlocked_visas` to 'canopy' on a wipe, and it
+# does not know this column exists. A trainer who chose Apex and then reset would
+# otherwise keep an Apex card forever, which turns a progression reward into something
+# you obtain by throwing your account away.
+#
+# An empty string means "follow the deepest visa" and is the default. It is a distinct
+# state from a stored 'canopy': the first keeps improving as sectors are cleared, the
+# second is somebody who looked at all five and picked the forest.
+CARD_BIOME_AUTO = ''
+
+
+def resolve_card_biome(stored, visas):
+    """
+    The biome key a card is drawn in, given a stored choice and the visas held now.
+
+    Pure, and THE ONLY DOOR - the image route, the embed route and `!settings biome`
+    all come through here, so there is no second opinion about which sector a trainer
+    is entitled to. Falls back to the deepest visa held, then to the first sector.
+    """
+    held = [b for b in BIOME_ORDER if b in {str(v).strip().lower() for v in visas or ()}]
+    choice = str(stored or '').strip().lower()
+    if choice and choice in held:
+        return choice
+    return held[-1] if held else BIOME_ORDER[0]
+
+
+def resolve_biome_word(text):
+    """`(biome_key, complaint)` from whatever they typed. Exactly one is ever set.
+
+    `auto` is a real answer, not a failure to parse: it is how somebody hands the choice
+    back to their progress after having made one.
+    """
+    word = str(text or '').strip().lower().lstrip('#')
+    if word in ('auto', 'automatic', 'default', 'reset', 'clear', 'none', 'deepest'):
+        return CARD_BIOME_AUTO, None
+    if word in BIOME_ORDER:
+        return word, None
+    # A near miss is far more likely than a wrong idea - these are five short words that
+    # people will type from memory.
+    close = difflib.get_close_matches(word, BIOME_ORDER, n=1, cutoff=0.6)
+    hint = f" Did you mean `{close[0]}`?" if close else ""
+    return None, (f"🗺️ `{text}` is not a sector.{hint} The five are "
+                  f"{', '.join(f'`{b}`' for b in BIOME_ORDER)} - or `auto` to follow "
+                  f"whichever you have cleared deepest.")
+
+
+async def get_card_biome(db, user_id):
+    """The RAW stored choice, which may name a sector no longer held. Never raises.
+
+    Deliberately not validated here: validation needs the visas, this only needs the
+    column, and a getter that quietly returned something different from what is stored
+    would make `!settings biome` unable to show a choice that has lapsed.
+    """
+    try:
+        if not await _has_column(db, 'users', 'card_biome'):
+            return CARD_BIOME_AUTO
+        async with db.execute("SELECT card_biome FROM users WHERE user_id = ?",
+                              (str(user_id),)) as cursor:
+            row = await cursor.fetchone()
+    except Exception:
+        return CARD_BIOME_AUTO
+    stored = (row[0] if row else None) or ''
+    return stored if stored in BIOME_ORDER else CARD_BIOME_AUTO
+
+
+async def set_card_biome(db, user_id, biome):
+    """Store it, or clear it with `CARD_BIOME_AUTO`. Does NOT commit.
+
+    Returns False if the database cannot hold it. NOT a permission check - the caller
+    checks the visa, because the caller is the one that can explain the refusal.
+    """
+    if biome and biome not in BIOME_ORDER:
+        return False
+    if not await _ensure_column(db, 'users', 'card_biome', 'TEXT'):
+        return False
+    await db.execute("UPDATE users SET card_biome = ? WHERE user_id = ?",
+                     (biome or None, str(user_id)))
     return True
 
 

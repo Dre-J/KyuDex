@@ -30,7 +30,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +70,17 @@ except Exception:                                           # pragma: no cover
     def energy_yield(energy):
         return 1.0 if (energy or 0) >= 0 else max(0.25, 0.5 ** (-energy / 50.0))
 
+# The five sectors, in unlock order, and the one place a key becomes a readable name.
+# Same rule as the energy numbers directly above: the card is a VIEW of the game's data
+# and must not keep its own edition of it.
+try:
+    from utils.constants import BIOME_ORDER, biome_label
+except Exception:                                           # pragma: no cover
+    BIOME_ORDER = ('canopy', 'trench', 'core', 'sprawl', 'apex')
+
+    def biome_label(key, emoji=True):
+        return str(key or '').title()
+
 INK = (236, 240, 238, 255)
 INK_DIM = (236, 240, 238, 196)
 # The banked stretch of the energy bar and the deficit, which are the same colour on
@@ -106,14 +117,16 @@ BIOME_ACCENT = {
 }
 DEFAULT_BIOME = "canopy"
 
-# The pretty name for each, matching the wording `!profile` already uses.
-BIOME_LABEL = {
-    "canopy": "Canopy",
-    "trench": "Trench",
-    "core": "Core",
-    "sprawl": "Sprawl",
-    "apex": "Apex",
-}
+# The pretty name for each, DERIVED from the game's own table rather than written out
+# again. This used to be a hand-kept dict, which is how the invented biome names above
+# survived as long as they did: a private copy cannot disagree with the game loudly
+# enough to be noticed. Ordered by BIOME_ORDER, so `list(BIOME_LABEL)[-1]` is the
+# deepest sector by construction rather than by the order somebody happened to type.
+#
+# No emoji here. The card draws its own geometry and paints in the accent colours; an
+# emoji would render in whatever font Pillow found, at a size nothing else on the card
+# uses. The embed rendering, which has a font, calls `biome_label()` directly.
+BIOME_LABEL = {key: biome_label(key, emoji=False) for key in BIOME_ORDER}
 
 FONT_CANDIDATES = {
     "bold": [
@@ -184,13 +197,27 @@ class ProfileData:
     # SERVER's habitat, not of the trainer - every member of a guild has the same one -
     # so a personal card was the wrong place to print it. It belongs in the server embed.
 
+    # THE DISCORD AVATAR, already downloaded by the caller. Passed as bytes rather than
+    # as a URL because this renderer is synchronous and runs in a thread pool - fetching
+    # here would mean either blocking that thread on the network or teaching a drawing
+    # module about aiohttp, and a card that hangs because a CDN is slow is worse than a
+    # card without a picture on it. `avatar_key` is Discord's own asset hash, which
+    # changes exactly when the picture does; it is what the render cache is keyed on, so
+    # the bytes themselves never have to be hashed.
+    avatar: bytes | None = None
+    avatar_key: str = ""
+
     trainer_sprite: str | None = None       # filename in sprites/trainers/
     background: str = DEFAULT_BIOME         # filename stem in backgrounds/
     party: list[str] = field(default_factory=list)   # sprite filenames
     badges: list[str] = field(default_factory=list)  # badge filenames
 
     def cache_key(self) -> str:
-        blob = json.dumps(self.__dict__, sort_keys=True, default=str)
+        # The avatar BYTES are swapped out for their key. Serialising them through
+        # `default=str` would hash a 30KB repr on every lookup, and two trainers whose
+        # avatars differed would still be distinguished by the key alone.
+        fields = dict(self.__dict__, avatar=bool(self.avatar))
+        blob = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha1(blob.encode()).hexdigest()
 
 
@@ -544,21 +571,44 @@ def _trim(img: Image.Image) -> Image.Image:
 
 def _avatar_tile(art: Image.Image | None, accent: tuple[int, int, int],
                  w: int, h: int, fill: float = 0.58,
-                 pixel_art: bool = False) -> Image.Image:
+                 pixel_art: bool = False, circular: bool = False) -> Image.Image:
     """
     The avatar: one piece of art centred on a ground tinted with the biome accent.
 
-    Used for BOTH the trainer sprite and the biome-badge fallback, because they want
-    exactly the same treatment and writing it twice is how the two drift apart.
+    Used for the Discord avatar, the trainer sprite and the biome-badge fallback,
+    because they want the same ground and the same framing, and writing it three times
+    is how the three drift apart.
 
     `pixel_art` switches the upscale to nearest-neighbour. The trainer sprites are 80px
     pixel art going into a 200px box, and LANCZOS turns crisp pixels into mush at 2.5x -
     smooth interpolation is right for a photograph and wrong for a sprite.
+
+    `circular` COVER-FITS the art and masks it to a disc, which is the treatment a
+    Discord avatar needs and the wrong one for everything else here. An avatar is a
+    photograph filling its frame, already cropped by whoever uploaded it and already
+    shown as a circle everywhere else in Discord; contain-fitting one would letterbox
+    somebody's face into the middle of a square for no reason.
     """
     tile = Image.new("RGBA", (w, h), tuple(int(c * 0.30) for c in accent) + (255,))
     ImageDraw.Draw(tile).ellipse((w * .06, h * .06, w * .94, h * .94),
                                  fill=accent + (46,))
     if art is None:
+        return tile
+
+    if circular:
+        d = max(2, int(min(w, h) * fill))
+        disc = _fit_cover(art.convert("RGBA"), d, d)
+        mask = Image.new("L", (d, d), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, d - 1, d - 1), fill=255)
+        # MULTIPLIED into the existing alpha rather than replacing it. `putalpha(mask)`
+        # would make a transparent avatar opaque, filling the hole with whatever colour
+        # happened to be underneath the transparency - usually black.
+        disc.putalpha(ImageChops.multiply(disc.getchannel("A"), mask))
+        ox, oy = (w - d) // 2, (h - d) // 2
+        tile.alpha_composite(disc, (ox, oy))
+        # A ring, so the disc has an edge instead of dissolving into the ground.
+        ImageDraw.Draw(tile).ellipse((ox - 2, oy - 2, ox + d + 1, oy + d + 1),
+                                     outline=accent + (200,), width=3)
         return tile
 
     # Trimmed FIRST. These sprites are a figure floating in a lot of empty 80x80, so
@@ -571,6 +621,26 @@ def _avatar_tile(art: Image.Image | None, accent: tuple[int, int, int],
     art = art.resize((nw, nh), Image.NEAREST if pixel_art else LANCZOS)
     tile.alpha_composite(art, ((w - nw) // 2, (h - nh) // 2))
     return tile
+
+
+def _decode_avatar(blob: bytes | None) -> Image.Image | None:
+    """A downloaded Discord avatar as an image, or None if it cannot be read.
+
+    NEVER RAISES. An avatar is decorative, it arrives from outside the bot, and a
+    truncated download or a format this Pillow was not built with must cost the trainer
+    a picture rather than their whole profile.
+    """
+    if not blob:
+        return None
+    try:
+        img = Image.open(io.BytesIO(blob))
+        # An animated avatar is a GIF or an animated WebP; frame zero is the still one
+        # Discord shows to anyone without Nitro, and is the right one for a flat card.
+        img.seek(0)
+        return img.convert("RGBA")
+    except Exception as e:                                  # pragma: no cover
+        log.warning("Could not decode avatar (%d bytes): %s", len(blob or b''), e)
+        return None
 
 
 def _crest(biome: str, accent: tuple[int, int, int], w: int, h: int,
@@ -635,11 +705,19 @@ def render_profile_card(data: ProfileData) -> bytes:
 
     # ---- trainer avatar ---------------------------------------------------
     ax, ay, aw, ah = AVATAR_BOX
-    sprite = ASSETS.trainers.get(data.trainer_sprite or "")
-    if sprite is not None:
+    portrait = _decode_avatar(data.avatar)
+    trainer_art = ASSETS.trainers.get(data.trainer_sprite or "")
+    if portrait is not None:
+        # THE TRAINER'S OWN DISCORD PICTURE, which is the one thing on this card that
+        # says whose it is at a glance - a name has to be read, a face does not. It goes
+        # ahead of the sprite because a chosen picture beats an assigned one, and the
+        # sprite stays as the fallback rather than being deleted: an avatar is a network
+        # fetch, and this corner still has to hold something when that fetch fails.
+        sprite = _avatar_tile(portrait, accent, aw, ah, fill=0.86, circular=True)
+    elif trainer_art is not None:
         # CONTAIN, not cover. Cover-cropping a standing figure into a square takes the
         # head off - which is the one part of a trainer sprite nobody will accept losing.
-        sprite = _avatar_tile(sprite, accent, aw, ah, fill=0.80, pixel_art=True)
+        sprite = _avatar_tile(trainer_art, accent, aw, ah, fill=0.80, pixel_art=True)
     else:
         # NO TRAINER ART EXISTS YET, and a hashed colour square is a placeholder that
         # looks like a bug rather than like a gap. The biome's own badge on a tinted
@@ -838,14 +916,18 @@ def build_profile_card(gathered: dict) -> ProfileData:
     exactly the ones that would drift: the level, the XP-bar numerator and denominator,
     and which biome the card is dressed in.
 
-    The biome is the DEEPEST visa held, so the card wears the sector a trainer has
-    actually fought their way into rather than the one they started in.
+    The biome is the trainer's CHOICE among the sectors they hold, and the deepest one
+    they hold when they have not chosen - so the card wears the sector a trainer fought
+    their way into rather than the one they started in, and wears their favourite of
+    those if they have said which. The choice is re-checked against the visas here, on
+    every render, by the same function `!settings biome` validates with.
     """
     from utils.levels import progress
+    from utils.prefs import resolve_card_biome
 
     visas = [v for v in gathered.get('visas') or [] if v in BIOME_ACCENT]
-    ordered = [b for b in BIOME_ACCENT if b in visas]
-    biome = ordered[-1] if ordered else DEFAULT_BIOME
+    ordered = [b for b in BIOME_ORDER if b in visas]
+    biome = resolve_card_biome(gathered.get('card_biome'), ordered)
 
     level, into, span = progress(gathered.get('lifetime', 0))
 
@@ -873,6 +955,8 @@ def build_profile_card(gathered: dict) -> ProfileData:
         # and caches each one through utils.sprites.
         party=list(gathered.get('party') or []),
         trainer_sprite=gathered.get('trainer_sprite'),
+        avatar=gathered.get('avatar'),
+        avatar_key=gathered.get('avatar_key') or '',
     )
 
 
