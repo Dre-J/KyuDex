@@ -45,6 +45,8 @@ from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES)
 from utils.filters import filter_help, resolve_query
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
+from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
+                                resolve_language, species_for_name)
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
 from utils.directives import credit_evolution
@@ -2183,7 +2185,17 @@ class Ecology(commands.Cog):
         """Uses field sensors to gather data. (Optionally pass a language code like 'fr' or 'ja')"""
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
-        lang = lang_tag.upper()
+        # This docstring has promised `fr` and `ja` since it was written and neither
+        # worked: the tags are three letters and `lang_tag.upper()` compared exactly, so
+        # only FRE and JPN ever matched. `resolve_language` accepts the tag, the ISO
+        # code and the language's English name, and returns None for anything else -
+        # which is what lets the refusal below say what IS accepted.
+        lang = resolve_language(lang_tag)
+        if lang is None:
+            offered = ", ".join(f"`{tag.lower()}`" for tag in LANGUAGE_ORDER)
+            return await ctx.send(
+                f"⚠️ **Sensor Error:** `{lang_tag}` is not a language this array reads. "
+                f"Try {offered} — or leave it off for English.")
 
         # 1. Read the sensors in THIS channel only.
         #
@@ -2219,12 +2231,17 @@ class Ecology(commands.Cog):
                 
                 # 2. LOCALIZATION OVERRIDE
                 if lang != "ENG":
-                    async with db.execute("SELECT foreign_name FROM species_translations WHERE english_name = ? AND language_tag = ?", (english_name, lang)) as cursor:
-                        trans_data = await cursor.fetchone()
-                    if trans_data:
-                        display_name = trans_data[0]
+                    translated = await name_in_language(db, english_name, lang)
+                    if translated:
+                        display_name = translated
                     else:
-                        await ctx.send(f"⚠️ *Sensor Warning: No data found for language code '{lang}'. Defaulting to ENG.*")
+                        # A KNOWN language with no row for THIS species, which is a
+                        # different thing from an unreadable language code - that was
+                        # refused before we got here. Says which species is missing,
+                        # because the answer is a migration rather than a typo.
+                        await ctx.send(
+                            f"⚠️ *Sensor Warning: no {language_label(lang)} name on "
+                            f"file for this specimen. Defaulting to English.*")
                 
                 # 3. Fetch Elemental Types
                 async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
@@ -3558,9 +3575,13 @@ class Ecology(commands.Cog):
                     if typed_name == expected_english or expected_english.startswith(f"{typed_name}-"):
                         return True, "ENG"
                         
-                    async with db.execute("SELECT english_name, language_tag FROM species_translations WHERE foreign_name = ?", (typed_name,)) as cursor:
-                        translations = await cursor.fetchall()
-                        
+                    # Was a query written out here. It is `species_for_name` now, which
+                    # is the same lookup plus the accent-folded fallback - so a player
+                    # typing `flabebe` catches Flabébé, and 180 other names stop needing
+                    # a compose key. Sharing the lookup is also what keeps `!catch` and
+                    # `!hint` agreeing about which spellings are a language.
+                    translations = await species_for_name(db, typed_name)
+
                     for eng_name, lang_tag in translations:
                         if eng_name == expected_english or expected_english.startswith(f"{eng_name}-"):
                             return True, lang_tag 
