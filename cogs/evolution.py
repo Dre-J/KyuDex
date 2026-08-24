@@ -1,10 +1,12 @@
 import discord
 from discord.ext import commands
 from utils.prefs import trainer_skies
-from utils.db_manager import stone_evolution
+from utils.db_manager import stone_evolution, ritual_routes
 from utils.regions import current_region
 from utils.constants import (DB_FILE, current_skies, RITUAL_TRIGGERS,
-                             RITUAL_MIN_LEVEL, RITUAL_KEYWORD)
+                             RITUAL_MIN_LEVEL, RITUAL_KEYWORD,
+                             choose_ritual, describe_ritual_choices,
+                             requested_ritual, ritual_word)
 from utils import checks
 from utils.directives import credit_evolution
 import aiosqlite
@@ -148,18 +150,14 @@ class Evolution(commands.Cog):
                 #
                 # The level is an admitted stand-in and is named in constants rather than
                 # buried here, so it reads as the substitution it is.
+                # `!evolve <specimen> ritual` may carry a word saying WHICH rite, which is
+                # what Kubfu needs - the Tower of Darkness and the Tower of Waters make
+                # two different Urshifu, and this used to take row zero of an unordered
+                # query, so only Single Strike was ever reachable.
                 ritual = None
-                if not evo_data and formatted_item == RITUAL_KEYWORD:
-                    placeholders = ','.join('?' * len(RITUAL_TRIGGERS))
-                    async with db.execute(f"""
-                        SELECT er.evolved_species_id, s.name, s.standard_abilities,
-                               s.hidden_ability, er.trigger_name
-                        FROM evolution_rules er
-                        JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
-                        WHERE er.base_species_id = ?
-                        AND er.trigger_name IN ({placeholders})
-                    """, (current_pokedex_id, *sorted(RITUAL_TRIGGERS))) as cursor:
-                        ritual_rules = await cursor.fetchall()
+                asked_for_ritual = requested_ritual(formatted_item)
+                if not evo_data and asked_for_ritual:
+                    ritual_rules = await ritual_routes(db, current_pokedex_id)
 
                     if ritual_rules:
                         async with db.execute(
@@ -171,11 +169,26 @@ class Evolution(commands.Cog):
                                 f"🕯️ **{current_name.capitalize()}** is not seasoned "
                                 f"enough for that. The rite asks for level "
                                 f"**{RITUAL_MIN_LEVEL}**; it is level **{lvl[0] if lvl else 0}**.")
-                        ritual = ritual_rules[0]
+
+                        ritual, complaint = choose_ritual(ritual_rules,
+                                                          ritual_word(formatted_item))
+                        if ritual is None:
+                            offered = "\n".join(
+                                f"• {line}" for line in
+                                describe_ritual_choices(ritual_rules))
+                            preamble = (
+                                f"🕯️ There is no rite called `{complaint}` for a "
+                                f"**{current_name.capitalize()}**."
+                                if complaint else
+                                f"🕯️ **{current_name.capitalize()}** has more than one "
+                                f"rite, and they do not lead to the same place.")
+                            return await ctx.send(
+                                f"{preamble}\n{offered}\n"
+                                f"Say `!evolve {target} ritual <word>`.")
                         evo_data = ritual[:4]
 
                 if not evo_data:
-                    if formatted_item == RITUAL_KEYWORD:
+                    if asked_for_ritual:
                         return await ctx.send(
                             f"🕯️ There is no rite for a **{current_name.capitalize()}**. "
                             f"`!evolve <specimen> ritual` is only for the few whose real "

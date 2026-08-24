@@ -3354,6 +3354,88 @@ RITUAL_MIN_LEVEL = 40
 RITUAL_KEYWORD = 'ritual'
 
 
+def requested_ritual(text):
+    """Whether what the trainer typed is a rite - `ritual`, or `ritual <word>`."""
+    key = str(text or '').strip().lower().replace(' ', '-')
+    return key == RITUAL_KEYWORD or key.startswith(f"{RITUAL_KEYWORD}-")
+
+
+def ritual_word(text):
+    """The word after `ritual`, or None. `ritual waters` -> `waters`."""
+    key = str(text or '').strip().lower().replace(' ', '-')
+    if key.startswith(f"{RITUAL_KEYWORD}-"):
+        return key[len(RITUAL_KEYWORD) + 1:] or None
+    return None
+
+
+def ritual_choices(routes):
+    """
+    The distinct species a set of ritual routes can produce, in the order given.
+
+    Most species with a ritual route have exactly one destination even when they have
+    two rules - Hisuian Qwilfish reaches Overqwil by both Strong Style and Use Move, so
+    which rule answers makes no difference. Kubfu is the one where it does.
+    """
+    seen = []
+    for route in routes:
+        if route[1] not in seen:
+            seen.append(route[1])
+    return seen
+
+
+def choose_ritual(routes, word=None):
+    """
+    Which ritual route the trainer meant. Returns (route, complaint).
+
+    `!evolve kubfu ritual` used to take `ritual_rules[0]` off an unordered query, so
+    Kubfu could only ever become Single Strike Urshifu - the Tower of Waters rule sat
+    behind the Tower of Darkness one and was never reachable. There was no way to ask
+    for the other, either.
+
+    So: one destination, no word needed. More than one, and the trainer has to say which,
+    because guessing at a PERMANENT change is worse than asking.
+
+    The word is matched forgivingly against both the trigger and the destination - for
+    Kubfu, `waters`, `water`, `rapid` and `urshifu-rapid-strike` all mean the same rite.
+    """
+    routes = list(routes or ())
+    if not routes:
+        return None, None
+
+    destinations = ritual_choices(routes)
+    if len(destinations) == 1 and not word:
+        return routes[0], None
+
+    wanted = str(word or '').strip().lower().replace(' ', '-')
+    if wanted:
+        loose = wanted.replace('-', ' ')
+        for route in routes:
+            trigger = str(route[4] or '').lower()
+            destination = str(route[1] or '').lower()
+            haystack = f"{trigger} {destination}".replace('-', ' ')
+            # Three ways to name a rite, because trainers use all three: the whole
+            # trigger or destination, a MULTI-word fragment of either ("rapid strike"),
+            # or a single word that starts one ("rapid", "dark").
+            if (wanted in (trigger, destination)
+                    or (' ' in loose and loose in haystack)
+                    or any(part.startswith(loose) for part in haystack.split())):
+                return route, None
+        return None, wanted
+
+    return None, ''
+
+
+def describe_ritual_choices(routes):
+    """The words a trainer may add to `!evolve <specimen> ritual`, as `a`/`b` pairs."""
+    lines = []
+    for route in routes:
+        trigger = str(route[4] or '').replace('-', ' ').title()
+        tail = str(route[4] or '').rpartition('-')[2] or str(route[4] or '')
+        lines.append(f"`{tail}` — the {trigger}, which makes "
+                     f"**{str(route[1] or '').replace('-', ' ').title()}**")
+    return lines
+
+
 # ==========================================
 # ⏳ WALKING AWAY FROM A BATTLE
 # ==========================================
