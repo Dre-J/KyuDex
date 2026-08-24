@@ -161,6 +161,10 @@ class ProfileData:
     """Everything the card needs. Build this from your DB, pass it in."""
     user_name: str
     trainer_title: str = "Novice Ranger"
+    # The home region's READABLE name - "Johto", not "johto" and not its emoji. The card
+    # is handed the finished string because `utils/regions.py` owns how a region is
+    # spelled, the same way `utils/prefs.py` owns what a timezone is.
+    region: str = ""
     trainer_level: int = 1
     xp_current: int = 0
     xp_needed: int = 100
@@ -747,8 +751,15 @@ def render_profile_card(data: ProfileData) -> bytes:
     while name and draw.textlength(name, font=f_name) > (chip_left - tx - 16):
         name = name[:-1]
     _text(draw, (tx, ay + 2), name or data.user_name[:8], f_name)
-    _text(draw, (tx, ay + 48), f"{data.trainer_title}  ·  Lv {data.trainer_level}",
-          f_sub, fill=accent + (255,))
+    # The home region joins the title line rather than taking a stat slot. It is an
+    # identity, not a figure, and the four slots below are all counts - a word sitting
+    # among them would read as a fifth score. NO EMOJI: this is drawn by Pillow in
+    # whatever face it found, and a region glyph would either render as a box or drag in
+    # a colour-emoji font the card does not otherwise need.
+    subtitle = f"{data.trainer_title}  ·  Lv {data.trainer_level}"
+    if data.region:
+        subtitle += f"  ·  {data.region}"
+    _text(draw, (tx, ay + 48), subtitle, f_sub, fill=accent + (255,))
 
     # ---- the two bars -----------------------------------------------------
     # Slimmer than the single bar was, and the captions sit tighter under them, because
@@ -924,6 +935,7 @@ def build_profile_card(gathered: dict) -> ProfileData:
     """
     from utils.levels import progress
     from utils.prefs import resolve_card_biome
+    from utils.regions import region_label
 
     visas = [v for v in gathered.get('visas') or [] if v in BIOME_ACCENT]
     ordered = [b for b in BIOME_ORDER if b in visas]
@@ -937,6 +949,8 @@ def build_profile_card(gathered: dict) -> ProfileData:
     return ProfileData(
         user_name=name,
         trainer_title=gathered.get('title') or '',
+        region=region_label(gathered.get('region'), emoji=False)
+               if gathered.get('region') else '',
         trainer_level=level,
         xp_current=into,
         xp_needed=span,

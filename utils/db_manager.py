@@ -237,3 +237,40 @@ async def evolution_family(db, species_name):
         seen.update(frontier)
 
     return sorted(seen), resolved
+
+
+# ==========================================
+# 🧱 SCHEMA HELPERS
+# ==========================================
+# THE ONE IMPLEMENTATION. `utils/prefs.py` and `utils/accounts.py` each grew their own
+# byte-identical copy of `_has_column`, and a third was about to appear in
+# `utils/regions.py` - which is how a rule written once per module starts drifting. Both
+# keep their private names as aliases so no call site had to move.
+
+
+async def has_column(db, table, column):
+    """Whether `table` already has `column`. Reads the schema, changes nothing."""
+    async with db.execute(f"PRAGMA table_info({table})") as cursor:
+        return any(row[1] == column for row in await cursor.fetchall())
+
+
+async def ensure_column(db, table, column, decl):
+    """
+    Add a column if it is missing. Does NOT commit. Returns whether it is there now.
+
+    Called only from WRITE paths. A read must never alter the schema - that is how a
+    module ends up writing to whatever database happened to be configured at import
+    time, which this codebase has been bitten by once already. A lazily-added column
+    therefore appears the first time somebody actually writes to it, and until then
+    every read falls through to its default.
+
+    The column NAME and DECLARATION are interpolated because SQLite cannot bind an
+    identifier; both are literals from the calling module and neither is player input.
+    """
+    if await has_column(db, table, column):
+        return True
+    try:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        return True
+    except Exception:
+        return False
