@@ -10,7 +10,6 @@ import math
 from utils.formulas import record_battle_conditions, advance_field_tenure, apply_max_sanitisation, apply_item_sustenance, apply_bag_item, bag_item_is_useless, calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, shrugs_off_weather_chip, ignores_hazards, species_form_for, true_species_name, roll_gender, declared_gender, expire_action_markers
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.db_manager import check_evolution_trigger, check_condition_evolution
-from utils.embeds import rebind_image
 from utils.machines import owns_tm, owned_tms, price_of
 from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
                              BATTLE_IDLE_TIMEOUT,
@@ -552,6 +551,108 @@ TERRAIN_MESSAGES = {
     'misty': "🌫️ Mist swirled around the battlefield!",
     'psychic': "👁️ The battlefield got weird!"
 }
+
+# ==========================================
+# 🌍 WHAT IS CURRENTLY ON THE FIELD
+# ==========================================
+# **THE TERRAIN WAS INVISIBLE.** It is laid by a move, announced once in a combat log
+# that scrolls away within two turns, and from then on it silently changes damage, blocks
+# status, heals grounded specimens and rewrites priority - with nothing on screen saying
+# it is there. A player deciding whether to switch had to remember what happened four
+# turns ago. Weather at least appears in the battle scene; terrain was not drawn at all.
+#
+# So the six live field effects get one line of text. Not a second copy of the mechanics
+# - just the names and the turns left, which is the thing a player has to hold in their
+# head and should not have to.
+FIELD_WEATHER_LABELS = {
+    'rain': "🌧️ Rain",
+    'sun': "☀️ Harsh Sunlight",
+    'sand': "🌪️ Sandstorm",
+    'hail': "❄️ Hail",
+    # The primal three. They last while their bringer is on the field rather than for a
+    # count of turns, which the duration below reports as indefinite rather than as 999.
+    'heavy-rain': "🌧️ Heavy Rain",
+    'extremely-harsh-sunlight': "☀️ Extreme Sunlight",
+    'strong-winds': "🌪️ Strong Winds",
+}
+
+FIELD_TERRAIN_LABELS = {
+    'electric': "⚡ Electric Terrain",
+    'grassy': "🌿 Grassy Terrain",
+    'misty': "🌫️ Misty Terrain",
+    'psychic': "👁️ Psychic Terrain",
+}
+
+# `state['field']` counters, in the order they are worth reading. Trick Room first
+# because it inverts turn order, which changes what a player should do THIS turn.
+FIELD_ROOM_LABELS = (
+    ('trick_room', "🔄 Trick Room"),
+    ('gravity', "🪐 Gravity"),
+    ('wonder_room', "🔀 Wonder Room"),
+    ('magic_room', "🎩 Magic Room"),
+)
+
+
+def describe_field(state):
+    """
+    One line naming every field effect currently running, or '' when the field is clear.
+
+    Returning EMPTY for a clear field is deliberate: a "Field Conditions: none" line on
+    the majority of turns is noise that trains people to stop reading the one place that
+    will eventually matter.
+
+    Tolerates a state missing any of these keys. Battles are built in several places and
+    a `describe_` helper that can raise would take a whole turn down to render a caption.
+    """
+    state = state or {}
+    parts = []
+
+    weather = state.get('weather') or {}
+    w_type = weather.get('type') or 'none'
+    if w_type != 'none':
+        label = FIELD_WEATHER_LABELS.get(w_type, f"🌤️ {str(w_type).replace('-', ' ').title()}")
+        if weather.get('primordial'):
+            parts.append(f"{label} *(while it stands)*")
+        else:
+            parts.append(f"{label} `{_field_turns(weather.get('duration'))}`")
+
+    terrain = state.get('terrain') or {}
+    t_type = terrain.get('type') or 'none'
+    if t_type != 'none':
+        label = FIELD_TERRAIN_LABELS.get(t_type, f"🌍 {str(t_type).replace('-', ' ').title()}")
+        parts.append(f"{label} `{_field_turns(terrain.get('duration'))}`")
+
+    field = state.get('field') or {}
+    for key, label in FIELD_ROOM_LABELS:
+        turns = field.get(key) or 0
+        if turns > 0:
+            parts.append(f"{label} `{_field_turns(turns)}`")
+
+    return "  ·  ".join(parts)
+
+
+def _field_turns(turns):
+    """`3` -> `'3t'`. A count nobody has to decode, in as little width as possible."""
+    try:
+        turns = int(turns or 0)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{max(0, turns)}t"
+
+
+def add_field_conditions(embed, state):
+    """
+    Put the field line on `embed`, if there is anything to say.
+
+    ONE FUNCTION, SEVEN CALLERS. Every battle embed in this file is built separately -
+    the PvE dashboard, the PvP dashboard, both turn redraws, both forced-swap prompts
+    and the duel opening - and a caption added to some of them but not others is worse
+    than one added to none: a player would learn that a missing line means a clear field.
+    """
+    line = describe_field(state)
+    if line:
+        embed.add_field(name="🌍 Field Conditions", value=line, inline=False)
+    return line
 
 # ==========================================
 # 🌦️ SHARED MOVE AFTERMATH
@@ -4502,7 +4603,8 @@ class BattleDashboard(discord.ui.View):
         
         embed.add_field(name=f"🟢 Your {p_active['name'].capitalize()}{p_status_icon}", value=f"Team: {p_roster}", inline=True)
         embed.add_field(name=f"🔴 Rival {n_active['name'].capitalize()}{n_status_icon}", value=f"Team: {n_roster}", inline=True)
-        
+        add_field_conditions(embed, state)
+
         # ==========================================
         # FETCH AND PASS HUD OVERLAYS TO VISUAL ENGINE
         # ==========================================
@@ -4721,6 +4823,7 @@ class BattleDashboard(discord.ui.View):
             
             embed.add_field(name=f"🟢 Your {p_active['name'].capitalize()}{p_status_icon}", value=f"Team: {p_roster}\n*See visual biometrics below*", inline=True)
             embed.add_field(name=f"🔴 Rival {n_active['name'].capitalize()}{n_status_icon}", value=f"Team: {n_roster}\n*See visual biometrics below*", inline=True)
+            add_field_conditions(embed, state)
             
             # ==========================================
             # FETCH AND PASS HUD OVERLAYS TO VISUAL ENGINE
@@ -7753,6 +7856,7 @@ class BattleDashboard(discord.ui.View):
             
             embed.add_field(name=f"🟢 Your {p_active['name'].capitalize()}{p_status_icon}", value=f"Team: {p_roster}\n*See visual biometrics below*", inline=True)
             embed.add_field(name=f"🔴 Rival {n_active['name'].capitalize()}{n_status_icon}", value=f"Team: {n_roster}\n*See visual biometrics below*", inline=True)
+            add_field_conditions(embed, state)
 
             print("DEBUG 10: Generating Battle Scene and dispatching to Discord")
 
@@ -8422,6 +8526,7 @@ class Combat(commands.Cog):
             
             embed.add_field(name=f"🟢 {p1.display_name}'s {p1_lead['name'].capitalize()}", value=f"Team: {p1_roster}", inline=True)
             embed.add_field(name=f"🔴 {p2.display_name}'s {p2_lead['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
+            add_field_conditions(embed, shared_state)
             # Dynamically grab the new randomized filename!
             # Dynamically attach the first image!
             scene = scene_attachment(embed, battle_file)
@@ -8451,47 +8556,53 @@ class Combat(commands.Cog):
         p2_ready = state['commits'][state['p2_id']] is not None
 
         if p1_ready and p2_ready:
-            # BOTH PLAYERS ARE LOCKED IN! 
+            # BOTH PLAYERS ARE LOCKED IN!
+            #
+            # `content=None` clears the waiting notice below. Without it the line
+            # "Awaiting telemetry from: X" survives above the resolved turn, naming
+            # somebody who answered several seconds ago.
             try:
-                await state['message_obj'].edit(view=None) 
+                await state['message_obj'].edit(content=None, view=None)
             except Exception as e:
                 print(f"UI Edit Error: {e}")
-            
+
             # Route traffic based on the phase!
             if state.get('phase') == 'faint_swap':
                 await self.process_faint_swaps(state)
             else:
                 await self.process_pvp_turn(state)
-            
+
         else:
-            # SOMEONE IS STILL DECIDING. Update the public footer so they know who!
+            # SOMEONE IS STILL DECIDING.
+            #
+            # **THE MESSAGE CONTENT, AND NOTHING ELSE.** This branch used to fetch the
+            # message back, take its embed, rewrite the footer, rebind the image by name
+            # and re-send the attachments - four operations to change eight words, every
+            # single time either player pressed a button. That is where the scene kept
+            # disappearing from: a fetched embed's image url is a signed CDN link rather
+            # than `attachment://battle.png`, so editing with it re-issues the attachment
+            # under a new signature and leaves the embed pointing at a dead one.
+            # `rebind_image` fixed that particular failure, but the shape was still wrong.
+            #
+            # Editing only `content` cannot move the picture, because nothing about the
+            # picture is sent. Discord leaves any field a PATCH does not mention alone,
+            # so the embed and the attachment are not merely restored correctly - they
+            # are never touched. It is also one API call instead of two, which closes a
+            # race that was live whenever both players committed within the same second:
+            # two overlapping fetch-then-edit cycles, the second built from a copy of the
+            # message taken before the first landed.
+            #
+            # The notice moves from the embed's footer to the line above the embed, which
+            # if anything is the more visible of the two.
             waiting_for = []
             if not p1_ready: waiting_for.append(state['p1'].display_name)
             if not p2_ready: waiting_for.append(state['p2'].display_name)
-            
+
             try:
-                # Fetch the live message from Discord to ensure we don't grab stale Embeds!
-                channel = state['message_obj'].channel
-                fresh_msg = await channel.fetch_message(state['message_obj'].id)
-                
-                
-                embed = fresh_msg.embeds[0]
-                embed.set_footer(text=f"⏳ Awaiting telemetry from: {', '.join(waiting_for)}...")
-
-                # Passing the attachments back was half the answer. The other half is
-                # that a FETCHED embed's image url is a signed CDN link, not
-                # `attachment://battle.png` - and editing re-issues the attachment under
-                # a new signature, leaving the embed pointing at a dead one. That is why
-                # the scene vanished the moment the first player locked in a move.
-                # Rebind by NAME, which cannot expire.
-                keep = rebind_image(embed, fresh_msg)
-                await fresh_msg.edit(embed=embed, attachments=keep)
-                
-                # Update our state cache so it stops lagging behind
-                state['message_obj'] = fresh_msg 
-
+                await state['message_obj'].edit(
+                    content=f"⏳ Awaiting telemetry from: {', '.join(waiting_for)}...")
             except Exception as e:
-                print(f"DEBUG: Footer update failed: {e}")
+                print(f"DEBUG: Waiting notice failed: {e}")
 
     async def process_pvp_turn(self, state):
         """Resolves the double-blind commits, executes the physics, and redraws the UI."""
@@ -10328,6 +10439,7 @@ class Combat(commands.Cog):
             
             embed.add_field(name=f"🟢 {state['p1'].display_name}'s {new_p1_active['name'].capitalize()}", value=f"Team: {p1_roster}", inline=True)
             embed.add_field(name=f"🔴 {state['p2'].display_name}'s {new_p2_active['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
+            add_field_conditions(embed, state)
             embed.set_footer(text="Awaiting inputs from both researchers...")
 
             try:
@@ -10358,7 +10470,11 @@ class Combat(commands.Cog):
 
             dashboard_view = PvPDashboard(self, state)
 
-            await state['message_obj'].edit(embed=embed, attachments=scene, view=dashboard_view)
+            # `content=None` clears any leftover "awaiting telemetry" notice. The turn
+            # has resolved, so a line naming who we were waiting for is now a lie - and
+            # a redraw that did not mention content would leave it sitting there.
+            await state['message_obj'].edit(content=None, embed=embed,
+                                            attachments=scene, view=dashboard_view)
 
             print("=== DEBUG: process_pvp_turn COMPLETE ===")
 
@@ -10451,6 +10567,7 @@ class Combat(commands.Cog):
             # Draw the fresh names to the Embed!
             embed.add_field(name=f"🟢 {state['p1'].display_name}'s {p1_active['name'].capitalize()}", value=f"Team: {p1_roster}", inline=True)
             embed.add_field(name=f"🔴 {state['p2'].display_name}'s {p2_active['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
+            add_field_conditions(embed, state)
             embed.set_footer(text="Awaiting inputs from both researchers...")
 
             # Safely generate the image
@@ -10479,7 +10596,11 @@ class Combat(commands.Cog):
 
             # An empty list clears the old attachments, so a failed render leaves no
             # ghost Pokemon behind from the previous frame.
-            await state['message_obj'].edit(embed=embed, attachments=scene, view=dashboard_view)
+            # `content=None` clears any leftover "awaiting telemetry" notice. The turn
+            # has resolved, so a line naming who we were waiting for is now a lie - and
+            # a redraw that did not mention content would leave it sitting there.
+            await state['message_obj'].edit(content=None, embed=embed,
+                                            attachments=scene, view=dashboard_view)
                 
             print("=== DEBUG: process_faint_swaps COMPLETE ===")
 
@@ -10737,6 +10858,7 @@ class Combat(commands.Cog):
             
             embed.add_field(name=f"🟢 Your {p_lead['name'].capitalize()}", value=f"Team: {p_roster}", inline=True)
             embed.add_field(name=f"🔴 {warden_data['title']}'s {n_lead['name'].capitalize()}", value=f"Team: {n_roster}", inline=True)
+            add_field_conditions(embed, state)
             embed.set_footer(text="Defeat the Warden to secure clearance for the next biome.")
             
             # Since we just fired entry abilities, grab the latest weather from the state!
@@ -11673,7 +11795,8 @@ class Combat(commands.Cog):
             
             embed.add_field(name=f"🟢 Your {p_lead['name'].capitalize()}", value=f"Team: {p_roster}", inline=True)
             embed.add_field(name=f"🔴 Rival {n_lead['name'].capitalize()}", value=f"Team: {n_roster}", inline=True)
-            
+            add_field_conditions(embed, state)
+
             embed.set_footer(text="Use the buttons below to command your specimen.")
             
             # Generate the visual scene! 
