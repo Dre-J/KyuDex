@@ -4186,6 +4186,96 @@ class DetailedMovepoolPaginator(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
+# ==========================================
+# 🏁 A BATTLE THAT IS ALREADY OVER
+# ==========================================
+# **NINE ENTRY POINTS READ `active_battles[user_id]` AND EVERY ONE OF THEM ASSUMED IT
+# WAS THERE.** It is not always there, and the window is not narrow:
+#
+#   * the three end-of-battle paths delete the duel and edit the message to `view=None`,
+#     but never stop the VIEW - so it stays live in discord.py's store, and a click that
+#     lands between the button press and the edit is dispatched into a battle that has
+#     already been deleted;
+#   * a second click on the same turn does the same thing, which is why this showed up
+#     on a knockout: a 90-power move ends the duel, and ending the duel is exactly when
+#     the state disappears;
+#   * and a restart empties the dictionary while every battle message on screen keeps
+#     its buttons.
+#
+# The symptom was `KeyError: '<user id>'` with NOTHING above it in the console, because
+# nothing had gone wrong yet - the crash WAS the lookup.
+# Discord refuses an embed whose description runs past 4096 characters, and a battle
+# log is never trimmed anywhere - a knockout turn appends the whole rewards block on
+# top of the turn's events. That has not been observed in the wild and is NOT the
+# cause of the KeyError this batch fixes; it is a hard API limit sitting under an
+# unbounded string, which is worth closing while the area is open.
+#
+# The TAIL is kept, because the end of a battle log is the part that says what
+# happened - the knockout, the rewards, the level-ups.
+EMBED_DESCRIPTION_LIMIT = 4096
+
+
+def battle_log_description(text, limit=EMBED_DESCRIPTION_LIMIT):
+    """A battle log that Discord will accept, trimmed from the front if it must be."""
+    text = str(text or '')
+    if len(text) <= limit:
+        return text
+    notice = "*…earlier events trimmed.*\n\n"
+    return notice + text[-(limit - len(notice)):]
+
+
+BATTLE_ALREADY_OVER = ("🏁 That expedition has already finished, so its controls are no "
+                       "longer live. Start another with `!npcduel`.")
+
+
+async def retire_dashboard(view, interaction=None, notice=BATTLE_ALREADY_OVER):
+    """
+    Take a battle view out of service: dead buttons, stopped, and the trainer told.
+
+    Called wherever a duel ends OR is found to have ended. Stopping the view is the part
+    that actually closes the race - a view that has been stopped is no longer dispatched
+    to at all, so a stale click gets Discord's own "this interaction failed" rather than
+    reaching a handler that will raise.
+    """
+    for child in view.children:
+        child.disabled = True
+    view.stop()
+
+    if interaction is None:
+        return
+
+    # The message keeps its own copy of the components, so it has to be told too or the
+    # buttons stay visibly pressable until somebody refreshes the channel.
+    try:
+        if getattr(interaction, 'message', None) is not None:
+            await interaction.message.edit(view=view)
+    except Exception:
+        pass
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(notice, ephemeral=True)
+        else:
+            await interaction.response.send_message(notice, ephemeral=True)
+    except Exception:
+        pass
+
+
+async def battle_or_farewell(view, interaction):
+    """
+    The battle this view belongs to, or None having already retired the view.
+
+    THE ONE DOOR for "is this duel still running". Every entry point that used to index
+    the dictionary directly comes through here, so a finished duel is answered with a
+    sentence instead of a traceback - and answered the same way in all nine of them.
+    """
+    state = view.cog.active_battles.get(view.user_id)
+    if state is not None:
+        return state
+    await retire_dashboard(view, interaction)
+    return None
+
+
 class SwapMenu(discord.ui.View):
     def __init__(self, cog, user_id, ctx, main_battle_view, forced=False):
         super().__init__(timeout=180)
@@ -4193,9 +4283,12 @@ class SwapMenu(discord.ui.View):
         self.user_id = str(user_id)
         self.ctx = ctx
         self.main_battle_view = main_battle_view 
-        self.forced = forced 
+        self.forced = forced
 
-        state = self.cog.active_battles[self.user_id]
+        # SYNCHRONOUS, so it cannot tell anybody anything - it can only avoid
+        # raising while a view is being built for a duel that has just ended.
+        # The empty menu that results is then retired by the callback below.
+        state = self.cog.active_battles.get(self.user_id) or {}
         
         options = []
         for i, p in enumerate(state['player_team']):
@@ -4231,7 +4324,9 @@ class SwapMenu(discord.ui.View):
         
         try:
             selected_index = int(interaction.data['values'][0])
-            state = self.cog.active_battles[self.user_id]
+            state = await battle_or_farewell(self, interaction)
+            if state is None:
+                return
             p_active = state['player_team'][state['active_player_index']]
 
             if state['adaptation'].get('active'):
@@ -4484,7 +4579,9 @@ class ItemSelect(discord.ui.View):
         await interaction.response.defer()
         
         selected_item = interaction.data['values'][0]
-        state = self.cog.active_battles[self.user_id]
+        state = await battle_or_farewell(self, interaction)
+        if state is None:
+            return
         p_active = state['player_team'][state['active_player_index']]
         own_side = state.get('player_hazards')
 
@@ -4564,6 +4661,10 @@ class BattleDashboard(discord.ui.View):
         self.cog = cog
         self.user_id = str(user_id)
         self.ctx = ctx
+        # Set to True while a turn is being resolved, so two clicks a fraction apart
+        # cannot both fight one. Declared here rather than left to `getattr` so the
+        # attribute is visible on the class that owns it.
+        self._resolving = False
 
     async def on_timeout(self):
         """Nobody came back. Release the trainer rather than stranding them."""
@@ -4588,7 +4689,9 @@ class BattleDashboard(discord.ui.View):
 
     async def render_dashboard(self, interaction, combat_log):
         """Helper function to redraw the UI after a Forced Swap without advancing the turn."""
-        state = self.cog.active_battles[self.user_id]
+        state = await battle_or_farewell(self, interaction)
+        if state is None:
+            return
         p_active = state['player_team'][state['active_player_index']]
         n_active = state['npc_team'][state['active_npc_index']]
         
@@ -4654,8 +4757,10 @@ class BattleDashboard(discord.ui.View):
             form_id = int(parts[1])
             form_name = parts[2]
             print(f"DEBUG: Parsed form_id={form_id}, form_name='{form_name}'")
-            
-            state = self.cog.active_battles[self.user_id]
+
+            state = await battle_or_farewell(self, interaction)
+            if state is None:
+                return
             
             # ==========================================
             # FAST-PATH Z-MOVE TOGGLE (MUST BE AT THE TOP!)
@@ -4865,7 +4970,13 @@ class BattleDashboard(discord.ui.View):
     async def refresh_buttons(self):
         """Dynamically builds the UI buttons so they can be easily redrawn after a faint."""
         self.clear_items()
-        state = self.cog.active_battles[self.user_id]
+        # NO INTERACTION HERE, so there is nobody to apologise to - but a redraw
+        # requested for a duel that has ended must leave the dashboard empty and
+        # stopped rather than raising inside whatever was rendering it.
+        state = self.cog.active_battles.get(self.user_id)
+        if state is None:
+            await retire_dashboard(self)
+            return
         p_active = state['player_team'][state['active_player_index']]
 
         n_active = state['npc_team'][state['active_npc_index']]
@@ -5249,11 +5360,29 @@ class BattleDashboard(discord.ui.View):
                 
             await interaction.response.defer()
             
+            # THE DUEL MAY ALREADY BE OVER. This is the line that was raising
+            # `KeyError: '<user id>'` with nothing above it in the console - because
+            # nothing had gone wrong yet, the lookup itself WAS the failure. A knockout
+            # deletes the battle, and a second click landing in the window between the
+            # press and the message edit arrived here to find it gone.
+            state = await battle_or_farewell(self, interaction)
+            if state is None:
+                return
+
+            # ONE TURN AT A TIME. Two clicks a fraction apart both pass the check above
+            # while the first is still resolving, and the second then fights a turn
+            # against a half-updated battle. The flag is cleared in `finally` so a crash
+            # cannot wedge the dashboard shut.
+            if getattr(self, '_resolving', False):
+                return await interaction.followup.send(
+                    "⏳ That turn is still being calculated — one order at a time.",
+                    ephemeral=True)
+            self._resolving = True
+
             try:
-                state = self.cog.active_battles[self.user_id]
                 p_active = state['player_team'][state['active_player_index']]
                 n_active = state['npc_team'][state['active_npc_index']]
-                
+
                 combat_log = f"**Turn {state['turn_number']}**\n\n"
 
                 # ==========================================
@@ -6534,11 +6663,18 @@ class BattleDashboard(discord.ui.View):
                     else:
                         await interaction.followup.send(f"Engine Crash: {e}\nCheck the console!", ephemeral=True)
                 except:
-                    pass        
+                    pass
+            finally:
+                # ALWAYS released. A turn that crashed must not leave the dashboard
+                # refusing every further order - that would turn one bad turn into a
+                # battle nobody can finish or leave.
+                self._resolving = False
 
     async def execute_npc_retaliation(self, interaction, combat_log):
         """Executes the NPC's free action when the player uses an item or manually swaps."""
-        state = self.cog.active_battles[self.user_id]
+        state = await battle_or_farewell(self, interaction)
+        if state is None:
+            return
         p_active = state['player_team'][state['active_player_index']]
         n_active = state['npc_team'][state['active_npc_index']]
 
@@ -6804,7 +6940,9 @@ class BattleDashboard(discord.ui.View):
         print("\n=== DEBUG: process_turn_end triggered ===")
 
         try:
-            state = self.cog.active_battles[self.user_id]
+            state = await battle_or_farewell(self, interaction)
+            if state is None:
+                return
             p_active = state['player_team'][state['active_player_index']]
             n_active = state['npc_team'][state['active_npc_index']]
             
@@ -7565,8 +7703,15 @@ class BattleDashboard(discord.ui.View):
                             await db.commit() # Lock the transaction!
                         
                         # 3. Clean up and print the Victory UI!
+                        #
+                        # STOPPED, not merely emptied. Clearing the components off
+                        # the message leaves the VIEW alive in discord.py's store,
+                        # so a click already in flight - or one on a client that has
+                        # not re-rendered yet - still gets dispatched here, into a
+                        # battle that no longer exists. That is the KeyError.
                         del self.cog.active_battles[self.user_id]
-                        embed = discord.Embed(title="🛡️ Sector Secured!", description=combat_log + rewards_log, color=discord.Color.purple())
+                        self.stop()
+                        embed = discord.Embed(title="🛡️ Sector Secured!", description=battle_log_description(combat_log + rewards_log), color=discord.Color.purple())
                         return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
                     
                     # ==========================================
@@ -7780,9 +7925,12 @@ class BattleDashboard(discord.ui.View):
                         await db.commit() # 🚨 Lock in all the rewards at once!
                         
                     # 6. Shut down the engine and print the victory screen!
+                    # `self.stop()` closes the dashboard for good; the post-battle
+                    # view below is a different object and keeps its own lifetime.
                     del self.cog.active_battles[self.user_id]
+                    self.stop()
                     
-                    embed = discord.Embed(title="🏆 Field Duel Victorious!", description=combat_log + rewards_log, color=discord.Color.gold())
+                    embed = discord.Embed(title="🏆 Field Duel Victorious!", description=battle_log_description(combat_log + rewards_log), color=discord.Color.gold())
                     print(f"[DEBUG EVO PvE] 5. Final UI Dispatch. Passing view: {post_battle_view}")
                     return await interaction.edit_original_response(embed=embed, view=post_battle_view, attachments=[])
 
@@ -7828,12 +7976,13 @@ class BattleDashboard(discord.ui.View):
                     # We pass `forced=True` to hide the cancel button!
                     swap_view = SwapMenu(self.cog, self.user_id, self.ctx, self, forced=True)
 
-                    embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=combat_log, color=discord.Color.orange())
+                    embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=battle_log_description(combat_log), color=discord.Color.orange())
                     return await interaction.edit_original_response(embed=embed, view=swap_view, attachments=[])
                 else:
                     if p_active['current_hp'] <= 0:
                         del self.cog.active_battles[self.user_id]
-                        embed = discord.Embed(title="💥 Field Duel Lost", description=combat_log, color=discord.Color.dark_red())
+                        self.stop()
+                        embed = discord.Embed(title="💥 Field Duel Lost", description=battle_log_description(combat_log), color=discord.Color.dark_red())
                         return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
                     else:
                         combat_log += "\n*...But there were no healthy specimens left to deploy!*"
@@ -7895,9 +8044,31 @@ class BattleDashboard(discord.ui.View):
             print("\n🚨 CRITICAL CRASH IN PROCESS_TURN_END 🚨")
             traceback.print_exc()
 
-            self.active_battles.pop(self.user_id, None)
-            
-            await state['message_obj'].channel.send("⚠️ A critical engine failure occurred during the turn calculation. You have been released from the battle.")
+            # TWO BUGS LIVED ON THESE LINES, and between them they meant no turn
+            # crash was ever recovered from.
+            #
+            # `self.active_battles` does not exist. This is a method of
+            # BattleDashboard, whose __init__ sets `cog`, `user_id` and `ctx` and
+            # nothing else - every other line in this file correctly says
+            # `self.cog.active_battles`. So the cleanup raised AttributeError and
+            # the trainer stayed locked in a battle they could no longer fight.
+            #
+            # `state['message_obj']` only exists on a PvP state - it is written in
+            # exactly one place, `initialize_pvp_battle`. A PvE duel has no such
+            # key, so even with the first line fixed this one would have raised.
+            # The interaction knows its own channel, and always has.
+            self.cog.active_battles.pop(self.user_id, None)
+            await retire_dashboard(self)
+
+            channel = getattr(interaction, 'channel', None) or getattr(
+                (state or {}).get('message_obj'), 'channel', None)
+            if channel is not None:
+                try:
+                    await channel.send("⚠️ A critical engine failure occurred during "
+                                       "the turn calculation. You have been released "
+                                       "from the battle.")
+                except Exception:
+                    pass
 
             # We use followup.send here because edit_original_response might have failed!
             await interaction.followup.send("A critical engine failure occurred during the turn rendering.", ephemeral=True)
@@ -8530,7 +8701,7 @@ class Combat(commands.Cog):
 
             # 6. Render the UI
             print("DEBUG: Constructing UI Elements...")
-            embed = discord.Embed(title="⚔️ PvP Field Duel Commencing!", description=combat_log, color=discord.Color.red())
+            embed = discord.Embed(title="⚔️ PvP Field Duel Commencing!", description=battle_log_description(combat_log), color=discord.Color.red())
             
             p1_roster = "".join(["🔴" for _ in shared_state['p1_team']])
             p2_roster = "".join(["🔴" for _ in shared_state['p2_team']])
@@ -10443,7 +10614,7 @@ class Combat(commands.Cog):
                     state['commits'][p2_id] = {'type': 'pass'}
                 return
 
-            embed = discord.Embed(title="⚔️ PvP Field Duel", description=combat_log, color=discord.Color.blue())
+            embed = discord.Embed(title="⚔️ PvP Field Duel", description=battle_log_description(combat_log), color=discord.Color.blue())
             
             p1_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p1_team']])
             p2_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p2_team']])
@@ -10570,7 +10741,7 @@ class Combat(commands.Cog):
             p1_active = state['p1_team'][state['p1_active_index']]
             p2_active = state['p2_team'][state['p2_active_index']]
             
-            embed = discord.Embed(title="⚔️ PvP Field Duel", description=combat_log, color=discord.Color.blue())
+            embed = discord.Embed(title="⚔️ PvP Field Duel", description=battle_log_description(combat_log), color=discord.Color.blue())
             
             p1_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p1_team']])
             p2_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p2_team']])
