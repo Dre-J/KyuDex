@@ -80,7 +80,7 @@ async def check_condition_evolution(db, pokedex_id, counters):
 
 
 async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
-                                  held_item=None, moves=None):
+                                  held_item=None, moves=None, region=None):
     """
     The central rulebook for biological metamorphosis, and now actually the one in use.
 
@@ -123,14 +123,23 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
     known = {(m or '').strip().lower().replace(' ', '-') for m in (moves or []) if m}
     elements = await known_move_types(db, known) if known else set()
 
-    async with db.execute("""
+    # THE COLUMN MAY NOT BE THERE YET. `migrate_regional_evolutions.py` adds it, and this
+    # has to keep answering on a database where it has not been run - every rule then
+    # comes back region-less, which is exactly how the rulebook behaved before regional
+    # forms existed. That is what lets the migration be applied to a running bot.
+    has_region = await has_column(db, 'evolution_rules', 'region')
+    region_column = 'er.region' if has_region else "'' AS region"
+    async with db.execute(f"""
         SELECT er.evolved_species_id, s.name, er.min_level, er.min_happiness,
-               er.held_item, er.time_of_day, er.known_move, er.known_move_type
+               er.held_item, er.time_of_day, er.known_move, er.known_move_type,
+               {region_column}
         FROM evolution_rules er
         JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
         WHERE er.base_species_id = ? AND er.trigger_name = 'level-up'
     """, (pokedex_id,)) as cursor:
         candidates = await cursor.fetchall()
+
+    where = str(region or '').strip().lower()
 
     # THE MOST SPECIFIC MATCHING RULE WINS, which is not the same as the first one.
     # Rockruff has three rules, all at level 25, differing only by sky: day, night and
@@ -139,12 +148,20 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
     # form was unreachable. A rule naming a narrower sky outranks one naming a broader
     # one, and a rule demanding an item outranks one that does not.
     def specificity(rule):
-        _id, _name, min_level, min_happiness, req_item, req_when, req_move, req_type = rule
+        (_id, _name, min_level, min_happiness, req_item, req_when, req_move, req_type,
+         req_region) = rule
         # A named move is the narrowest demand of all, a move's ELEMENT next, then a held
         # item, then a sky. Eevee is why the first two are separate: it has both a Sylveon
         # rule wanting a Fairy move and Espeon/Umbreon rules wanting only friendship and a
         # sky, and at high friendship in the day both match.
-        return (2 if req_move else (1 if req_type else 0),
+        #
+        # A REGION OUTRANKS ALL OF THEM. Cubone at level 28 has three rules - two for
+        # Marowak and one for Marowak-Alola - identical in every other column, so the tie
+        # fell to row order and the Alolan form was unreachable. A rule naming a region
+        # has already been matched against the trainer's below, so if it is still a
+        # candidate here it is the more specific answer by definition.
+        return (1 if req_region else 0,
+                2 if req_move else (1 if req_type else 0),
                 1 if req_item else 0,
                 2 if req_when in SPECIAL_SKIES else (1 if req_when else 0),
                 min_level or 0,
@@ -153,7 +170,12 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
     candidates.sort(key=specificity, reverse=True)
 
     for (evolved_id, name, min_level, min_happiness, req_item, req_when,
-         req_move, req_move_type) in candidates:
+         req_move, req_move_type, req_region) in candidates:
+        # SOMEWHERE ELSE ENTIRELY. A rule naming a region is simply not available to a
+        # trainer who is not in it, which is what leaves the ordinary Marowak reachable
+        # everywhere and the Alolan one reachable only from Alola.
+        if req_region and str(req_region).strip().lower() != where:
+            continue
         if req_when and req_when not in skies:
             continue
         if req_item and req_item != held:
@@ -166,7 +188,13 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         if req_move_type and req_move_type not in elements:
             continue
 
-        checkable = bool(req_item) or bool(req_move) or bool(req_move_type)
+        # A REGION IS A REQUIREMENT THAT WAS CHECKED, and has to count as one. The clause
+        # below refuses a rule whose real condition this schema cannot see; a
+        # region-gated rule's condition is one it CAN see and has just met, so omitting
+        # it here would make every regional form unreachable again by a second route -
+        # `dartrix -> decidueye-hisui` carries no item, no sky and no move.
+        checkable = (bool(req_item) or bool(req_move) or bool(req_move_type)
+                     or bool(req_region))
 
         if min_level is not None:
             if level < min_level:
@@ -185,6 +213,53 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         return evolved_id, name
 
     return None
+
+async def stone_evolution(db, pokedex_id, item_name, region=None):
+    """
+    What this stone turns this species into, here. `(id, name, standards, hidden)` or None.
+
+    **THE SECOND RULEBOOK, and until now the careless one.** `check_evolution_trigger`
+    above sorts its candidates by specificity; the stone path in `cogs/evolution.py` ran
+    a bare `fetchone()` with NO `ORDER BY` at all. Three stones have two rules apiece -
+    Thunder Stone gives Raichu or Alolan Raichu, Leaf Stone Exeggutor or Alolan
+    Exeggutor, Sun Stone Lilligant or Hisuian Lilligant - so which form a player got was
+    decided by whatever order SQLite felt like returning rows in. The Alolan and Hisuian
+    forms were unreachable.
+
+    Extracted from the cog so there is one place to ask, and so a test can drive the
+    real query rather than a copy of it that cannot go stale in the same direction.
+
+    A rule for somewhere else is filtered out; a rule naming the trainer's own region
+    beats a region-less one; ties fall to `id`, which is stable.
+    """
+    where = str(region or '').strip().lower()
+    if await has_column(db, 'evolution_rules', 'region'):
+        sql = """
+            SELECT er.evolved_species_id, s.name, s.standard_abilities, s.hidden_ability
+            FROM evolution_rules er
+            JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+            WHERE er.base_species_id = ? AND er.trigger_name = 'use-item'
+              AND er.item_name = ?
+              AND (er.region IS NULL OR er.region = '' OR er.region = ?)
+            ORDER BY CASE WHEN er.region = ? THEN 0 ELSE 1 END, er.id
+        """
+        params = (pokedex_id, item_name, where, where)
+    else:
+        # Before the migration. Ordered anyway, because "whatever SQLite felt like" was
+        # never an acceptable answer even when there was no region to prefer.
+        sql = """
+            SELECT er.evolved_species_id, s.name, s.standard_abilities, s.hidden_ability
+            FROM evolution_rules er
+            JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
+            WHERE er.base_species_id = ? AND er.trigger_name = 'use-item'
+              AND er.item_name = ?
+            ORDER BY er.id
+        """
+        params = (pokedex_id, item_name)
+
+    async with db.execute(sql, params) as cursor:
+        return await cursor.fetchone()
+
 
 async def evolution_family(db, species_name):
     """
