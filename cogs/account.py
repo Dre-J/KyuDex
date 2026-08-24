@@ -27,12 +27,13 @@ from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary,
                             levelup_pings_enabled, reset_available_at,
                             set_levelup_pings, wipe_user)
 from utils.constants import DB_FILE
-from utils.constants import current_skies
-from utils.prefs import (CARD_EMBED, CARD_IMAGE, COMMON_ZONES, SOURCE_DEFAULT,
-                         SOURCE_GUILD, SOURCE_USER, clear_timezone,
-                         describe_zone, get_card_style, now_in, resolve_card_style,
-                         resolve_timezone, resolve_zone, set_card_style,
-                         set_timezone)
+from utils.constants import BIOME_ORDER, biome_label, current_skies
+from utils.prefs import (CARD_BIOME_AUTO, CARD_EMBED, CARD_IMAGE, COMMON_ZONES,
+                         SOURCE_DEFAULT, SOURCE_GUILD, SOURCE_USER, clear_timezone,
+                         describe_zone, get_card_biome, get_card_style, now_in,
+                         resolve_biome_word, resolve_card_biome, resolve_card_style,
+                         resolve_timezone, resolve_zone, set_card_biome,
+                         set_card_style, set_timezone)
 from utils.trading import LOG_RETENTION_DAYS, purge_expired_logs
 
 # Long enough to read the list, short enough that nobody wanders off mid-confirmation.
@@ -333,6 +334,16 @@ class Account(commands.Cog):
         async with aiosqlite.connect(DB_FILE) as db:
             zone, source = await resolve_timezone(db, user_id, guild_id)
             pings = await levelup_pings_enabled(db, user_id)
+            style = await get_card_style(db, user_id)
+            stored_biome = await get_card_biome(db, user_id)
+            async with db.execute("SELECT unlocked_visas FROM users WHERE user_id = ?",
+                                  (user_id,)) as cursor:
+                visa_row = await cursor.fetchone()
+
+        raw_visas = (visa_row[0] if visa_row and visa_row[0] else 'canopy')
+        held = [b for b in BIOME_ORDER
+                if b in {v.strip().lower() for v in str(raw_visas).split(',')}]
+        card_biome = resolve_card_biome(stored_biome, held)
 
         skies = current_skies(now_in(zone))
         origin = {SOURCE_USER: "your own setting",
@@ -348,6 +359,14 @@ class Account(commands.Cog):
                    f"*From {origin}.* Day/night is currently "
                    f"**{'/'.join(sorted(skies))}**.\n"
                    f"`!settings timezone <zone>`"),
+            inline=False)
+        embed.add_field(
+            name="🖼️ Profile card",
+            value=(f"Drawn as **{style}** · `!settings card image|embed`\n"
+                   f"Dressed in **{biome_label(card_biome)}**"
+                   + ("" if stored_biome else " *(your deepest clearance)*")
+                   + f" · `!settings biome`\n"
+                   f"*{len(held)} of {len(BIOME_ORDER)} sectors cleared.*"),
             inline=False)
         embed.add_field(
             name="🔔 Level-up announcements",
@@ -384,6 +403,14 @@ class Account(commands.Cog):
 
         resolved, complaint = resolve_card_style(style)
         if not resolved:
+            # `!settings card apex` is the spelling people reach for, because "the card"
+            # is the thing they are changing either way. The two vocabularies do not
+            # overlap - no sector is called `image` and no style is called `trench` - so
+            # handing a sector word over is unambiguous, and refusing it on a
+            # technicality would be pedantry about which noun the subcommand owns.
+            biome, _ = resolve_biome_word(style)
+            if biome:
+                return await self.settings_biome(ctx, biome=style)
             return await ctx.send(complaint)
 
         async with aiosqlite.connect(DB_FILE) as db:
@@ -399,6 +426,88 @@ class Account(commands.Cog):
                  "\n*The embed is plain text - selectable, screen-reader friendly, and "
                  "far smaller to send.*")
         return await ctx.send(f"🖼️ `!profile` will be drawn as **{resolved}**.{extra}")
+
+    @settings.command(name="biome", aliases=["sector", "background", "bg"])
+    @checks.has_started()
+    async def settings_biome(self, ctx, *, biome: str = None):
+        """
+        Which sector your profile card is dressed in. `!settings biome apex`
+
+        Gated on the visas you hold, which the Warden fights already write - so this
+        adds a reward to progress that already happened rather than a new thing to
+        grind. `!settings biome auto` hands the choice back to your deepest clearance,
+        which is the default and keeps improving on its own.
+        """
+        user_id = str(ctx.author.id)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT unlocked_visas FROM users WHERE user_id = ?",
+                    (user_id,)) as cursor:
+                row = await cursor.fetchone()
+            stored = await get_card_biome(db, user_id)
+
+        raw = (row[0] if row and row[0] else 'canopy')
+        held = [b for b in BIOME_ORDER
+                if b in {v.strip().lower() for v in str(raw).split(',')}]
+        current = resolve_card_biome(stored, held)
+
+        def roster():
+            """Every sector, with the locked ones shown rather than hidden."""
+            lines = []
+            for key in BIOME_ORDER:
+                if key not in held:
+                    lines.append(f"🔒 ~~{biome_label(key)}~~ · *clear the Warden before it*")
+                elif key == current:
+                    lines.append(f"➤ **{biome_label(key)}** · in use")
+                else:
+                    lines.append(f"　{biome_label(key)}")
+            return "\n".join(lines)
+
+        # No argument SHOWS rather than guesses - the same rule `!settings timezone` and
+        # `!settings card` follow. It is also the only place a trainer can see how many
+        # sectors are still locked, which is half of why the locked ones are listed.
+        if biome is None:
+            following = ("*Following your deepest clearance.*" if not stored else
+                         f"*You chose this one. `!settings biome auto` follows your "
+                         f"deepest clearance instead.*")
+            embed = discord.Embed(
+                title="🗺️ Card Sector",
+                description=f"{roster()}\n\n{following}",
+                colour=discord.Colour.blurple())
+            embed.set_footer(text="!settings biome <sector>  ·  !settings biome auto")
+            return await ctx.send(embed=embed)
+
+        chosen, complaint = resolve_biome_word(biome)
+        if complaint:
+            return await ctx.send(complaint)
+
+        # THE VISA CHECK LIVES HERE, not in `set_card_biome`, because this is the only
+        # place that can say WHY - and "you have not cleared Apex" is a different answer
+        # from "Apex is not a sector", which is the mistake somebody is far more likely
+        # to have made.
+        if chosen and chosen not in held:
+            return await ctx.send(
+                f"🔒 You have not cleared **{biome_label(chosen)}** yet, so your card "
+                f"cannot wear it. Beat the Warden guarding it and it unlocks here "
+                f"automatically.\n\n{roster()}")
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            saved = await set_card_biome(db, user_id, chosen)
+            await db.commit()
+
+        if not saved:
+            return await ctx.send(
+                "⚠️ This database cannot store the preference yet, so it was not saved. "
+                "Your card still follows your deepest clearance.")
+
+        if chosen == CARD_BIOME_AUTO:
+            return await ctx.send(
+                f"🗺️ Your card follows your deepest clearance again — currently "
+                f"**{biome_label(resolve_card_biome(CARD_BIOME_AUTO, held))}**.")
+        return await ctx.send(
+            f"🗺️ Your profile card is now dressed in **{biome_label(chosen)}**. "
+            f"Run `!profile` to see it.")
 
     @settings.command(name="timezone", aliases=["tz", "time"])
     @checks.has_started()

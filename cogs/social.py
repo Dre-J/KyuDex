@@ -6,9 +6,10 @@ from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
                            log_trade, snapshot)
 from utils.limits import (ENERGY_MAX, ENERGY_BANK_CAP, ENERGY_REGEN_PER_HOUR,
                           describe_energy, regenerate_energy)
-from utils.constants import current_skies
-from utils.prefs import (CARD_IMAGE, SOURCE_USER, get_card_style,
-                         nudge_if_default, now_in, resolve_timezone)
+from utils.constants import BIOME_ORDER, biome_label, current_skies
+from utils.prefs import (CARD_IMAGE, SOURCE_USER, get_card_biome, get_card_style,
+                         nudge_if_default, now_in, resolve_card_biome,
+                         resolve_timezone)
 from utils.levels import (contribution_for_level, energy_bank_cap,
                           trainer_level)
 from utils.roster import party_filter
@@ -16,9 +17,66 @@ from profile_card import build_profile_card, render_profile_card_async
 import io
 from utils.roster import bump_to_end_of_box
 from utils import checks, trading
+import asyncio
 import time
+from collections import OrderedDict
 import aiosqlite
 import re
+
+
+# ==========================================
+# 🖼️ AVATARS
+# ==========================================
+# The card wears the trainer's own Discord picture, which means one HTTP fetch to
+# Discord's CDN per render. Two things are worth guarding.
+#
+# FIRST, THE FETCH IS BOUNDED. `!profile` is a command somebody is waiting on, and an
+# unbounded await against a third-party CDN is how a command that normally answers in
+# 200ms occasionally takes thirty seconds. A timeout costs the picture, not the card.
+#
+# SECOND, THE BYTES ARE CACHED, keyed on the asset URL - which contains Discord's own
+# hash of the image, so the key changes exactly when the picture does and never has to
+# be invalidated. Without this the render cache would still work but every hit would be
+# paid for with a round trip first, which defeats most of the point of having one.
+_AVATAR_PX = 256
+_AVATAR_TIMEOUT = 5.0
+_AVATAR_CACHE_MAX = 64
+_AVATAR_CACHE = OrderedDict()
+
+
+async def _avatar_bytes(user):
+    """`(bytes|None, key)` for a member's avatar. NEVER raises.
+
+    A missing picture is a fallback on the card - the trainer sprite, then the sector
+    crest - so every failure here returns `(None, '')` rather than propagating. Nobody
+    should lose their profile because a CDN had a bad minute.
+    """
+    asset = getattr(user, 'display_avatar', None)
+    if asset is None:
+        return None, ''
+    try:
+        # 256px: the card draws it at 172, and asking for the next size up leaves room
+        # to enlarge the tile later without every cached card going stale.
+        asset = asset.with_size(_AVATAR_PX)
+    except Exception:
+        pass                            # a default avatar, or a discord.py that differs
+    key = str(getattr(asset, 'url', '') or '')
+    if not key:
+        return None, ''
+
+    if (hit := _AVATAR_CACHE.get(key)) is not None:
+        _AVATAR_CACHE.move_to_end(key)
+        return hit, key
+    try:
+        blob = await asyncio.wait_for(asset.read(), timeout=_AVATAR_TIMEOUT)
+    except Exception as e:
+        print(f"⚠️ Avatar fetch failed ({type(e).__name__}); card falls back to sprite.")
+        return None, ''
+
+    _AVATAR_CACHE[key] = blob
+    while len(_AVATAR_CACHE) > _AVATAR_CACHE_MAX:
+        _AVATAR_CACHE.popitem(last=False)
+    return blob, key
 
 
 # A mapping of species to their specific trade evolution requirements
@@ -1292,6 +1350,12 @@ class Social(commands.Cog):
 
         if style == CARD_IMAGE:
             try:
+                # FETCHED HERE, not in `_gather_profile`, because it is the only thing
+                # either rendering needs that is not in the database - and the embed
+                # route would be paying a network round trip for a picture it never
+                # draws. `_avatar_bytes` cannot raise, so a CDN failure costs the
+                # picture and still leaves the card.
+                data['avatar'], data['avatar_key'] = await _avatar_bytes(target)
                 blob = await render_profile_card_async(build_profile_card(data))
                 file = discord.File(io.BytesIO(blob), filename="profile.webp")
                 return await ctx.send(content=nudge, file=file)
@@ -1362,10 +1426,21 @@ class Social(commands.Cog):
         bank_cap = energy_bank_cap(level)
         energy, tick = regenerate_energy(db_energy, last_tick, int(time.time()), bank_cap)
 
-        visas = [v.strip() for v in str(visas_raw).split(',') if v.strip()]
+        # ORDERED, because a comma-split is a set with an accidental order and "the
+        # deepest sector" is a question only an ordered list can answer.
+        visas = [v.strip().lower() for v in str(visas_raw).split(',') if v.strip()]
+        visas = [b for b in BIOME_ORDER if b in visas]
+
+        # The stored choice is carried through RAW and validated by `resolve_card_biome`
+        # at each point of use. A wipe puts `unlocked_visas` back to 'canopy' without
+        # knowing this column exists, so a choice made before one can name a sector that
+        # is no longer held - which is why nothing downstream trusts it.
+        stored_biome = await get_card_biome(db, user_id)
 
         return {
             'target': target,
+            'card_biome': stored_biome,
+            'biome': resolve_card_biome(stored_biome, visas),
             'unread': unread,
             'tokens': tokens,
             'visas': visas,
@@ -1423,11 +1498,23 @@ class Social(commands.Cog):
         embed.add_field(name="🐾 Specimens", value=f"{d['caught']:,} · ✨ {d['shinies']:,}",
                         inline=True)
 
-        biome_emojis = {'canopy': '🌲 Canopy', 'trench': '🌊 Trench', 'core': '🌋 Core',
-                        'sprawl': '🏙️ Sprawl', 'apex': '🐉 Apex'}
-        visas_display = " • ".join(biome_emojis.get(v, v.title()) for v in d['visas'])
+        # `biome_label` rather than a local map. This was the fourth copy of the five
+        # sector names in the codebase and the one most likely to fall behind, because
+        # nothing that reads it would fail if it did - a stale entry here just quietly
+        # renders `Apex` without its dragon.
+        visas_display = " • ".join(biome_label(v) for v in d['visas']) or "—"
         embed.add_field(name="🛂 Sector Clearance", value=f"**{visas_display}**",
                         inline=False)
+
+        # The chosen sector is shown ONLY when it has been chosen. Somebody on the
+        # default is not making a decision they need reporting back to them, and a line
+        # saying "Canopy, because that is as far as you have got" reads as a rebuke.
+        if d.get('card_biome'):
+            embed.add_field(
+                name="🎨 Card Sector",
+                value=(f"**{biome_label(d['biome'])}** · `!settings biome auto` "
+                       f"follows your deepest clearance instead."),
+                inline=False)
 
         footer = (f"{ctx.guild.name} · {d['local_contribution']:,} local contribution"
                   if ctx.guild else "")

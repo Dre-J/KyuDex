@@ -3567,6 +3567,31 @@ EXPEDITION_BIOMES = {
                'blurb': "The high ridge. Dragons only, and nothing else at all."},
 }
 
+# THE UNLOCK ORDER, which is also the depth order: canopy is where everybody starts and
+# apex is the last sector a Warden opens. `users.unlocked_visas` stores these names as a
+# comma-separated list, so "the deepest visa held" is the last of these that appears in
+# it - and a set, which is what a comma-split gives you, has no order of its own.
+BIOME_ORDER = tuple(EXPEDITION_BIOMES)
+
+
+def biome_label(key, emoji=True):
+    """
+    `'apex'` -> `'🐉 Apex'`. The one place a biome key becomes something to read.
+
+    There were three copies of this map - here, `profile_card.BIOME_LABEL`, and a local
+    `biome_emojis` inside `_profile_embed` - which is exactly the shape of duplication
+    that put invented biome names on the card in the first place. Unknown keys are
+    title-cased rather than dropped, so a sector added to the table but not to a caller
+    still reads as a name rather than vanishing.
+    """
+    key = str(key or '').strip().lower()
+    entry = EXPEDITION_BIOMES.get(key)
+    name = key.title() if key else "Unknown"
+    if not entry or not emoji:
+        return name
+    return f"{entry['emoji']} {name}"
+
+
 # ==========================================
 # ⚔️ DUEL FORMATS
 # ==========================================
