@@ -12,6 +12,28 @@ from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_
 from utils.db_manager import check_evolution_trigger, check_condition_evolution
 from utils.machines import owns_tm, owned_tms, price_of
 from utils import learnsets
+from utils.duels import (can_field_a_side, describe_format, duel_roster,
+                         parse_duel_format)
+
+# The three battle engines each read their roster rows BY INDEX, and their column orders
+# already differ from one another - the PvP list carries `up.slot` in the middle, the
+# other two do not. Named here so `duel_roster` can be handed the caller's own shape
+# rather than renumbering twenty-nine positions across three engines to unify them.
+PVP_ROSTER_COLUMNS = (
+    "cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature, "
+    "cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, "
+    "cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, "
+    "cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, "
+    "cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender, cp.happiness")
+
+# The NPC and Warden engines share one shape, which has no slot and puts gender and
+# happiness where PvP puts slot.
+NPC_ROSTER_COLUMNS = (
+    "cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature, "
+    "cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, "
+    "cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, "
+    "cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, "
+    "cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness")
 from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
                              BATTLE_IDLE_TIMEOUT,
                              TM_CATALOG, type_badges, type_icon,
@@ -3816,14 +3838,17 @@ class PvPSwapMenu(discord.ui.View):
 
 class ChallengeView(discord.ui.View):
     def __init__(self, cog, challenger: discord.Member, opponent: discord.Member,
-                 level_cap=None):
+                 level_cap=None, solo=False):
         super().__init__(timeout=60) # 60 seconds to accept before the invite expires
         self.cog = cog
         self.challenger = challenger
         self.opponent = opponent
         # Carried on the invitation rather than asked for again on accept, so the
-        # format is part of what the opponent is agreeing to.
+        # format is part of what the opponent is agreeing to. Both halves travel
+        # together: a capped 1v1 that arrived as a capped six-on-six would be a
+        # different duel from the one that was agreed to.
         self.level_cap = level_cap
+        self.solo = solo
 
     @discord.ui.button(label="Accept Duel", style=discord.ButtonStyle.success, emoji="⚔️")
     async def accept_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3840,7 +3865,8 @@ class ChallengeView(discord.ui.View):
         
         # Hand off to the initialization engine
         await self.cog.initialize_pvp_battle(interaction.channel, self.challenger,
-                                             self.opponent, level_cap=self.level_cap)
+                                             self.opponent, level_cap=self.level_cap,
+                                             solo=self.solo)
         self.stop()
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
@@ -8226,22 +8252,27 @@ class Combat(commands.Cog):
     @checks.is_not_in_combat()
     @checks.partner_not_deployed()
     async def challenge_player(self, ctx, opponent: discord.Member = None,
-                               level: str = None):
+                               *, fmt: str = None):
         """
         Invite another researcher to a duel. `!battle @them 50` normalises both teams.
 
         An uncapped duel is what this has always been - everybody at their real levels -
         and it stays the default. A capped one puts both sides at 50 or 100 so the
         result is about the teams rather than about who has been playing longer.
+
+        `1v1` fights it with each side's SELECTED PARTNER and nothing behind it. The two
+        formats compose - `!battle @them 1v1 50` is a capped one-on-one - and they are
+        read by one parser, so the order they are typed in cannot matter.
         """
         challenger_id = str(ctx.author.id)
 
         if not opponent:
             return await ctx.send(
                 "⚠️ You must ping the researcher you wish to spar with! "
-                "Usage: `!battle @User`, or `!battle @User 50` for a level-capped duel.")
+                "Usage: `!battle @User`, `!battle @User 50` for a level-capped duel, "
+                "or `!battle @User 1v1` for partner against partner.")
 
-        level_cap, complaint = parse_level_cap(level)
+        level_cap, solo, complaint = parse_duel_format(fmt)
         if complaint:
             return await ctx.send(complaint)
 
@@ -8259,30 +8290,27 @@ class Combat(commands.Cog):
             if opponent_id in self.active_battles:
                 return await ctx.send(f"🛑 **{opponent.display_name}** is already deployed in an active field duel!")
             
-        # 2. ROSTER CHECK: Do both players have teams?
+        # 2. ROSTER CHECK: can BOTH sides field a team in THIS format?
+        #
+        # Asked against the format rather than against `user_party`, because in a 1v1
+        # the party is not what either side brings. Checking the roster and then
+        # fighting with the partner is how somebody agrees to a duel that cannot start.
         async with aiosqlite.connect(DB_FILE) as db:
-            scope, scope_params = await party_filter(db, challenger_id, alias=None)
-            async with db.execute(
-                    f"SELECT COUNT(*) FROM user_party WHERE user_id = ? {scope}",
-                    (challenger_id, *scope_params)) as cursor:
-                if (await cursor.fetchone())[0] == 0:
-                    return await ctx.send("⚠️ You must assign at least one specimen to your roster using `!party add 1 [Box Number]` before initiating a spar.")
-
-            scope, scope_params = await party_filter(db, opponent_id, alias=None)
-            async with db.execute(
-                    f"SELECT COUNT(*) FROM user_party WHERE user_id = ? {scope}",
-                    (opponent_id, *scope_params)) as cursor:
-                if (await cursor.fetchone())[0] == 0:
-                    return await ctx.send(f"⚠️ **{opponent.display_name}** does not have a fieldwork roster assembled yet.")
+            complaint = await can_field_a_side(db, challenger_id, solo=solo)
+            if complaint:
+                return await ctx.send(complaint)
+            complaint = await can_field_a_side(db, opponent_id, solo=solo,
+                                               who=opponent.display_name)
+            if complaint:
+                return await ctx.send(complaint)
 
         # 3. FIRE THE HANDSHAKE
-        view = ChallengeView(self, ctx.author, opponent, level_cap=level_cap)
+        view = ChallengeView(self, ctx.author, opponent, level_cap=level_cap, solo=solo)
 
         # The format is on the invitation, because agreeing to a duel at your own levels
-        # and agreeing to one at 50 are different things to agree to.
-        format_line = (f"\n📏 **Format:** all specimens set to **Level {level_cap}** "
-                       f"for this duel — no experience is earned."
-                       if level_cap else "")
+        # and agreeing to a capped one-on-one are different things to agree to.
+        described = describe_format(level_cap, solo)
+        format_line = f"\n{described}" if described else ""
 
         # Save the message to the view so the timeout function can edit it later
         view.message = await ctx.send(
@@ -8291,7 +8319,7 @@ class Combat(commands.Cog):
         )
 
     async def initialize_pvp_battle(self, channel, p1: discord.Member,
-                                    p2: discord.Member, level_cap=None):
+                                    p2: discord.Member, level_cap=None, solo=False):
         """
         Builds a shared memory state for a synchronous PvP duel.
 
@@ -8318,20 +8346,20 @@ class Combat(commands.Cog):
                         print(f"\n--- DEBUG: Extracting Roster for User {uid} ---")
                         
                         
-                        scope, scope_params = await party_filter(db, uid)
-                        async with db.execute(f"""
-                            SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
-                                cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                                cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                                cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender, cp.happiness
-                            FROM user_party up
-                            JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE up.user_id = ? {scope}
-                            ORDER BY up.slot ASC
-                        """, (uid, *scope_params)) as roster_cursor:
-                            rows = await roster_cursor.fetchall()
-                        print(f"DEBUG: Found {len(rows)} assigned specimens in user_party table.")
+                        # THE ONE PLACE THE FORMAT DECIDES ANYTHING. A 1v1 duel is this
+                        # same engine handed one row instead of six; nothing below here
+                        # knows or needs to know which format it is running.
+                        rows, roster_complaint = await duel_roster(
+                            db, uid, PVP_ROSTER_COLUMNS, solo=solo)
+                        if roster_complaint:
+                            # Both sides were checked before the invitation went out, so
+                            # reaching here means something changed in between - a
+                            # partner released, a roster emptied. Better to say so than
+                            # to start a duel with an empty side.
+                            await channel.send(roster_complaint)
+                            return
+                        print(f"DEBUG: Found {len(rows)} specimens for this duel "
+                              f"({'1v1' if solo else 'full roster'}).")
                         
                         player_team = []
                         for row in rows:
@@ -10701,22 +10729,20 @@ class Combat(commands.Cog):
                         }
                         compiled_team.append(compiled_member)
 
-                    # 3. Load the Player's Team (Identical to npc_encounter)
+                    # 3. Load the Player's Team, through the same door as every other
+                    # duel.
+                    #
+                    # **`solo=False` IS NOT A DEFAULT HERE, IT IS THE RULE.** A Warden
+                    # fight is a five-specimen gauntlet that gates a sector visa;
+                    # fought one-on-one it would be the cheapest thing on the
+                    # progression spine rather than the hardest. `!challenge` does not
+                    # parse a format at all, so there is no way to ask for 1v1 here -
+                    # and routing the roster through the shared door means a future
+                    # format cannot arrive by accident either.
                     player_team = []
-                    scope, scope_params = await party_filter(db, user_id)
-                    async with db.execute(f"""
-                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
-                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness
-                    FROM user_party up
-                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE up.user_id = ? {scope}
-                    ORDER BY up.slot ASC
-                """, (user_id, *scope_params)) as cursor:
-                        party_rows = await cursor.fetchall()
-                    if not party_rows:
+                    party_rows, roster_complaint = await duel_roster(
+                        db, user_id, NPC_ROSTER_COLUMNS, solo=False)
+                    if roster_complaint:
                         return await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a Warden!")
 
                     for row in party_rows:
@@ -11534,13 +11560,44 @@ class Combat(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     @checks.partner_not_deployed()
-    async def npc_encounter(self, ctx):
+    async def npc_encounter(self, ctx, *, fmt: str = None):
+        """
+        A duel against a generated rival team. `!npcduel 1v1` fights it one-on-one.
+
+        The rival is built to match what you bring, so a 1v1 faces a single specimen at
+        your partner's level rather than a team with five idle members.
+        """
         user_id = str(ctx.author.id)
-        
+
+        # A level cap is a PvP format - it exists so two players can meet on level
+        # terms, and the rival team is already generated at the player's own scale - so
+        # it is refused here rather than silently ignored.
+        level_cap, solo, complaint = parse_duel_format(fmt)
+        if complaint:
+            return await ctx.send(complaint)
+        if level_cap:
+            return await ctx.send(
+                f"⚠️ Level caps are for duels between researchers. A rival team is "
+                f"already generated to match your own levels — try `!npcduel` or "
+                f"`!npcduel 1v1`.")
+
         # Prevent parallel skirmishes
         if hasattr(self, 'active_battles') and user_id in self.active_battles:
             return await ctx.send("🛑 **Tactical Override:** You are already engaged in an active skirmish! Finish it or flee before starting a new one.")
-        
+
+
+        # ==========================================
+        # CAN THEY FIELD A TEAM AT ALL?
+        # ==========================================
+        # BEFORE the energy is spent. This check used to live inside the setup below,
+        # after `check_and_consume_energy` had already taken the toll - so a trainer with
+        # an empty roster paid for a duel that then refused to start. 1v1 makes that
+        # reachable far more often, because "you have not selected a partner" is a much
+        # easier state to be in than "you have no roster at all".
+        async with aiosqlite.connect(DB_FILE) as db:
+            complaint = await can_field_a_side(db, user_id, solo=solo)
+        if complaint:
+            return await ctx.send(complaint)
 
         # ==========================================
         # ECOLOGICAL STAMINA CHECK
@@ -11561,18 +11618,15 @@ class Combat(commands.Cog):
         try:
             async with aiosqlite.connect(DB_FILE) as db:
                 async with db.cursor() as cursor:
-                    # 1. Read the Player's Roster and calculate the Ecosystem Scale (Average Level)
-                    scope, scope_params = await party_filter(db, user_id)
-                    async with db.execute(f"""
-                    SELECT cp.level
-                    FROM user_party up
-                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                    WHERE up.user_id = ? {scope}
-                """, (user_id, *scope_params)) as cursor:
-                        party_data = await cursor.fetchall()
-                    
-                    if not party_data:
-                        await ctx.send("⚠️ You must assign at least one specimen to your fieldwork roster using `!party add 1 [Tag ID]` before engaging a rival team!")
+                    # 1. Read the Player's Roster and calculate the Ecosystem Scale
+                    #
+                    # ASKED IN THE DUEL'S FORMAT, so a 1v1 sizes the rival team to one.
+                    # Reading the party here and the partner later would generate five
+                    # rivals for a single specimen to face.
+                    party_data, roster_complaint = await duel_roster(
+                        db, user_id, "cp.level", solo=solo)
+                    if roster_complaint:
+                        await ctx.send(roster_complaint)
                         return
 
                     team_size = len(party_data)
@@ -11626,63 +11680,61 @@ class Combat(commands.Cog):
                         npc_team.append(combatant)
 
                     # 4. Load the Player's Team and Calculate their Exact Stats
+                    #
+                    # THE SAME QUESTION AS STEP 1, asked through the same door. These
+                    # were two separately-written copies of one roster query; had only
+                    # one of them learned about 1v1, the rival team would have been
+                    # sized to the party while the player fought with their partner.
                     player_team = []
-                    scope, scope_params = await party_filter(db, user_id)
-                    async with db.execute(f"""
-                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, cp.nature,
-                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed,
-                        cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness
-                    FROM user_party up
-                    JOIN caught_pokemon cp ON up.instance_id = cp.instance_id
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE up.user_id = ? {scope}
-                    ORDER BY up.slot ASC
-                """, (user_id, *scope_params)) as cursor:
-                        for row in await cursor.fetchall():
-                            tag, p_id, p_name, p_lvl, p_nature = row[0:5]
-                            p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
-                            p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
-                            raw_moves = [m for m in row[17:21] if m and m != 'none']
-                            p_moves = []
-                            for m_name in raw_moves:
-                                async with db.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,)) as cursor:
-                                    pp_row = await cursor.fetchone()
-                                pp_val = pp_row[0] if pp_row and pp_row[0] else 5
-                                p_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
+                    team_rows, roster_complaint = await duel_roster(
+                        db, user_id, NPC_ROSTER_COLUMNS, solo=solo)
+                    if roster_complaint:
+                        await ctx.send(roster_complaint)
+                        return
+                    for row in team_rows:
+                        tag, p_id, p_name, p_lvl, p_nature = row[0:5]
+                        p_ivs = {'hp': row[5], 'attack': row[6], 'defense': row[7], 'sp_atk': row[8], 'sp_def': row[9], 'speed': row[10]}
+                        p_evs = {'hp': row[11], 'attack': row[12], 'defense': row[13], 'sp_atk': row[14], 'sp_def': row[15], 'speed': row[16]}
+                        raw_moves = [m for m in row[17:21] if m and m != 'none']
+                        p_moves = []
+                        for m_name in raw_moves:
+                            async with db.execute("SELECT pp FROM base_moves WHERE name = ?", (m_name,)) as cursor:
+                                pp_row = await cursor.fetchone()
+                            pp_val = pp_row[0] if pp_row and pp_row[0] else 5
+                            p_moves.append({'name': m_name, 'pp': pp_val, 'max_pp': pp_val})
 
-                            # Fetch the player's elemental typing for STAB and Defense!
-                            async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (p_id,)) as cursor:
-                                p_types = [t[0] for t in await cursor.fetchall()]
+                        # Fetch the player's elemental typing for STAB and Defense!
+                        async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (p_id,)) as cursor:
+                            p_types = [t[0] for t in await cursor.fetchall()]
 
-                            is_shiny = row[21]
-                            held_item = row[22]
-                            gmax_factor = row[23]
-                            ability = row[24]
-                            experience = row[25]
-                            
-                            p_base = await fetch_base_stats(db, p_id)
-                            p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
-                            
-                            player_team.append({
-                                'instance_id': tag, 'pokedex_id': p_id, 'name': p_name, 'level': p_lvl,
-                                'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
-                                'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
-                                # --- Attach Symbiotic Gear and Genetics ---
-                                'held_item': held_item,
-                                'gmax_factor': gmax_factor,
-                                'ability': ability,
-                                'types': p_types,
-                                'experience': experience, # <--- INJECTED INTO MEMORY!
-                                'volatile_statuses': {},   # <--- GUARANTEES PARASITES HAVE A HOST!
-                                'ivs': p_ivs,
-                                'evs': p_evs,
-                                'gender': normalize_gender(row[26]),
-                                # Appended last in the SELECT, so it is read off the end
-                                # rather than renumbering every index above it.
-                                'happiness': row[-1]
-                            })
-                    
+                        is_shiny = row[21]
+                        held_item = row[22]
+                        gmax_factor = row[23]
+                        ability = row[24]
+                        experience = row[25]
+                        
+                        p_base = await fetch_base_stats(db, p_id)
+                        p_final_stats = calculate_stats(p_base, p_ivs, p_evs, p_lvl, p_nature)
+                        
+                        player_team.append({
+                            'instance_id': tag, 'pokedex_id': p_id, 'name': p_name, 'level': p_lvl,
+                            'max_hp': p_final_stats['hp'], 'current_hp': p_final_stats['hp'],
+                            'stats': p_final_stats, 'moves': p_moves, 'status_condition': None, 'is_shiny': is_shiny, 
+                            # --- Attach Symbiotic Gear and Genetics ---
+                            'held_item': held_item,
+                            'gmax_factor': gmax_factor,
+                            'ability': ability,
+                            'types': p_types,
+                            'experience': experience, # <--- INJECTED INTO MEMORY!
+                            'volatile_statuses': {},   # <--- GUARANTEES PARASITES HAVE A HOST!
+                            'ivs': p_ivs,
+                            'evs': p_evs,
+                            'gender': normalize_gender(row[26]),
+                            # Appended last in the SELECT, so it is read off the end
+                            # rather than renumbering every index above it.
+                            'happiness': row[-1]
+                        })
+                
                     # ==========================================
                     # KEY ITEM SCANNER
                     # ==========================================
