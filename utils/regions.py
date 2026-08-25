@@ -88,6 +88,23 @@ REGIONS = {
 REGION_ORDER = tuple(REGIONS)
 DEFAULT_REGION = 'kanto'
 
+# Which region a GENERATION belongs to, for the dex - "where is this species from" is a
+# question about the games it debuted in, not about the trainer.
+#
+# Hisui is deliberately absent: it is Generation 8's second setting and Galar is the one
+# a Generation 8 species is FROM. Hisui exists here as a destination, not an origin -
+# the same ruling utils/regions already makes by giving it no starters.
+REGION_BY_GENERATION = {REGIONS[key]['gen']: key for key in REGION_ORDER
+                        if key != 'hisui'}
+
+
+def region_of_generation(generation):
+    """The region key a species of this generation debuted in, or None."""
+    try:
+        return REGION_BY_GENERATION.get(int(generation))
+    except (TypeError, ValueError):
+        return None
+
 # The regions `!start` offers, which is every region somebody can be FROM. Derived from
 # the table rather than listed again, so a region added without starters cannot appear
 # in the registration menu as three empty options.

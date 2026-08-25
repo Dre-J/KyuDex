@@ -66,10 +66,11 @@ MAX_BASE_SPECIES = 1025
 NEEDED = ('pokemon_species.csv', 'pokemon_species_names.csv',
           'pokemon_species_flavor_text.csv', 'pokemon_egg_groups.csv',
           'egg_group_prose.csv', 'versions.csv', 'version_names.csv',
-          'version_groups.csv')
+          'version_groups.csv', 'pokemon.csv')
 
 DEX_TABLE = 'species_dex'
 FLAVOUR_TABLE = 'species_flavour'
+FORMS_TABLE = 'species_forms'
 
 DEX_SCHEMA = f"""
 CREATE TABLE {DEX_TABLE} (
@@ -82,6 +83,23 @@ CREATE TABLE {DEX_TABLE} (
     has_gender_differences INTEGER DEFAULT 0,
     egg_group_1            TEXT,
     egg_group_2            TEXT
+)
+"""
+
+# WHICH FORMS BELONG TO WHICH SPECIES, which nothing in this database has ever
+# recorded. `base_pokemon_species` holds all 1,344 rows flat: `deoxys-attack` sits beside
+# `deoxys-normal` with nothing joining them, and `wormadam-sandy` is not even numbered
+# above 10000 the way most forms are.
+#
+# It cannot be derived from the NAME either, and that is the trap worth naming: splitting
+# on the first hyphen works for `rotom-heat` and destroys `mr-mime`, `ho-oh`, `type-null`
+# and `jangmo-o`. PokeAPI's own pokemon.csv carries the mapping and agrees with every one
+# of our 1,344 ids, so it is imported rather than guessed at.
+FORMS_SCHEMA = f"""
+CREATE TABLE {FORMS_TABLE} (
+    pokedex_id      INTEGER PRIMARY KEY,
+    base_pokedex_id INTEGER NOT NULL,
+    is_default      INTEGER DEFAULT 0
 )
 """
 
@@ -213,6 +231,42 @@ def build(sources, species):
     return dex_rows, flavour_rows, problems
 
 
+def build_forms(sources, every_species):
+    """
+    Which base species each form belongs to. `every_species` is ALL of ours, not just
+    the base 1,025 - the whole point is to reach the 10xxx rows.
+    """
+    rows, problems = [], []
+    mapping = {int(row['id']): (int(row['species_id']), row['is_default'] == '1')
+               for row in sources['pokemon.csv']}
+
+    unknown = sorted(set(every_species) - set(mapping))
+    if unknown:
+        problems.append(f"{len(unknown)} of our species are not in pokemon.csv, so "
+                        f"their forms cannot be grouped: {unknown[:5]}")
+    for pokedex_id in sorted(every_species):
+        if pokedex_id not in mapping:
+            continue
+        base, default = mapping[pokedex_id]
+        if base not in every_species:
+            problems.append(f"form {pokedex_id} belongs to species {base}, which this "
+                            f"database does not have")
+            continue
+        rows.append((pokedex_id, base, 1 if default else 0))
+
+    # Every group needs exactly one default, or the form button has no home to return to.
+    defaults = {}
+    for pokedex_id, base, default in rows:
+        if default:
+            defaults[base] = defaults.get(base, 0) + 1
+    grouped = {base for _p, base, _d in rows}
+    missing = sorted(base for base in grouped if defaults.get(base, 0) != 1)
+    if missing:
+        problems.append(f"{len(missing)} species do not have exactly one default form: "
+                        f"{missing[:5]}")
+    return rows, problems
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--db', default=DB, help="path to ecosystem.db")
@@ -230,11 +284,15 @@ def main():
     species = {row[0] for row in conn.execute(
         "SELECT pokedex_id FROM base_pokemon_species WHERE pokedex_id <= ?",
         (MAX_BASE_SPECIES,))}
-    print(f"\n  base species in this database : {len(species)}")
+    every_species = {row[0] for row in conn.execute(
+        "SELECT pokedex_id FROM base_pokemon_species")}
+    print(f"\n  base species in this database : {len(species)} "
+          f"({len(every_species)} counting forms)")
 
     have = {name: conn.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (name,)).fetchone()[0] > 0 for name in (DEX_TABLE, FLAVOUR_TABLE)}
+        (name,)).fetchone()[0] > 0
+        for name in (DEX_TABLE, FLAVOUR_TABLE, FORMS_TABLE)}
     for name, present in have.items():
         rows = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0] if present \
             else 0
@@ -250,6 +308,8 @@ def main():
     print(f"  source files read            : {len(sources)}")
 
     dex_rows, flavour_rows, problems = build(sources, species)
+    form_rows, form_problems = build_forms(sources, every_species)
+    problems += form_problems
 
     versions = {row[2] for row in flavour_rows}
     print(f"\n  dex rows      : {len(dex_rows)}")
@@ -264,6 +324,9 @@ def main():
         print(f"  longest entry : {len(longest[4])} chars")
     pairs = sum(1 for row in dex_rows if row[8])
     print(f"  species with two egg groups: {pairs}")
+    grouped = len({row[1] for row in form_rows})
+    print(f"  form rows     : {len(form_rows)} across {grouped} species "
+          f"({len(form_rows) - grouped} are alternate forms)")
 
     if problems:
         print("\n  PROBLEMS — nothing was changed:")
@@ -285,8 +348,10 @@ def main():
         conn.execute("BEGIN")
         conn.execute(f"DROP TABLE IF EXISTS {DEX_TABLE}")
         conn.execute(f"DROP TABLE IF EXISTS {FLAVOUR_TABLE}")
+        conn.execute(f"DROP TABLE IF EXISTS {FORMS_TABLE}")
         conn.execute(DEX_SCHEMA)
         conn.execute(FLAVOUR_SCHEMA)
+        conn.execute(FORMS_SCHEMA)
         conn.executemany(
             f"INSERT INTO {DEX_TABLE} (pokedex_id, genus, generation, hatch_counter, "
             f"base_happiness, is_baby, has_gender_differences, egg_group_1, "
@@ -296,8 +361,15 @@ def main():
             f"(pokedex_id, version_id, version, generation, flavour) "
             f"VALUES (?, ?, ?, ?, ?)", flavour_rows)
         # Every read is "one species, in version order", so that is the index.
+        conn.executemany(
+            f"INSERT INTO {FORMS_TABLE} "
+            f"(pokedex_id, base_pokedex_id, is_default) VALUES (?, ?, ?)", form_rows)
         conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{FLAVOUR_TABLE}_species "
                      f"ON {FLAVOUR_TABLE} (pokedex_id, version_id)")
+        # The form button asks "everything that shares my base", which without this is a
+        # scan of all 1,344 rows on every press.
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{FORMS_TABLE}_base "
+                     f"ON {FORMS_TABLE} (base_pokedex_id)")
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -308,7 +380,9 @@ def main():
 
     dex_count = conn.execute(f"SELECT COUNT(*) FROM {DEX_TABLE}").fetchone()[0]
     flavour_count = conn.execute(f"SELECT COUNT(*) FROM {FLAVOUR_TABLE}").fetchone()[0]
-    print(f"\n  done. {dex_count} dex rows, {flavour_count} flavour entries.")
+    form_count = conn.execute(f"SELECT COUNT(*) FROM {FORMS_TABLE}").fetchone()[0]
+    print(f"\n  done. {dex_count} dex rows, {flavour_count} flavour entries, "
+          f"{form_count} forms mapped.")
     print("  The bot picks this up on its next lookup — no restart needed.")
     conn.close()
     return 0
