@@ -1734,6 +1734,63 @@ EV_LOWERING_BERRIES = {
 EV_BERRY_HAPPINESS = 10
 MAX_HAPPINESS = 255
 
+# ==========================================
+# 🧬 THE SIX EFFORT VALUES
+# ==========================================
+# The caught_pokemon columns, spelled exactly as the table spells them.
+#
+# THIS EXISTS BECAUSE THE SPELLING IS THE BUG. The EV field-mission return looked its
+# specimen's current value up with `locals()` and a chain of `.replace()` calls meant to
+# turn the column name into the local it had been unpacked into. The chain ran the wrong
+# way - it expanded abbreviations instead of contracting them - and `ev_speed` came out
+# as `ev_speeded`. Five of the six missions raised a KeyError, the transaction rolled
+# back, and the specimen stayed in active_deployments with no way out.
+#
+# Twenty lines further down the same file, the vitamin path did it correctly with a
+# hand-written dict. Two copies, one right and one wrong, which is this repo's oldest
+# story. There is one copy now.
+EV_COLUMNS = ('ev_hp', 'ev_attack', 'ev_defense', 'ev_sp_atk', 'ev_sp_def', 'ev_speed')
+
+EV_TOTAL_CAP = 510
+EV_STAT_CAP = 252
+
+
+def ev_spread(hp, attack, defense, sp_atk, sp_def, speed):
+    """
+    One specimen's effort values as {column: value}.
+
+    Takes them positionally in EV_COLUMNS order, which is the order every SELECT in this
+    repo lists them in, so a caller unpacks its row and hands the six straight over.
+    """
+    return dict(zip(EV_COLUMNS, (hp, attack, defense, sp_atk, sp_def, speed)))
+
+
+def ev_room(spread, column):
+    """
+    How much room is left, as (overall, in this stat).
+
+    Both caps in one place: 510 across the six and 252 in any one of them. The field
+    missions and the vitamins were each applying their own copy of both numbers.
+    """
+    return (max(0, EV_TOTAL_CAP - sum(spread.values())),
+            max(0, EV_STAT_CAP - spread.get(column, 0)))
+
+
+def ev_label(column):
+    """`ev_sp_atk` -> `SP_ATK`, for a line a player reads."""
+    return str(column or '').replace('ev_', '', 1).upper()
+
+
+# A mission naming a column that does not exist is a KeyError at the moment somebody
+# recalls their team, which is the worst place to find out. Checked at import instead.
+_mission_targets = {row['target_ev'] for row in FIELD_MISSIONS.values()
+                    if row.get('category') == 'ev' and row.get('target_ev')}
+assert _mission_targets <= set(EV_COLUMNS), (
+    f"field missions target columns that do not exist: "
+    f"{sorted(_mission_targets - set(EV_COLUMNS))}")
+assert _mission_targets == set(EV_COLUMNS), (
+    f"no field mission trains: {sorted(set(EV_COLUMNS) - _mission_targets)}")
+
 # Berries are not merchandise - none of the forty-one already here is purchasable, and
 # these eleven are not either. They arrive the way every other berry does, as a catch
 # drop rolled against CONSUMABLE_DATABASE, which is precisely why adding them to that
