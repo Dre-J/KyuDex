@@ -6,6 +6,7 @@ import aiosqlite
 import datetime
 import random
 import math
+import traceback
 import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
                              EV_LOWERING_BERRIES, EV_BERRY_HAPPINESS, MAX_HAPPINESS,
@@ -32,7 +33,9 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              MAX_SOUP, MAX_SOUP_COST, MAX_MUSHROOMS,
                              MAX_SOUP_MUSHROOMS, NATURE_MINTS, NATURE_MULTIPLIERS,
                              NEUTRAL_NATURES, mint_for,
-                             EQUIPMENT_CATALOG, resolve_item_key)
+                             EQUIPMENT_CATALOG, resolve_item_key,
+                             EV_TOTAL_CAP, EV_STAT_CAP,
+                             ev_spread, ev_room, ev_label)
 from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
                           record_use, used_today, expedition_yield, describe_yield)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
@@ -4625,16 +4628,21 @@ class Ecology(commands.Cog):
                     elif mission_data["category"] == "ev":
                         target_stat = mission_data["target_ev"]
                         raw_ev_gain = int(capped_hours * mission_data["ev_hr"])
-                        current_total_evs = ev_hp + ev_atk + ev_def + ev_spa + ev_spd + ev_spe
-                        current_stat_value = locals()[target_stat.replace("ev_", "ev_").replace("atk", "attack").replace("spa", "sp_atk").replace("spd", "sp_def").replace("spe", "speed")]
-                        overall_room = max(0, 510 - current_total_evs)
-                        stat_room = max(0, 252 - current_stat_value)
+                        # Was `locals()` and a chain of `.replace()` calls trying to turn
+                        # the column name back into the local it had been unpacked into.
+                        # The chain expanded abbreviations rather than contracting them,
+                        # so `ev_speed` became `ev_speeded` and five of the six missions
+                        # raised a KeyError - which rolled the whole recall back and left
+                        # the specimen in active_deployments with no way out.
+                        spread = ev_spread(ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe)
+                        current_stat_value = spread[target_stat]
+                        overall_room, stat_room = ev_room(spread, target_stat)
                         actual_ev_gain = min(raw_ev_gain, overall_room, stat_room)
-                        ev_label = target_stat.replace('ev_', '').upper()
-                        
+                        stat_label = ev_label(target_stat)
+
                         if actual_ev_gain > 0:
                             ev_updates[target_stat] = current_stat_value + actual_ev_gain
-                            gains_text = f"gained **+{actual_ev_gain} {ev_label} EVs**!"
+                            gains_text = f"gained **+{actual_ev_gain} {stat_label} EVs**!"
                         else:
                             gains_text = f"is already maxed out! *(No EVs gained)*"
 
@@ -4707,7 +4715,12 @@ class Ecology(commands.Cog):
                 
             except Exception as e:
                 await db.rollback()
-                print(f"Error processing return: {e}")
+                # WITH THE TRACEBACK. `{e}` on a KeyError prints the key and nothing
+                # else - the whole console line for this bug was `'ev_speeded'`, with no
+                # file, no line and no clue which of the six missions it came from. It
+                # took a player noticing that EV jobs failed and experience jobs did not.
+                print(f"Error processing return: {e!r}")
+                traceback.print_exc()
                 return await interaction.followup.send("❌ A database error occurred while recalling your team.")
             
             embed = discord.Embed(title="⛺ Field Missions Concluded", description="\n\n".join(results), color=discord.Color.green())
@@ -4826,10 +4839,12 @@ class Ecology(commands.Cog):
 
             # 4. Enforce Strict EV Caps
             # Map the exact current value based on the column name
-            stat_map = {"ev_hp": ev_hp, "ev_attack": ev_atk, "ev_defense": ev_def, "ev_sp_atk": ev_spa, "ev_sp_def": ev_spd, "ev_speed": ev_spe}
+            # This dict was written out here and NOT in the field-mission return twenty
+            # lines up, which is why one of the two worked. Both ask ev_spread now.
+            stat_map = ev_spread(ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe)
             current_stat_value = stat_map[target_stat_col]
             current_total_evs = sum(stat_map.values())
-            stat_label = target_stat_col.replace("ev_", "").upper()
+            stat_label = ev_label(target_stat_col)
 
             # Calculate how much room there is in the direction this item pushes.
             if lowering:
@@ -4841,13 +4856,15 @@ class Ecology(commands.Cog):
                 if stat_room <= 0:
                     return await ctx.send(f"🌱 **{name.capitalize()}** has no {stat_label} EVs left to shed.")
             else:
-                overall_room = max(0, 510 - current_total_evs)
-                stat_room = max(0, 252 - current_stat_value)
+                # The same two caps the field missions apply, from the same place. They
+                # were written out here as 510 and 252 and again up there, which is how
+                # one of the two paths could have been changed alone.
+                overall_room, stat_room = ev_room(stat_map, target_stat_col)
 
                 if overall_room <= 0:
-                    return await ctx.send(f"🧬 **{name.capitalize()}** has reached its absolute genetic limit (510 Total EVs). It cannot consume any more vitamins.")
+                    return await ctx.send(f"🧬 **{name.capitalize()}** has reached its absolute genetic limit ({EV_TOTAL_CAP} Total EVs). It cannot consume any more vitamins.")
                 if stat_room <= 0:
-                    return await ctx.send(f"💪 **{name.capitalize()}** has already maxed out its {item_name.title()} potential (252 EVs).")
+                    return await ctx.send(f"💪 **{name.capitalize()}** has already maxed out its {item_name.title()} potential ({EV_STAT_CAP} EVs).")
 
             # 5. Calculate ACTUAL consumption
             # Each item moves the stat by 10. How many of them fit in the room left?

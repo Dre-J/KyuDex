@@ -207,12 +207,34 @@ def main():
     # the table afterwards. Uniqueness is not checked here because `build_rows` dedupes,
     # so a check for it could not fail - it was there and a negative control walked
     # straight through it.
-    existing = {(row[0], row[1]) for row in conn.execute(
-        f"SELECT foreign_name, language_tag FROM {TABLE}")}
-    dropped = existing - {(f, t) for f, _e, t, _d in rows}
+    # Keyed on the SPECIES and the language, not on the spelling. Keying on the spelling
+    # treated a CORRECTION as a loss: PokeAPI had Iron Boulder's and Iron Crown's Chinese
+    # names filed under the wrong scripts - 鐵磐岩 is Traditional and was tagged
+    # Simplified - and has since fixed them. Re-running is how that fix arrives, and the
+    # guard was refusing to let it.
+    #
+    # What must never happen is a species LOSING a language it has a name in. That is
+    # what this asks now, and a thin or truncated source still trips it.
+    #
+    # Both sets are read in ONE pass. The first draft rebuilt the spelling set inside the
+    # comprehension further down, which re-ran the query for every one of the 9,225 rows
+    # and turned a one-second check into a four-minute one.
+    covered, spellings = set(), set()
+    for english, tag, foreign in conn.execute(
+            f"SELECT english_name, language_tag, foreign_name FROM {TABLE}"):
+        covered.add((english, tag))
+        spellings.add((foreign, tag))
+
+    dropped = covered - {(english, tag) for _f, english, tag, _d in rows}
     if dropped:
-        problems.append(f"{len(dropped)} existing name(s) would be lost, e.g. "
-                        f"{sorted(dropped)[:3]}")
+        problems.append(f"{len(dropped)} species would lose a language they have a "
+                        f"name in, e.g. {sorted(dropped)[:3]}")
+
+    changed = [(english, tag) for foreign, english, tag, _d in rows
+               if (foreign, tag) not in spellings and (english, tag) in covered]
+    if changed:
+        print(f"  spellings corrected upstream : {len(changed)} "
+              f"({', '.join(f'{e} {t}' for e, t in sorted(changed)[:4])})")
 
     if problems:
         print("\n  PROBLEMS — nothing was changed:")
