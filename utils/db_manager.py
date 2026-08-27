@@ -1,7 +1,9 @@
 import sqlite3
 # Assuming you define DB_FILE = "ecosystem.db" in constants.py
 from utils.constants import (DB_FILE, SPECIAL_SKIES, CONDITION_TRIGGERS,
-                             RITUAL_TRIGGERS) 
+                             RITUAL_TRIGGERS, NATURE_MULTIPLIERS,
+                             personality_of, stat_rule_holds)
+from utils.formulas import calculate_real_stat 
 
 def get_connection():
     """A simple helper so you never have to type the DB name repeatedly."""
@@ -80,8 +82,79 @@ async def check_condition_evolution(db, pokedex_id, counters):
     return None
 
 
+DECIDED_ELSEWHERE_COLUMNS = ('gender', 'biome', 'stat_rule', 'personality')
+
+
+async def evolution_context(db, instance_id, guild_id=None):
+    """
+    Everything about a SPECIMEN that the rulebook gates on, as one dict.
+
+    Passed as a single argument rather than four more keyword parameters, because
+    check_evolution_trigger already takes seven and the two call sites would each have
+    grown four more lines of plumbing for conditions that always travel together.
+
+    Returns {} for a specimen with no id - a wild encounter, or a test - which is the
+    right answer rather than a guess: every rule that gates on one of these refuses when
+    it cannot be checked.
+    """
+    if not instance_id:
+        return {}
+
+    async with db.execute(
+            "SELECT cp.gender, cp.level, cp.nature, cp.pokedex_id, "
+            "cp.iv_attack, cp.iv_defense, cp.ev_attack, cp.ev_defense "
+            "FROM caught_pokemon cp WHERE cp.instance_id = ?",
+            (instance_id,)) as cursor:
+        row = await cursor.fetchone()
+    if not row:
+        return {'instance_id': instance_id}
+
+    gender, level, nature, pokedex_id, iv_atk, iv_def, ev_atk, ev_def = row
+
+    # TYROGUE'S BASE STATS ARE EQUAL, so the comparison is decided entirely by IVs, EVs
+    # and nature. Base stats alone would make every Tyrogue a Hitmontop.
+    async with db.execute(
+            "SELECT stat_name, base_value FROM base_pokemon_stats "
+            "WHERE pokedex_id = ? AND stat_name IN ('attack', 'defense')",
+            (pokedex_id,)) as cursor:
+        bases = {name: value for name, value in await cursor.fetchall()}
+
+    stats = {}
+    if bases:
+        # NATURE_MULTIPLIERS is (raised, lowered) rather than {stat: multiplier} - a
+        # neutral nature is (None, None) - so the 1.1 and 0.9 are applied by name here
+        # rather than looked up. Getting this wrong the other way round crashed on the
+        # first Cosmoem: `.get` on a tuple.
+        raised, lowered = NATURE_MULTIPLIERS.get(str(nature or '').lower(),
+                                                 (None, None))
+        for name, iv, ev in (('attack', iv_atk, ev_atk), ('defense', iv_def, ev_def)):
+            raw = calculate_real_stat(name, bases.get(name, 0), iv or 0, ev or 0,
+                                      level or 1)
+            if name == raised:
+                raw = int(raw * 1.1)
+            elif name == lowered:
+                raw = int(raw * 0.9)
+            stats[name] = int(raw)
+
+    biome = None
+    if guild_id:
+        async with db.execute(
+                "SELECT active_biome FROM servers WHERE guild_id = ?",
+                (str(guild_id),)) as cursor:
+            found = await cursor.fetchone()
+        biome = (found[0] if found else None) or None
+
+    return {
+        'instance_id': instance_id,
+        'gender': str(gender or '').strip().lower() or None,
+        'biome': str(biome or '').strip().lower() or None,
+        'stats': stats,
+    }
+
+
 async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
-                                  held_item=None, moves=None, region=None):
+                                  held_item=None, moves=None, region=None,
+                                  specimen=None):
     """
     The central rulebook for biological metamorphosis, and now actually the one in use.
 
@@ -130,10 +203,20 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
     # forms existed. That is what lets the migration be applied to a running bot.
     has_region = await has_column(db, 'evolution_rules', 'region')
     region_column = 'er.region' if has_region else "'' AS region"
+
+    # The four columns migrate_decided_evolutions.py adds, guarded the same way `region`
+    # is so this keeps answering on a database that has not had it run. Selected as a
+    # group because they arrived as a group; a partially-migrated table would be a
+    # database somebody edited by hand.
+    has_decided = await has_column(db, 'evolution_rules', 'gender')
+    decided_columns = (", ".join(f"er.{name}" for name in DECIDED_ELSEWHERE_COLUMNS)
+                       if has_decided
+                       else ", ".join(f"NULL AS {name}"
+                                      for name in DECIDED_ELSEWHERE_COLUMNS))
     async with db.execute(f"""
         SELECT er.evolved_species_id, s.name, er.min_level, er.min_happiness,
                er.held_item, er.time_of_day, er.known_move, er.known_move_type,
-               {region_column}
+               {region_column}, {decided_columns}
         FROM evolution_rules er
         JOIN base_pokemon_species s ON er.evolved_species_id = s.pokedex_id
         WHERE er.base_species_id = ? AND er.trigger_name = 'level-up'
@@ -141,6 +224,11 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         candidates = await cursor.fetchall()
 
     where = str(region or '').strip().lower()
+    context = specimen or {}
+    its_gender = str(context.get('gender') or '').strip().lower()
+    its_biome = str(context.get('biome') or '').strip().lower()
+    its_stats = context.get('stats') or {}
+    its_personality = personality_of(context.get('instance_id'))
 
     # THE MOST SPECIFIC MATCHING RULE WINS, which is not the same as the first one.
     # Rockruff has three rules, all at level 25, differing only by sky: day, night and
@@ -150,7 +238,17 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
     # one, and a rule demanding an item outranks one that does not.
     def specificity(rule):
         (_id, _name, min_level, min_happiness, req_item, req_when, req_move, req_type,
-         req_region) = rule
+         req_region, req_gender, req_biome, req_stat, req_personality) = rule
+        # A BIOME IS A NARROWER REGION and ranks beside one; a demand about the specimen
+        # ITSELF - its sex, its stats, the value it was born with - is narrower still,
+        # because two specimens standing in the same place can answer differently.
+        #
+        # In practice none of the four species this was built for needs the tie broken:
+        # a Burmy is male or female, a Tyrogue's Attack is above, below or level with its
+        # Defence, and Wurmple's two buckets are two halves of one value. The ordering is
+        # here for the species that mixes a gated rule with an ungated one later.
+        own = ((1 if req_gender else 0) + (1 if req_stat else 0)
+               + (1 if req_personality is not None else 0))
         # A named move is the narrowest demand of all, a move's ELEMENT next, then a held
         # item, then a sky. Eevee is why the first two are separate: it has both a Sylveon
         # rule wanting a Fairy move and Espeon/Umbreon rules wanting only friendship and a
@@ -161,7 +259,9 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         # fell to row order and the Alolan form was unreachable. A rule naming a region
         # has already been matched against the trainer's below, so if it is still a
         # candidate here it is the more specific answer by definition.
-        return (1 if req_region else 0,
+        return (own,
+                1 if req_region else 0,
+                1 if req_biome else 0,
                 2 if req_move else (1 if req_type else 0),
                 1 if req_item else 0,
                 2 if req_when in SPECIAL_SKIES else (1 if req_when else 0),
@@ -171,7 +271,8 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
     candidates.sort(key=specificity, reverse=True)
 
     for (evolved_id, name, min_level, min_happiness, req_item, req_when,
-         req_move, req_move_type, req_region) in candidates:
+         req_move, req_move_type, req_region, req_gender, req_biome, req_stat,
+         req_personality) in candidates:
         # SOMEWHERE ELSE ENTIRELY. A rule naming a region is simply not available to a
         # trainer who is not in it, which is what leaves the ordinary Marowak reachable
         # everywhere and the Alolan one reachable only from Alola.
@@ -189,13 +290,31 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         if req_move_type and req_move_type not in elements:
             continue
 
+        # THE FOUR THE GAMES DECIDE SOMEWHERE THIS TABLE COULD NOT SEE. Each refuses
+        # when it cannot be checked rather than passing: a Burmy whose sex is unknown
+        # must not become a Wormadam by default, and a Tyrogue whose stats could not be
+        # computed must not become a Hitmontop because the comparison silently held.
+        if req_gender and str(req_gender).strip().lower() != its_gender:
+            continue
+        if req_biome and str(req_biome).strip().lower() != its_biome:
+            continue
+        if req_stat and not stat_rule_holds(req_stat, its_stats):
+            continue
+        if req_personality is not None and req_personality != its_personality:
+            continue
+
         # A REGION IS A REQUIREMENT THAT WAS CHECKED, and has to count as one. The clause
         # below refuses a rule whose real condition this schema cannot see; a
         # region-gated rule's condition is one it CAN see and has just met, so omitting
         # it here would make every regional form unreachable again by a second route -
         # `dartrix -> decidueye-hisui` carries no item, no sky and no move.
+        # The four above are requirements that WERE checked, for the same reason a region
+        # is: `burmy -> mothim` carries no item, no sky, no move and no region, and
+        # counting only the old four would refuse it as unverifiable after it had just
+        # been verified.
         checkable = (bool(req_item) or bool(req_move) or bool(req_move_type)
-                     or bool(req_region))
+                     or bool(req_region) or bool(req_gender) or bool(req_biome)
+                     or bool(req_stat) or req_personality is not None)
 
         if min_level is not None:
             if level < min_level:

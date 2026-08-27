@@ -6,7 +6,7 @@ import random
 from utils.constants import DB_FILE, current_skies
 from utils.prefs import trainer_skies
 from utils.regions import current_region
-from utils.db_manager import check_evolution_trigger
+from utils.db_manager import check_evolution_trigger, evolution_context
 from utils.formulas import get_xp_requirement
 from utils.accounts import levelup_pings_enabled
 
@@ -169,7 +169,13 @@ class PassiveExperienceCog(commands.Cog):
                             # becomes a Marowak or an Alolan one. Read the same way the
                             # skies above are, so both conditions this rulebook gates on
                             # arrive from the same shape of call.
-                            region=await current_region(db, user_id))
+                            region=await current_region(db, user_id),
+                            # And what the SPECIMEN is: its sex, its real Attack and
+                            # Defence, the habitat around it, the value it was caught
+                            # with. Burmy, Tyrogue and Wurmple are decided by these.
+                            specimen=await evolution_context(
+                                db, instance_id,
+                                message.guild.id if message.guild else None))
 
                         if match:
                             evolved_id = match[0]
