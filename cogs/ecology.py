@@ -54,6 +54,9 @@ from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language
 from utils.forms import (describe_options, form_item, is_held_form_item, is_fused,
                          perform)
 from utils.species import pretty_species
+from utils.db_manager import check_evolution_trigger, evolution_context
+from utils.prefs import trainer_skies
+from utils.regions import current_region
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
 from utils.directives import credit_evolution
@@ -4472,42 +4475,53 @@ class Ecology(commands.Cog):
             
             # The Everstone Bypass Shield
             if held_item != 'everstone':
-                async with db.execute("SELECT evolved_species_id, trigger_name, min_level, min_happiness FROM evolution_rules WHERE base_species_id = ?", (pokedex_id,)) as cursor:
-                    evo_options = await cursor.fetchall()
+                # THE SHARED RULEBOOK, which this command carried its own copy of. The
+                # copy read `trigger == 'level-up' and req_level and new_level >=
+                # req_level` and took the first row that matched, which meant a Rare
+                # Candy could not produce ANY evolution the rest of the bot can: no
+                # region, no sky, no held item, no known move, and none of the four
+                # conditions added for Burmy, Tyrogue, Wurmple and Cosmoem. It also
+                # checked a `happiness` trigger this table does not have, and its
+                # `req_level and` meant a rule with no minimum level never fired.
+                #
+                # This is the third copy of that same broken loop to be removed. The
+                # first was in cogs/experience.py.
+                match = await check_evolution_trigger(
+                    db, pokedex_id, new_level, happiness,
+                    await trainer_skies(db, ctx.author.id,
+                                        ctx.guild.id if ctx.guild else None),
+                    held_item, [], region=await current_region(db, user_id),
+                    specimen=await evolution_context(
+                        db, instance_id, ctx.guild.id if ctx.guild else None))
 
-                for evolved_id, trigger, req_level, req_happy in evo_options:
-                    can_evolve = False
-                    if trigger == 'level-up' and req_level and new_level >= req_level: can_evolve = True
-                    elif trigger == 'happiness' and req_happy and happiness >= req_happy: can_evolve = True
+                if match:
+                    evolved_id = match[0]
+                    # Fetch the evolved species data to map traits
+                    async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
+                        evo_data = await cursor.fetchone()
+
+                    if evo_data:
+                        new_species_name, ev_standards, ev_hidden = evo_data
+                        new_species_name = new_species_name.capitalize()
                         
-                    if can_evolve:
-                        # Fetch the evolved species data to map traits
-                        async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
-                            evo_data = await cursor.fetchone()
-                            
-                        if evo_data:
-                            new_species_name, ev_standards, ev_hidden = evo_data
-                            new_species_name = new_species_name.capitalize()
-                            
-                            # Trait Mapping Logic
-                            is_ha = (current_ability == current_hidden)
-                            slot_index = 0
-                            
-                            # Find which slot their standard ability was in (0 or 1)
-                            if not is_ha and current_standards:
-                                st_list = [a.strip() for a in current_standards.split(",")]
-                                if current_ability in st_list:
-                                    slot_index = st_list.index(current_ability)
-                                    
-                            # Assign the mapped ability
-                            if is_ha and ev_hidden:
-                                new_ability = ev_hidden
-                            else:
-                                ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
-                                new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+                        # Trait Mapping Logic
+                        is_ha = (current_ability == current_hidden)
+                        slot_index = 0
+                        
+                        # Find which slot their standard ability was in (0 or 1)
+                        if not is_ha and current_standards:
+                            st_list = [a.strip() for a in current_standards.split(",")]
+                            if current_ability in st_list:
+                                slot_index = st_list.index(current_ability)
+                                
+                        # Assign the mapped ability
+                        if is_ha and ev_hidden:
+                            new_ability = ev_hidden
+                        else:
+                            ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
+                            new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
 
-                            possible_evolution = {"id": evolved_id, "name": new_species_name, "ability": new_ability}
-                            break
+                        possible_evolution = {"id": evolved_id, "name": new_species_name, "ability": new_ability}
 
             if possible_evolution:
                 view = EvolutionConfirmView(
@@ -4651,45 +4665,52 @@ class Ecology(commands.Cog):
                     # ==========================================
                     # The Everstone Bypass Shield
                     if new_level > current_level and held_item != 'everstone':
-                        async with db.execute("SELECT evolved_species_id, trigger_name, min_level, min_happiness FROM evolution_rules WHERE base_species_id = ?", (pokedex_id,)) as cursor:
-                            evo_options = await cursor.fetchall()
-                            
-                        for evolved_id, trigger, req_level, req_happy in evo_options:
-                            can_evolve = False
-                            if trigger == 'level-up' and req_level and new_level >= req_level: can_evolve = True
-                            elif trigger == 'happiness' and req_happy and happiness >= req_happy: can_evolve = True
-                                
-                            if can_evolve:
-                                async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
-                                    evo_data = await cursor.fetchone()
-                                    
-                                if evo_data:
-                                    new_species_name, ev_standards, ev_hidden = evo_data
-                                    new_species_name = new_species_name.capitalize()
-                                    
-                                    # Trait Mapping
-                                    is_ha = (current_ability == current_hidden)
-                                    slot_index = 0
-                                    
-                                    if not is_ha and current_standards:
-                                        st_list = [a.strip() for a in current_standards.split(",")]
-                                        if current_ability in st_list:
-                                            slot_index = st_list.index(current_ability)
-                                            
-                                    if is_ha and ev_hidden:
-                                        new_ability = ev_hidden
-                                    else:
-                                        ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
-                                        new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+                        # THE SHARED RULEBOOK. This was the second copy of the loop
+                        # that cogs/experience.py used to carry: no region, no sky,
+                        # no held item, no known move, and none of the four gates
+                        # added for Burmy, Tyrogue, Wurmple and Cosmoem. A specimen
+                        # that levelled on a field mission could evolve into things
+                        # no other route would have given it, and could not evolve
+                        # into things every other route would.
+                        match = await check_evolution_trigger(
+                            db, pokedex_id, new_level, happiness,
+                            await trainer_skies(db, user_id, guild_id),
+                            held_item, [],
+                            region=await current_region(db, user_id),
+                            specimen=await evolution_context(
+                                db, instance_id, guild_id))
 
-                                    pending_evolutions.append({
-                                        "instance_id": instance_id,
-                                        "old_name": name.capitalize(),
-                                        "new_pokedex_id": evolved_id,
-                                        "new_species_name": new_species_name,
-                                        "new_ability": new_ability
-                                    })
-                                break 
+                        if match:
+                            evolved_id = match[0]
+                            async with db.execute("SELECT name, standard_abilities, hidden_ability FROM base_pokemon_species WHERE pokedex_id = ?", (evolved_id,)) as cursor:
+                                evo_data = await cursor.fetchone()
+                                
+                            if evo_data:
+                                new_species_name, ev_standards, ev_hidden = evo_data
+                                new_species_name = new_species_name.capitalize()
+                                
+                                # Trait Mapping
+                                is_ha = (current_ability == current_hidden)
+                                slot_index = 0
+                                
+                                if not is_ha and current_standards:
+                                    st_list = [a.strip() for a in current_standards.split(",")]
+                                    if current_ability in st_list:
+                                        slot_index = st_list.index(current_ability)
+                                        
+                                if is_ha and ev_hidden:
+                                    new_ability = ev_hidden
+                                else:
+                                    ev_st_list = [a.strip() for a in ev_standards.split(",")] if ev_standards else ["unknown"]
+                                    new_ability = ev_st_list[slot_index] if slot_index < len(ev_st_list) else ev_st_list[0]
+
+                                pending_evolutions.append({
+                                    "instance_id": instance_id,
+                                    "old_name": name.capitalize(),
+                                    "new_pokedex_id": evolved_id,
+                                    "new_species_name": new_species_name,
+                                    "new_ability": new_ability
+                                })
                                 
                     if elapsed_hours >= 4.0 and mission_data.get("item_pool"):
                         found_item = random.choice(mission_data["item_pool"])

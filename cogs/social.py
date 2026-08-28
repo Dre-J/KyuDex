@@ -14,6 +14,7 @@ from utils.levels import (contribution_for_level, energy_bank_cap,
                           trainer_level)
 from utils.regions import DEFAULT_REGION, region_label, trainer_region
 from utils.roster import party_filter
+from utils.db_manager import trade_evolution
 from profile_card import build_profile_card, render_profile_card_async
 import io
 from utils.roster import bump_to_end_of_box
@@ -560,23 +561,14 @@ class ActiveTradeView(discord.ui.View):
             # false and every trade evolution fired with empty hands: a Scyther became a
             # Scizor on any trade at all, no Metal Coat involved. `item_name` is kept in
             # the read because a trade rule is allowed to name one, and one day might.
-            await cursor.execute(
-                "SELECT evolved_species_id, COALESCE(held_item, item_name) "
-                "FROM evolution_rules WHERE base_species_id = ? AND trigger_name = 'trade'",
-                (base_pokedex_id,)
-            )
-            db_evo = await cursor.fetchone()
-
-            if db_evo:
-                potential_dex_id = db_evo[0]
-                required_item = db_evo[1]
-
-                if required_item:
-                    if held_item_clean == str(required_item).strip().lower():
-                        new_dex_id = potential_dex_id
-                        consume_item = True
-                else:
-                    new_dex_id = potential_dex_id
+            # `trade_evolution` lives in utils/db_manager.py beside the level-up and
+            # stone rulebooks, so all three halves of "what does this evolve into" are
+            # asked in one place and a test can drive the real query rather than a copy.
+            # This used to be a `fetchone()` here - see that function for what it cost.
+            traded = await trade_evolution(db, base_pokedex_id, held_item_clean)
+            if traded:
+                new_dex_id, consumed = traded
+                consume_item = bool(consumed)
 
         # Step 3: Standardize the output (FIXED: Using LOWER to prevent case-mismatches)
         if new_species_name and not new_dex_id:
