@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import hashlib as _hashlib
 import re as _re
 import discord
 # ==========================================
@@ -3409,6 +3410,85 @@ RITUAL_TRIGGERS = frozenset({
 })
 RITUAL_MIN_LEVEL = 40
 RITUAL_KEYWORD = 'ritual'
+
+
+# ==========================================
+# 🎲 WHAT THE GAMES DECIDE SOMEWHERE THIS SCHEMA COULD NOT SEE
+# ==========================================
+# Five species have two or more level-up rules that share every recorded condition and
+# disagree about the outcome, because the games settle them with something
+# evolution_rules had no column for. Four of them are settled here:
+#
+#   cosmoem  - the time of day        (time_of_day, which already existed)
+#   burmy    - gender, and the cloak  (gender + biome)
+#   tyrogue  - Attack against Defence (stat_rule)
+#   wurmple  - a hidden value fixed at capture (personality)
+#
+# Eevee is deliberately not among them: Leafeon and Glaceon are decided by standing next
+# to a particular rock and Sylveon by affection, none of which this world has, and its
+# stone routes already work.
+
+# ------------------------------------------------------------------
+# WURMPLE'S COIN, WHICH IS NOT A COIN FLIP
+# ------------------------------------------------------------------
+# The games fix Wurmple's answer at capture, in the personality value, and re-checking it
+# later gives the same answer forever. A roll at the moment of evolution would be a
+# different mechanic wearing the same name: a player who saw "Silcoon" and lost the
+# window could retry and get Cascoon.
+#
+# The instance id is this world's personality value - assigned once at capture, never
+# rewritten - so hashing it reproduces exactly the property that matters. sha1 rather
+# than hash(): Python salts hash() per process, so the same specimen would have answered
+# differently after every restart.
+PERSONALITY_BUCKETS = 2
+
+
+def personality_of(instance_id):
+    """
+    The bucket a specimen's own id falls into, 0 or 1, or None if it has no id.
+
+    Stable across restarts, across retries, and across the specimen being traded - it is
+    a property of the specimen, not of the moment.
+    """
+    key = str(instance_id or '').strip()
+    if not key:
+        return None
+    return _hashlib.sha1(key.encode('utf-8')).digest()[0] % PERSONALITY_BUCKETS
+
+
+# ------------------------------------------------------------------
+# TYROGUE'S THREE, WHICH ARE A COMPARISON RATHER THAN A VALUE
+# ------------------------------------------------------------------
+# Attack beats Defence, Defence beats Attack, or they are level. Tyrogue's base stats are
+# equal, so the answer comes entirely from its IVs, EVs and nature - which means the
+# caller has to hand over COMPUTED stats, not base ones.
+STAT_RULES = ('attack>defense', 'defense>attack', 'attack=defense')
+
+
+def stat_rule_holds(rule, stats):
+    """
+    Whether a `left>right` / `left=right` comparison is true of these stats.
+
+    False when either stat is missing rather than raising: a caller that could not
+    compute them has not met the condition, and a rule whose condition cannot be
+    checked must not fire.
+    """
+    rule = str(rule or '').strip().lower()
+    for symbol in ('>', '<', '='):
+        if symbol in rule:
+            left, _, right = rule.partition(symbol)
+            break
+    else:
+        return False
+    first = (stats or {}).get(left.strip())
+    second = (stats or {}).get(right.strip())
+    if first is None or second is None:
+        return False
+    if symbol == '>':
+        return first > second
+    if symbol == '<':
+        return first < second
+    return first == second
 
 
 def requested_ritual(text):
