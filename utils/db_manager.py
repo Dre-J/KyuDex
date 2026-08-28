@@ -381,6 +381,44 @@ async def stone_evolution(db, pokedex_id, item_name, region=None):
         return await cursor.fetchone()
 
 
+async def trade_evolution(db, pokedex_id, held_item=None):
+    """
+    What a traded specimen becomes, as (evolved_species_id, item to consume) or None.
+
+    ALL the rules, and the one that MATCHES. The trade path read `fetchone()` and then
+    tested whatever it got, which is first-row-wins - and Clamperl has two trade rules
+    differing only by held item: a Deep Sea Tooth for Huntail and a Deep Sea Scale for
+    Gorebyss. The Huntail rule has the lower id, so a Clamperl traded holding a Scale was
+    compared against the Tooth, failed, and evolved into nothing. Gorebyss was
+    unreachable by the only route that produces it.
+
+    A rule DEMANDING the item outranks one that does not, so a Scyther holding a Metal
+    Coat still becomes a Scizor and one holding nothing is not handed a different
+    evolution by accident.
+
+    The requirement lives in `held_item`; `item_name` is NULL for every trade rule in the
+    table today, and is read anyway because a trade rule is allowed to name one.
+    """
+    worn = str(held_item or '').strip().lower().replace(' ', '-')
+    # `await db.execute(...)` rather than `async with`, because the trade path hands this
+    # a CURSOR rather than a connection. Both answer `await .execute(...)` with something
+    # that has `.fetchall()`; only a connection answers the context-manager form.
+    result = await db.execute(
+        "SELECT evolved_species_id, COALESCE(held_item, item_name) "
+        "FROM evolution_rules WHERE base_species_id = ? AND trigger_name = 'trade' "
+        "ORDER BY id", (pokedex_id,))
+    rules = await result.fetchall()
+
+    unconditional = None
+    for evolved_id, required in rules:
+        if required:
+            if worn and worn == str(required).strip().lower():
+                return evolved_id, required
+        elif unconditional is None:
+            unconditional = evolved_id
+    return (unconditional, None) if unconditional is not None else None
+
+
 async def ritual_routes(db, pokedex_id):
     """
     Every ritual route out of one species, in a DEFINED order.
