@@ -11,7 +11,8 @@ from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
                            snapshot)
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
-from utils.roster import locate_specimen, looks_like_partner, bump_to_end_of_box
+from utils.roster import (locate_specimen, looks_like_partner, bump_to_end_of_box,
+                          box_number_of)
 from utils.filters import (_sort_direction, _tokenise, filter_help,
                            resolve_query)
 from utils.machines import (owns_tm, owned_tms, grant_tm, find_tm, search_tms,
@@ -1437,40 +1438,28 @@ class Economy(commands.Cog):
     @global_market.command(name="sell")
     @checks.has_started()
     @checks.is_authorized()
-    async def global_market_sell(self, ctx, tag_id: str, price: int):
-        """Lists a specimen on the global market for 48 hours."""
+    async def global_market_sell(self, ctx, target: str, price: int):
+        """
+        Lists a specimen on the global market for 48 hours.
+
+        The target is a box number, a tag, `partner` or `new`. It used to be a box
+        number or a tag through two hand-written branches, the second of which took the
+        FIRST row an `instance_id LIKE` matched without noticing it had matched several
+        - so a short prefix listed whichever specimen happened to sort first.
+        """
         user_id = str(ctx.author.id)
-        
+
         if price <= 0:
             return await ctx.send("⚠️ You must request a conservation grant of at least 1 Eco-Token.")
-        
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                # 1. Verify Ownership & Retrieve Specimen Data (Box Number or UUID)
-                if tag_id.isdigit() and len(tag_id) <= 6:
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, s.name, cp.level, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp
-                            JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        ) SELECT instance_id, name, level FROM Roster WHERE box_number = ?
-                    """, (user_id, int(tag_id))) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                else:
-                    async with db.execute("""
-                        SELECT cp.instance_id, s.name, cp.level 
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                    """, (f"{tag_id}%", user_id)) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                
-                if not pokemon_data:
-                    return await ctx.send("❌ Could not locate that specimen in your survey notebook.")
-                    
+                # 1. Verify Ownership & Retrieve Specimen Data
+                pokemon_data, problem = await locate_specimen(
+                    db, user_id, target, "cp.instance_id, s.name, cp.level")
+                if problem:
+                    return await ctx.send(problem)
+
                 actual_tag, name, level = pokemon_data
                 
                 # 2. Security Check: Prevent selling active party members
@@ -1944,15 +1933,22 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.is_authorized()
     @checks.is_not_in_combat()
     @checks.is_not_in_trade()
-    async def unequip_item(self, ctx, instance_id: str = None):
-        """Takes gear back. With no target it uses your selected partner."""
+    async def unequip_item(self, ctx, target: str = None):
+        """
+        Takes gear back. With no target it uses your selected partner.
+
+        Renamed from `instance_id`: it has gone through the shared locator for a while
+        and has accepted a box number all along, but the parameter name is what
+        `!help unequip` prints, so the signature was still telling trainers to find a
+        tag. Nothing about the behaviour changed here.
+        """
         user_id = str(ctx.author.id)
 
         try:
             async with aiosqlite.connect(DB_FILE) as db:
                 # 1. Which specimen - the selected partner unless one is named.
                 specimen, problem = await locate_specimen(
-                    db, user_id, instance_id,
+                    db, user_id, target,
                     "cp.instance_id, s.name, cp.held_item")
                 if problem:
                     return await ctx.send(problem)

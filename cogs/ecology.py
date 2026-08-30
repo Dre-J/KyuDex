@@ -46,7 +46,8 @@ from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
                            starters_for)
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
-                          parse_candy_request, parse_box_numbers, MAX_BULK_BOXES)
+                          parse_candy_request, parse_box_numbers, MAX_BULK_BOXES,
+                          box_number_of, ROSTER_CTE)
 from utils.filters import filter_help, resolve_query
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
@@ -1479,11 +1480,66 @@ class SurveyPaginator(discord.ui.View):
         embed = await self.generate_embed()
         await interaction.response.edit_message(embed=embed, view=self)
 
+def pc_line(row):
+    """
+    One `!pc` row as `(line, box_number)`.
+
+    THE PAIR IS THE POINT. The Copy button copies box numbers for the specimens on the
+    page, and the only way it can copy the wrong ones is for the numbers to fall out of
+    step with the lines. Returning both from one function, off one row, makes that
+    impossible rather than merely unlikely - and makes it testable without a database,
+    which the loop this replaces was not.
+
+    Expects the column order `!pc` selects: name, level, is_shiny, instance_id, nickname,
+    custom_tag, then six IVs, then box_number, gmax, gender, nature.
+    """
+    species_name, level, is_shiny, tag_id, nickname, custom_tag = row[0:6]
+    iv_tuple = row[6:12]
+    box_number, gmax, gender, _nature = row[12:16]
+
+    iv_percentage = int((sum(iv_tuple) / 186.0) * 100)
+
+    display_name = (f'"{nickname}" ({species_name.capitalize()})' if nickname
+                    else species_name.capitalize())
+
+    # BADGES ONLY WHEN THERE IS SOMETHING TO SAY. Every line used to open with a
+    # herb - 🌿 for "not shiny" - which is a badge for the absence of a property,
+    # so a roster of five hundred ordinary specimens was five hundred identical
+    # emoji doing no work at all. The star stays because a shiny IS worth marking;
+    # the herb is gone, and the column it was padding closes up behind it.
+    marks = ""
+    if is_shiny:
+        marks += "🌟 "
+    if gmax:
+        # The red circle was a stand-in for a G-Max factor. The real emoji exists.
+        marks += f"{GMAX_ICON} "
+
+    tag_display = f" `[{custom_tag}]`" if custom_tag else ""
+    gender_display = {'M': " ♂", 'F': " ♀"}.get(gender, "")
+
+    line = (f"`#{box_number:>3}` {marks}**{display_name}**{gender_display} "
+            f"· Lv {level} · IV {iv_percentage}% · `{tag_id[:8]}`{tag_display}")
+    return line, box_number
+
+
 class InventoryPaginator(discord.ui.View):
-    def __init__(self, ctx, rescued_pokemon, tokens, applied=None):
+    def __init__(self, ctx, rescued_pokemon, tokens, applied=None, box_numbers=None):
         super().__init__(timeout=180)
         self.ctx = ctx
         self.rescued_pokemon = rescued_pokemon
+        # THE BOX NUMBERS AS DATA, one per line, in the same order.
+        #
+        # The Copy button used to recover them by running a regex over the RENDERED
+        # lines - `\*\*#(\d+)\*\*`, looking for a bold `**#123**`. `!pc` renders the box
+        # number in backticks and puts the bold around the NAME, so the pattern could
+        # never match and the button answered "Could not extract any Box numbers from
+        # this page" every single time.
+        #
+        # Re-parsing the display was the mistake, not the pattern: it made the line
+        # format load-bearing for a feature that has nothing to do with formatting, so
+        # any change to how a line looks silently broke copying. The numbers are known
+        # at the point the line is built, so they are carried instead of recovered.
+        self.box_numbers = list(box_numbers or [])
         self.tokens = tokens
         # What the filters ACTUALLY resolved to. Held here rather than stitched onto the
         # embed by the caller, because the caller only ever saw page one - every later
@@ -1568,30 +1624,30 @@ class InventoryPaginator(discord.ui.View):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("This isn't your survey notebook!", ephemeral=True)
         
-        # Get the currently displayed chunk
+        # The box numbers for the page on show, taken from the list the view was handed
+        # rather than scraped back out of the rendered text. See __init__ for why.
         start = self.current_page * self.items_per_page
         end = start + self.items_per_page
-        chunk = self.rescued_pokemon[start:end]
 
-        if not chunk:
+        if not self.rescued_pokemon[start:end]:
             return await interaction.response.send_message("No specimens on this page to copy.", ephemeral=True)
 
-        # Extract the Box numbers using Regex
-        box_numbers = []
-        for line in chunk:
-            # Looks for **#123** and extracts the 123
-            match = re.search(r'\*\*#(\d+)\*\*', line)
-            if match:
-                box_numbers.append(match.group(1))
+        box_numbers = [str(n) for n in self.box_numbers[start:end]]
 
-        if box_numbers:
-            output_string = ", ".join(box_numbers)
-            await interaction.response.send_message(
-                f"📋 **Trade Helper:**\nCopy and paste this exact string into your Trade Modals:\n\n`{output_string}`", 
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message("Could not extract any Box numbers from this page.", ephemeral=True)
+        if not box_numbers:
+            # Reachable only if a caller built the view without box numbers. Says which
+            # of the two things went wrong rather than blaming the page, because the old
+            # message - "could not extract any" - sent people looking at their filters
+            # when the fault was never theirs.
+            return await interaction.response.send_message(
+                "⚠️ This list was built without box numbers, so there is nothing to copy. "
+                "That is a bug rather than something you did.", ephemeral=True)
+
+        output_string = ", ".join(box_numbers)
+        await interaction.response.send_message(
+            f"📋 **Trade Helper:**\nCopy and paste this exact string into your Trade Modals:\n\n`{output_string}`",
+            ephemeral=True
+        )
 
     @discord.ui.button(label="🗑️ Close Survey", style=discord.ButtonStyle.danger, row=1)
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2926,7 +2982,13 @@ class Ecology(commands.Cog):
     @commands.command(name="intervene", aliases=["respond"])
     @checks.has_started()
     @checks.is_authorized()
-    async def intervene(self, ctx, tag_id: str):
+    async def intervene(self, ctx, target: str):
+        """
+        Send a specimen against the server's active hazard.
+
+        Takes a box number, a tag, `partner` or `new` - the shared vocabulary. It took a
+        box number or a tag through two hand-written queries before.
+        """
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
         
@@ -2944,41 +3006,20 @@ class Ecology(commands.Cog):
             current_score = server_data[1]
             
             # 2. Verify ownership and fetch the deployed Pokemon's types
-            if tag_id.isdigit() and len(tag_id) <= 6:
-                async with db.execute("""
-                    WITH Roster AS (
-                        SELECT cp.pokedex_id, cp.instance_id, s.name, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                    )
-                    -- 🚨 ADDED r.instance_id HERE
-                    SELECT r.name, t.type_name, r.instance_id 
-                    FROM Roster r
-                    JOIN base_pokemon_types t ON r.pokedex_id = t.pokedex_id
-                    WHERE r.box_number = ?
-                """, (user_id, int(tag_id))) as cursor:
-                    rows = await cursor.fetchall()
-            else:
-                async with db.execute("""
-                    -- 🚨 ADDED cp.instance_id HERE
-                    SELECT s.name, t.type_name, cp.instance_id 
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    JOIN base_pokemon_types t ON s.pokedex_id = t.pokedex_id
-                    WHERE cp.instance_id LIKE ? AND cp.user_id = ?
-                """, (f"{tag_id}%", user_id)) as cursor:
-                    rows = await cursor.fetchall()
-                    
-            if not rows:
-                await ctx.send("❌ You don't have that specimen in your survey notebook.")
-                return
-                
-            poke_name = rows[0][0]
-            actual_id = rows[0][2] # 🚨 Extract the newly added Instance ID!
-            poke_types = [row[1] for row in rows]
+            # WHICH SPECIMEN, then WHAT ELEMENTS IT IS - two questions, asked separately.
+            # They used to be one query written twice, once per way of naming a specimen,
+            # and the tag branch took the first row of a `LIKE` that could match several.
+            specimen, problem = await locate_specimen(
+                db, user_id, target, "cp.instance_id, cp.pokedex_id, s.name")
+            if problem:
+                return await ctx.send(problem)
+
+            actual_id, poke_dex_id, poke_name = specimen
+
+            async with db.execute(
+                    "SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?",
+                    (poke_dex_id,)) as cursor:
+                poke_types = [row[0] for row in await cursor.fetchall()]
             
             # ==========================================
             # 🚨 NEW: DEPLOYMENT LOCKOUT CHECK
@@ -3632,41 +3673,20 @@ class Ecology(commands.Cog):
                 f"🎒 No specimens match **{summary}**.\n"
                 f"*Run `!pc` with no filters to see everything, or `!pc .help`.*")
 
-        lines = []
-        for row in rows:
-            species_name, level, is_shiny, tag_id, nickname, custom_tag = row[0:6]
-            iv_tuple = row[6:12]
-            box_number, gmax, gender, nature = row[12:16]
-
-            iv_total = sum(iv_tuple)
-            iv_percentage = int((iv_total / 186.0) * 100)
-
-            display_name = f'"{nickname}" ({species_name.capitalize()})' if nickname else species_name.capitalize()
-
-            # BADGES ONLY WHEN THERE IS SOMETHING TO SAY. Every line used to open with a
-            # herb - 🌿 for "not shiny" - which is a badge for the absence of a property,
-            # so a roster of five hundred ordinary specimens was five hundred identical
-            # emoji doing no work at all. The star stays because a shiny IS worth marking;
-            # the herb is gone, and the column it was padding closes up behind it.
-            marks = ""
-            if is_shiny:
-                marks += "🌟 "
-            if gmax:
-                # The red circle was a stand-in for a G-Max factor. The real emoji exists.
-                marks += f"{GMAX_ICON} "
-
-            tag_display = f" `[{custom_tag}]`" if custom_tag else ""
-            gender_display = {'M': " ♂", 'F': " ♀"}.get(gender, "")
-
-            line = (f"`#{box_number:>3}` {marks}**{display_name}**{gender_display} "
-                    f"· Lv {level} · IV {iv_percentage}% · `{tag_id[:8]}`{tag_display}")
-            lines.append(line)
+        # ONE ROW IN, THE LINE AND ITS NUMBER OUT - and the two can only ever come from
+        # the same row, which is what stops the Copy button naming a different specimen
+        # than the line above it. Building the two lists side by side in a loop here was
+        # correct but not CHECKABLE: nothing could tell the pairs had stayed in step
+        # without standing up a database and a Discord context around it.
+        pairs = [pc_line(row) for row in rows]
+        lines = [line for line, _number in pairs]
+        box_numbers = [number for _line, number in pairs]
 
         # What ACTUALLY took effect, not what was typed. A filter that resolved to
         # something other than the player expected - `.gender f` becoming `F`, a mention
         # becoming an ID - is only debuggable if the line says so. Handed to the view so
         # it survives paging, which it did not when the caller patched page one's footer.
-        view = InventoryPaginator(ctx, lines, tokens, applied)
+        view = InventoryPaginator(ctx, lines, tokens, applied, box_numbers)
         await ctx.send(embed=view.create_embed(), view=view)
 
     @commands.command(name="catch")
@@ -4315,7 +4335,13 @@ class Ecology(commands.Cog):
     @commands.command(name="view", aliases=["inspect", "i", "I", "info"])
     @checks.has_started()
     @checks.is_authorized()
-    async def view_pokemon(self, ctx, tag_id: str = None):
+    async def view_pokemon(self, ctx, target: str = None):
+        """
+        Open the box browser on one specimen.
+
+        Takes a box number, a tag, `partner` or `new`. Unchanged in what it accepts -
+        the four branches that used to decide it by hand are now the shared locator.
+        """
         user_id = str(ctx.author.id)
         
         async with aiosqlite.connect(DB_FILE) as db:
@@ -4340,52 +4366,24 @@ class Ecology(commands.Cog):
             active_partner_id = partner_data[0] if partner_data else None
             
             # 2. Determine the Target Index
-            target_index = 1
-            
-            if not tag_id:
-                if not active_partner_id:
-                    return await ctx.send("You don't have an Active Partner! Use `!view [Number]`.")
-                    
-                # Synchronized Roster CTE
-                async with db.execute("""
-                    WITH Roster AS (
-                        SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                    ) SELECT field_number FROM Roster WHERE instance_id = ?
-                """, (user_id, active_partner_id)) as cursor:
-                    result = await cursor.fetchone()
-                target_index = result[0] if result else 1
-                
-            elif tag_id.lower() in ["new", "latest", "last"]:
-                target_index = total_pokemon # The very last one!
-                
-            # THE FIX: Ensure it's treated as a box index ONLY if it's less than 6 digits!
-            # (Since UUID tags are 8 characters long)
-            elif tag_id.isdigit() and len(tag_id) <= 6:
-                target_index = int(tag_id)
-                if target_index < 1 or target_index > total_pokemon:
-                    return await ctx.send(f"⚠️ Invalid index. You only have {total_pokemon} intact specimens.")
-                    
-            else:
-                # It's a UUID tag! Synchronized Roster CTE for perfect indexing.
-                async with db.execute("""
-                    WITH Roster AS (
-                        SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                    ) SELECT field_number FROM Roster WHERE instance_id LIKE ?
-                """, (user_id, f"{tag_id}%")) as cursor:
-                    res = await cursor.fetchone()
-                if not res:
-                    return await ctx.send(f"⚠️ Could not find an intact specimen matching Tag ID `{tag_id}`.")
-                target_index = res[0]
+            #
+            # WHICH specimen is the shared locator's question, and it already answers
+            # every spelling this used to handle in four hand-written branches - one of
+            # which numbered the roster with its own copy of the CTE. What the paginator
+            # needs on top of that is the box NUMBER, which is a second question with a
+            # second answer, so it is asked separately rather than by a fifth CTE.
+            specimen, problem = await locate_specimen(
+                db, user_id, target, "cp.instance_id")
+            if problem:
+                return await ctx.send(problem)
+
+            target_index = await box_number_of(db, user_id, specimen[0])
+            if target_index is None:
+                # Findable but not in the box: away on a field mission or on the GTS.
+                # The browser pages over box numbers, so there is no page to open.
+                return await ctx.send(
+                    "📦 That specimen is deployed or listed on the GTS, so it has no "
+                    "box number to open. Recall it first, or name another.")
 
         # 3. Launch the Paginator!
         view = PokemonPaginator(self.bot, user_id, target_index, total_pokemon, active_partner_id)

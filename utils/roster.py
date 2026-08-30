@@ -219,6 +219,53 @@ async def bump_to_end_of_box(db, *instance_ids):
             "WHERE instance_id = ?", (instance_id,))
 
 
+# ==========================================
+# WHAT A BOX NUMBER COUNTS OVER
+# ==========================================
+# The numbering itself, written once. `ROW_NUMBER() OVER(ORDER BY cp.rowid ASC)` with
+# these two exclusions was pasted into a dozen commands - `!moves` and `!moveset` carry
+# three copies EACH - and every copy is a chance for one command to number the box
+# differently from the next. A trainer whose `!moves 4` and `!pc` disagree about what
+# box 4 is has no way to tell which one is lying.
+#
+# Kept as a format string rather than a function so the caller still chooses its own
+# columns and its own WHERE, which is the only thing that legitimately differs between
+# them.
+ROSTER_CTE = """
+    WITH Roster AS (
+        SELECT {columns}, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) AS box_number
+        FROM caught_pokemon cp
+        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
+        WHERE cp.user_id = ?
+        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+    )
+"""
+
+
+async def box_number_of(db, user_id, instance_id):
+    """
+    Where this specimen sits in its owner's box, or None.
+
+    None is a real answer, not a failure: a specimen away on a field mission or sitting
+    on the GTS is excluded from the numbering, so it HAS no box number to show. A caller
+    displaying one should print the tag instead rather than inventing a number.
+
+    Split out from `locate_specimen` rather than folded into it because the two are asked
+    at different moments - the locator answers "which specimen", this answers "what do I
+    call it in front of the player" - and because several callers want the second without
+    the first, having already got the specimen some other way.
+    """
+    if not instance_id:
+        return None
+    async with db.execute(
+            ROSTER_CTE.format(columns="cp.instance_id")
+            + " SELECT box_number FROM Roster WHERE instance_id = ?",
+            (user_id, instance_id)) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
 async def locate_specimen(db, user_id, target, columns):
     """
     One of a trainer's specimens, from a box number, a tag prefix, or nothing at all.
@@ -276,17 +323,10 @@ async def locate_specimen(db, user_id, target, columns):
 
     target = str(target)
     if target.isdigit() and len(target) <= 6:
-        async with db.execute(f"""
-            WITH Roster AS (
-                SELECT {columns}, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                FROM caught_pokemon cp
-                JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                WHERE cp.user_id = ?
-                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-            )
-            SELECT * FROM Roster WHERE box_number = ?
-        """, (user_id, int(target))) as cursor:
+        async with db.execute(
+                ROSTER_CTE.format(columns=columns)
+                + " SELECT * FROM Roster WHERE box_number = ?",
+                (user_id, int(target))) as cursor:
             found = await cursor.fetchone()
         if not found:
             return None, f"❌ You have nothing in box **{int(target)}**."
