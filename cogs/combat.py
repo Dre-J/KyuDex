@@ -798,6 +798,7 @@ def seed_on_arrival(pokemon, state, owner_str="", magic_room=False):
 # here reads exactly as it did - the point of the move was to stop a SECOND copy being
 # written in economy.py, not to rename anything.
 from utils.roster import (PARTNER_WORDS, parse_learn_request, locate_specimen,
+                          box_number_of, ROSTER_CTE,
                           active_party, party_names, party_counts, set_active_party,
                           clean_party_name, has_party_column, DEFAULT_PARTY,
                           PARTY_SLOTS, MAX_PARTIES)
@@ -8203,43 +8204,35 @@ class Combat(commands.Cog):
     @checks.is_not_in_trade()
     @checks.is_not_in_combat()
     @checks.partner_not_deployed()
-    async def tutor_move(self, ctx, instance_id: str, *, move_name: str):
-        """Stimulates dormant genetic pathways to teach a specimen a new move."""
+    async def tutor_move(self, ctx, target: str, *, move_name: str):
+        """
+        Stimulates dormant genetic pathways to teach a specimen a new move.
+
+        The target is a BOX NUMBER, a tag, `partner` or `new` - the vocabulary every
+        other command already accepts. It used to be a tag and nothing else, with its own
+        `instance_id LIKE ?` lookup written out here: `!tutor 4 giga-drain` was refused
+        outright, so the one identifier a trainer can actually read off `!pc` was the one
+        this command would not take.
+        """
         user_id = str(ctx.author.id)
         requested_move = move_name.lower().replace(" ", "-")
 
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                
+
                 # ==========================================
-                # 1. SPECIMEN RETRIEVAL (Partial Tag Matching)
+                # 1. SPECIMEN RETRIEVAL
                 # ==========================================
-                # We append the % wildcard to the user's input
-                search_tag = f"{instance_id}%"
-                
-                async with db.execute("""
-                    SELECT cp.instance_id, cp.pokedex_id, s.name, cp.level, 
-                           cp.move_1, cp.move_2, cp.move_3, cp.move_4
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ? AND cp.instance_id LIKE ?
-                """, (user_id, search_tag)) as cursor:
-                    # Fetch ALL matching rows
-                    matching_specimens = await cursor.fetchall()
-                
-                if len(matching_specimens) == 0:
-                    return await ctx.send(f"⚠️ **Asset Not Found:** You do not own a specimen with a tag starting with `{instance_id}`.")
-                    
-                if len(matching_specimens) > 1:
-                    # If the prefix is too short and matches multiple IDs, force them to be specific!
-                    matched_tags = ", ".join([f"`{row[0][:6]}` ({row[2].capitalize()})" for row in matching_specimens])
-                    return await ctx.send(f"🔍 **Ambiguous Tag:** `{instance_id}` matches multiple specimens in your PC:\n{matched_tags}\n\nPlease provide a few more characters of the ID to confirm the target.")
-                    
-                # If exactly ONE match is found, we safely unpack it
-                specimen_data = matching_specimens[0]
-                
-                # We overwrite the user's short input with the actual full database ID!
-                actual_instance_id = specimen_data[0] 
+                # THE SHARED LOCATOR. What was here was a fifth spelling of it, and the
+                # only one that could not read a box number.
+                specimen_data, problem = await locate_specimen(
+                    db, user_id, target,
+                    "cp.instance_id, cp.pokedex_id, s.name, cp.level, "
+                    "cp.move_1, cp.move_2, cp.move_3, cp.move_4")
+                if problem:
+                    return await ctx.send(problem)
+
+                actual_instance_id = specimen_data[0]
                 _, p_id, species_name, current_level, m1, m2, m3, m4 = specimen_data
                 
                 # Filter out empty slots to see how many active moves they actually have
@@ -11255,78 +11248,35 @@ class Combat(commands.Cog):
     @commands.command(name="moves", aliases=["attacks"])
     @checks.has_started()
     @checks.is_authorized()
-    async def quick_moves(self, ctx, tag_id: str = None):
-        """Quickly view a specimen's equipped behaviors."""
+    async def quick_moves(self, ctx, target: str = None):
+        """
+        Quickly view a specimen's equipped behaviors.
+
+        Took a box number, `partner` or `new` through three near-identical copies of the
+        roster CTE written out inline, and refused a tag outright. All three are the
+        shared locator, which also accepts the tag.
+        """
         user_id = str(ctx.author.id)
-        
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                pokemon_data = None
-                
-                # 1. Resolve Target (Empty or Partner)
-                if not tag_id or tag_id.lower() in ["partner", "lead", "active"]:
-                    async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                        partner_data = await cursor.fetchone()
+                pokemon_data, problem = await locate_specimen(
+                    db, user_id, target,
+                    "cp.instance_id, cp.level, s.name, "
+                    "cp.move_1, cp.move_2, cp.move_3, cp.move_4")
+                if problem:
+                    return await ctx.send(problem)
 
-                    if partner_data and partner_data[0]:
-                        # Fetch the partner directly using their UUID
-                        async with db.execute("""
-                            WITH Roster AS (
-                                SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                                    ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                                FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                                WHERE cp.user_id = ?
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                            ) 
-                            SELECT * FROM Roster WHERE instance_id = ?
-                        """, (user_id, partner_data[0])) as cursor:
-                            pokemon_data = await cursor.fetchone()
-                    else:
-                        return await ctx.send("⚠️ You don't have an Active Partner equipped! Specify a Box Number.")
+                actual_tag, level, name, m1, m2, m3, m4 = pokemon_data
+                # Asked separately, because a specimen the locator can find is not always
+                # one the box numbers reach - a deployed partner has no box number, and
+                # printing a made-up one would be worse than printing none.
+                box_number = await box_number_of(db, user_id, actual_tag)
 
-                # 2. Fast Database Query for "Latest"
-                elif tag_id.lower() in ["new", "latest", "last"]:
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        ) 
-                        SELECT * FROM Roster ORDER BY box_number DESC LIMIT 1
-                    """, (user_id,)) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                    
-                # 3. Box Number Lookup
-                elif tag_id.isdigit() and len(tag_id) <= 6:
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, cp.level, s.name, cp.move_1, cp.move_2, cp.move_3, cp.move_4,
-                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        ) 
-                        SELECT * FROM Roster WHERE box_number = ?
-                    """, (user_id, int(tag_id))) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                
-                else:
-                    return await ctx.send("⚠️ Please use a valid Box Number (e.g., `!moves 4`) or leave it blank for your partner.")
-                    
-                if not pokemon_data:
-                    return await ctx.send("❌ Could not locate that specimen. Are they currently deployed?")
-                
-                # Unpack the 8 variables we selected in the CTE
-                actual_tag, level, name, m1, m2, m3, m4, box_number = pokemon_data
-                
                 # 4. Build the Lightweight UI
                 embed = discord.Embed(title=f"⚔️ Active Behaviors: {name.capitalize()}", color=discord.Color.green())
-                embed.description = f"**Level {level}** | Box `#{box_number}` | Tag ID: `{actual_tag[:8]}`"
+                where = f"Box `#{box_number}`" if box_number else "*deployed*"
+                embed.description = f"**Level {level}** | {where} | Tag ID: `{actual_tag[:8]}`"
                 
                 equipped_moves = [m1, m2, m3, m4]
                 for i, move_name in enumerate(equipped_moves, start=1):
@@ -11343,75 +11293,26 @@ class Combat(commands.Cog):
     @commands.command(name="moveset", aliases=["movedata"])
     @checks.has_started()
     @checks.is_authorized()
-    async def detailed_moveset(self, ctx, tag_id: str = None):
-        """Analyzes biological movepool potential with full statistics."""
+    async def detailed_moveset(self, ctx, target: str = None):
+        """
+        Analyzes biological movepool potential with full statistics.
+
+        Carried three more copies of the roster CTE, exactly as `!moves` did, and
+        refused a tag for the same reason. Both are the shared locator now.
+        """
         user_id = str(ctx.author.id)
-        
+
         try:
             async with aiosqlite.connect(DB_FILE) as db:
-                pokemon_data = None
-                
-                # 1. Resolve Target (Empty or Partner)
-                if not tag_id or tag_id.lower() in ["partner", "lead", "active"]:
-                    async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                        partner_data = await cursor.fetchone()
+                pokemon_data, problem = await locate_specimen(
+                    db, user_id, target,
+                    "cp.instance_id, cp.pokedex_id, cp.level, s.name")
+                if problem:
+                    return await ctx.send(problem)
 
-                    if partner_data and partner_data[0]:
-                        # 🚨 FIX: Number the entire PC first, then filter by UUID!
-                        async with db.execute("""
-                            WITH Roster AS (
-                                SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                                    ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                                FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                                WHERE cp.user_id = ?
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                            ) 
-                            SELECT instance_id, pokedex_id, level, name, box_number FROM Roster WHERE instance_id = ?
-                        """, (user_id, partner_data[0])) as cursor:
-                            pokemon_data = await cursor.fetchone()
-                    else:
-                        return await ctx.send("⚠️ You don't have an Active Partner equipped! Specify a Box Number.")
+                actual_tag, poke_id, level, name = pokemon_data
+                box_number = await box_number_of(db, user_id, actual_tag)
 
-                # 2. Fast Database Query for "Latest"
-                elif tag_id.lower() in ["new", "latest", "last"]:
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                            AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        ) 
-                        SELECT instance_id, pokedex_id, level, name, box_number FROM Roster ORDER BY box_number DESC LIMIT 1
-                    """, (user_id,)) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                    
-                # 3. Box Number Lookup
-                elif tag_id.isdigit() and len(tag_id) <= 6:
-                    async with db.execute("""
-                        WITH Roster AS (
-                            SELECT cp.instance_id, cp.pokedex_id, cp.level, s.name,
-                                ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                            FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                            WHERE cp.user_id = ?
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                                AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                        ) 
-                        SELECT instance_id, pokedex_id, level, name, box_number FROM Roster WHERE box_number = ?
-                    """, (user_id, int(tag_id))) as cursor:
-                        pokemon_data = await cursor.fetchone()
-                
-                else:
-                    return await ctx.send("⚠️ Please use a valid Box Number (e.g., `!moveset 4`) or leave it blank for your partner.")
-                    
-                if not pokemon_data:
-                    return await ctx.send("❌ Could not locate that specimen. Check your Box Number or ensure they aren't deployed.")
-                
-                # Unpack the variables safely!
-                actual_tag, poke_id, level, name, box_number = pokemon_data
-                
                 # 2. Advanced Analytics Query: Includes Learn Method and Sorting!
                 async with db.execute("""
                     SELECT sm.move_name, sm.learn_method, MIN(sm.level_learned) as first_learned,
