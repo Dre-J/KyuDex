@@ -4503,16 +4503,17 @@ def roll_shiny(score=None, roll=None):
 # ==========================================
 # 🏷️ TAGS A SPECIMEN EARNS BY EXISTING
 # ==========================================
-# `custom_tag` is a single TEXT column, compared with `=` by the box browser's
-# `tag:shiny` filter. So a specimen gets ONE tag, not a set - and a shiny alpha
-# legendary has to be filed under something.
+# A SPECIMEN EARNS EVERY TAG IT QUALIFIES FOR. `specimen_tags` holds one row per label,
+# so a shiny alpha legendary is filed under all three.
 #
-# Ordered by what a trainer would go looking for. Shiny first because it is the one
-# people sort by and the one that is visible at a glance; alpha last because it is the
-# commonest of the five at 2% of captures.
+# This list USED to be a priority order - shiny beat mythical beat legendary beat pseudo
+# beat alpha - and that order existed for exactly one reason: `custom_tag` was a single
+# TEXT column and something had to win. The consequence was that the Alpha marking, which
+# is 2% of captures and the rarest thing on this list, was invisible on any specimen that
+# was also shiny. The order is gone with the column that forced it; the tuple is kept
+# because the pairing of label to flag is still the rule.
 #
-# A tag the player chose is never overwritten. This fills an EMPTY slot, which is what
-# every freshly caught specimen has - `!settag` remains the last word.
+# A tag the player chose is never touched by this. These are added alongside.
 AUTO_TAGS = (
     ('shiny',     'is_shiny'),
     ('mythical',  'is_mythical'),
@@ -4527,17 +4528,18 @@ AUTO_TAGS = (
 ALPHA_HEIGHT_THRESHOLD = 1.30
 
 
-def auto_tag(**flags):
+def auto_tags(**flags):
     """
-    The tag a freshly caught specimen earns, or None.
+    EVERY tag a freshly caught specimen earns, in AUTO_TAGS order.
 
-    Takes the flags by keyword - `auto_tag(is_shiny=True, is_alpha=True)` - so a caller
+    Takes the flags by keyword - `auto_tags(is_shiny=True, is_alpha=True)` - so a caller
     that forgets one gets the default rather than a silently shifted positional.
+
+    Replaces `auto_tag`, which returned the single highest-priority label because that
+    was all a one-value column could hold. `auto_tags(is_shiny=True, is_alpha=True)` is
+    `['shiny', 'alpha']` where the old one was `'shiny'` and the Alpha was lost.
     """
-    for label, flag in AUTO_TAGS:
-        if flags.get(flag):
-            return label
-    return None
+    return [label for label, flag in AUTO_TAGS if flags.get(flag)]
 
 
 def is_pseudo_legendary(pokedex_id):
