@@ -1844,6 +1844,162 @@ def ev_label(column):
     return str(column or '').replace('ev_', '', 1).upper()
 
 
+# ==========================================
+# 🧬 THE SIX INDIVIDUAL VALUES
+# ==========================================
+# The same six stats, the other set of columns. Listed in the order every SELECT in this
+# repo lists them, so a caller unpacks its row and hands the six straight over - exactly
+# as EV_COLUMNS above.
+IV_COLUMNS = ('iv_hp', 'iv_attack', 'iv_defense', 'iv_sp_atk', 'iv_sp_def', 'iv_speed')
+IV_MAX = 31
+
+# 186. The denominator the PC's "IV 94%" divides by, written down once: `utils/filters.py`
+# had it inline in a SQL string and `cogs/ecology.py` had it inline in an f-string, which
+# is two copies of a number that must agree with IV_MAX or the percentage silently stops
+# meaning what it says.
+IV_PERFECT_TOTAL = IV_MAX * len(IV_COLUMNS)
+
+# What a person types for each stat. Deliberately generous - this is an owner tool used
+# in a hurry, and `spa`, `spatk` and `sp_atk` are all the same thought.
+IV_ALIASES = {
+    'iv_hp':      ('hp', 'health'),
+    'iv_attack':  ('atk', 'attack', 'at'),
+    'iv_defense': ('def', 'defense', 'defence', 'df'),
+    'iv_sp_atk':  ('spa', 'spatk', 'sp_atk', 'spattack', 'specialattack', 'spatt'),
+    'iv_sp_def':  ('spd', 'spdef', 'sp_def', 'spdefense', 'specialdefense', 'spdefence'),
+    'iv_speed':   ('spe', 'speed', 'spd_', 'sp'),
+}
+
+# Flat lookup, asserted collision-free. `spd` means Sp. Defence and `spe` means Speed,
+# which is the one pair people genuinely mix up - so a silent collision here would write
+# the wrong stat, and the assertion is what stops a future alias doing that quietly.
+IV_LOOKUP = {}
+for _column, _names in IV_ALIASES.items():
+    for _name in _names:
+        assert _name not in IV_LOOKUP, f"duplicate IV alias: {_name}"
+        IV_LOOKUP[_name] = _column
+assert set(IV_ALIASES) == set(IV_COLUMNS), "an IV column has no aliases"
+
+
+def iv_spread(hp, attack, defense, sp_atk, sp_def, speed):
+    """One specimen's individual values as {column: value}, in IV_COLUMNS order."""
+    return dict(zip(IV_COLUMNS, (hp, attack, defense, sp_atk, sp_def, speed)))
+
+
+def iv_column(word):
+    """`spa` -> `iv_sp_atk`, or None. Punctuation and case are ignored."""
+    key = str(word or '').strip().lower().replace('-', '').replace('.', '')
+    return IV_LOOKUP.get(key) or IV_LOOKUP.get(key.replace('_', ''))
+
+
+def iv_label(column):
+    """`iv_sp_atk` -> `Sp. Atk`, for a line somebody reads."""
+    return {'iv_hp': 'HP', 'iv_attack': 'Attack', 'iv_defense': 'Defence',
+            'iv_sp_atk': 'Sp. Atk', 'iv_sp_def': 'Sp. Def',
+            'iv_speed': 'Speed'}.get(column, str(column or '').upper())
+
+
+def iv_percentage(spread):
+    """The 0-100 figure the PC prints, from a spread or a sequence of six."""
+    values = spread.values() if isinstance(spread, dict) else (spread or ())
+    return int(sum(values) * 100 / IV_PERFECT_TOTAL)
+
+
+def parse_iv_request(words, current=None):
+    """
+    What an IV edit asks for, as `(spread, complaint)`.
+
+    A PURE PARSER, so the whole grammar can be checked without a database or a Discord
+    context. `current` is the specimen's existing spread; named edits are applied on top
+    of it, which is what makes `!rewrite ivs <tag> speed=0` mean "only the Speed".
+
+    The grammar, small on purpose:
+
+        max | perfect       every stat to 31
+        min | zero          every stat to 0
+        <n>                 every stat to n
+        <n> x6              positional, in IV_COLUMNS order
+        spa=31 speed=0      only the stats named
+
+    Named and positional are NOT mixed. `31 31 spa=0` has two readings - six values with
+    four missing, or two positional and one named - and guessing which is how somebody
+    loses a perfect specimen.
+    """
+    spread = dict(current or {column: 0 for column in IV_COLUMNS})
+    for column in IV_COLUMNS:
+        spread.setdefault(column, 0)
+
+    tokens = [w for w in (words or []) if str(w).strip()]
+    if not tokens:
+        return None, ("⚠️ Give me the IVs. `max`, `min`, a single number, six numbers "
+                      "in HP/Atk/Def/SpA/SpD/Spe order, or `speed=0 spa=31`.")
+
+    # `spa=31` and `spa 31` are the same request, so pairs are joined before anything
+    # else looks at the list.
+    joined, index = [], 0
+    while index < len(tokens):
+        token = str(tokens[index]).strip()
+        if '=' not in token and ':' not in token:
+            following = str(tokens[index + 1]).strip() if index + 1 < len(tokens) else ''
+            if iv_column(token) and following.lstrip('+-').isdigit():
+                joined.append(f"{token}={following}")
+                index += 2
+                continue
+        joined.append(token.replace(':', '='))
+        index += 1
+
+    named = [t for t in joined if '=' in t]
+    bare = [t for t in joined if '=' not in t]
+
+    if named and bare:
+        return None, ("⚠️ Name every stat or none of them - `spa=31 speed=0`, or six "
+                      "numbers. Mixing the two has two meanings and I will not guess.")
+
+    def bounded(raw, where):
+        text = str(raw).strip()
+        if not text.lstrip('+-').isdigit():
+            return None, f"⚠️ `{raw}` is not a number{where}."
+        value = int(text)
+        if not 0 <= value <= IV_MAX:
+            return None, f"⚠️ `{value}` is out of range{where}. An IV is 0 to {IV_MAX}."
+        return value, None
+
+    if named:
+        for pair in named:
+            word, _, raw = pair.partition('=')
+            column = iv_column(word)
+            if not column:
+                return None, (f"⚠️ `{word}` is not a stat. Try "
+                              f"{', '.join('`' + n[0] + '`' for n in IV_ALIASES.values())}.")
+            value, complaint = bounded(raw, f" for `{word}`")
+            if complaint:
+                return None, complaint
+            spread[column] = value
+        return spread, None
+
+    if len(bare) == 1:
+        word = bare[0].lower()
+        if word in ('max', 'perfect', 'best', 'hyper'):
+            return {column: IV_MAX for column in IV_COLUMNS}, None
+        if word in ('min', 'zero', 'worst', 'none'):
+            return {column: 0 for column in IV_COLUMNS}, None
+        value, complaint = bounded(word, "")
+        if complaint:
+            return None, complaint
+        return {column: value for column in IV_COLUMNS}, None
+
+    if len(bare) != len(IV_COLUMNS):
+        return None, (f"⚠️ That is {len(bare)} numbers. Give me one, or all "
+                      f"{len(IV_COLUMNS)} in HP/Atk/Def/SpA/SpD/Spe order.")
+
+    for column, raw in zip(IV_COLUMNS, bare):
+        value, complaint = bounded(raw, f" for {iv_label(column)}")
+        if complaint:
+            return None, complaint
+        spread[column] = value
+    return spread, None
+
+
 # A mission naming a column that does not exist is a KeyError at the moment somebody
 # recalls their team, which is the worst place to find out. Checked at import instead.
 _mission_targets = {row['target_ev'] for row in FIELD_MISSIONS.values()

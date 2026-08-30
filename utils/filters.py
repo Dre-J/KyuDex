@@ -33,6 +33,8 @@ filter that silently does nothing is worse than one that says it cannot.
 
 import re
 
+from utils.constants import IV_PERFECT_TOTAL
+
 # The sort words. `a`/`d` because that is what the request asked for; the longer forms
 # because people type them.
 ASCENDING = ('a', 'asc', 'ascending', 'up', 'low', 'lowest')
@@ -43,7 +45,12 @@ IV_TOTAL_SQL = ("(cp.iv_hp + cp.iv_attack + cp.iv_defense + cp.iv_sp_atk "
 # The percentage the PC list prints. `.iv 90` means the 90% a player can see on the
 # line, not a raw total of 90 - matching what is displayed is what makes the filter
 # guessable. `.ivtotal` is there for anybody who wants the raw 0-186 sum.
-IV_PERCENT_SQL = f"({IV_TOTAL_SQL} * 100 / 186)"
+#
+# 186 comes from IV_PERFECT_TOTAL rather than being typed here. It was written inline in
+# this string and again in `cogs/ecology.py`'s PC line, which is two copies of a number
+# that has to agree with IV_MAX - and if they ever disagreed, the filter would quietly
+# stop selecting what the list displays.
+IV_PERCENT_SQL = f"({IV_TOTAL_SQL} * 100 / {IV_PERFECT_TOTAL})"
 
 
 class Field:

@@ -5,7 +5,10 @@ import discord
 from discord.ext import commands
 from utils.constants import (DB_FILE, EQUIPMENT_CATALOG, SHOP_CATALOG, TM_SHOP,
                              TM_CATALOG, TM_TIER_PRICES, CATEGORY_OPTIONS,
-                             type_badges, species_badges, trait_badges)
+                             type_badges, species_badges, trait_badges,
+                             # Aliased: a local named `iv_percentage` is assigned inside
+                             # the listing view, and the bare name would be shadowed by it.
+                             iv_percentage as iv_percentage_of)
 from utils.species import (MAX_CHOICES, pretty_species, resolve_species,
                            suggest_species)
 from utils.trading import (announce_trade, blocked_from_trading, log_trade,
@@ -160,7 +163,9 @@ class GTSSearchPaginator(discord.ui.View):
         p_h_mult = row[19] if len(row) > 19 else None
         
         iv_total = hp + atk + defn + spatk + spdef + spd
-        iv_pct = int((iv_total / 186.0) * 100)
+        # Fifth copy of this sum. See IV_PERFECT_TOTAL in utils/constants.py - the market
+        # listing and the PC line have to agree about what "94%" means.
+        iv_pct = iv_percentage_of((hp, atk, defn, spatk, spdef, spd))
         shiny_icon = "✨" if p_shiny else ""
         gender_icon = "♂️" if p_gen == "M" else "♀️" if p_gen == "F" else "⚧️"
         
@@ -1606,7 +1611,9 @@ class Economy(commands.Cog):
             
             # 2. Calculate Genetic Potential (IVs)
             iv_total = iv_hp + iv_atk + iv_def + iv_spa + iv_spd + iv_spe
-            iv_percentage = int((iv_total / 186.0) * 100)
+            # Sixth and last copy. See IV_PERFECT_TOTAL in utils/constants.py.
+            iv_percentage = iv_percentage_of(
+                (iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe))
             
             # 3. Handle the Expiration Timestamp for Discord's UI
             dt_obj = datetime.datetime.strptime(expires_at, '%Y-%m-%d %H:%M:%S')
