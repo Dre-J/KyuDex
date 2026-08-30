@@ -36,7 +36,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              EQUIPMENT_CATALOG, resolve_item_key,
                              EV_TOTAL_CAP, EV_STAT_CAP,
                              ev_spread, ev_room, ev_label,
-                             nectar_for, drinks_nectar)
+                             nectar_for, drinks_nectar,
+                             iv_percentage as iv_percentage_of)
 from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
                           record_use, used_today, expedition_yield, describe_yield)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
@@ -1095,7 +1096,9 @@ class PokemonPaginator(discord.ui.View):
         # ==========================================
         # Calculate Genetic Potential (IVs)
         iv_total = iv_hp + iv_atk + iv_def + iv_spa + iv_spd + iv_spe
-        iv_percentage = int((iv_total / 186.0) * 100)
+        # Third of four copies of this sum. See IV_PERFECT_TOTAL.
+        iv_percentage = iv_percentage_of(
+            (iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe))
         
         if iv_percentage >= 90: appraisal = "S-Tier (Flawless)"
         elif iv_percentage >= 80: appraisal = "A-Tier (Excellent)"
@@ -1498,7 +1501,10 @@ def pc_line(row):
     iv_tuple = row[6:12]
     box_number, gmax, gender, _nature = row[12:16]
 
-    iv_percentage = int((sum(iv_tuple) / 186.0) * 100)
+    # The same 186 the `.iv` filter divides by, from one place - see IV_PERFECT_TOTAL.
+    # These were two inline copies, and a filter that stopped agreeing with the number
+    # printed beside it would be a very quiet bug.
+    iv_percentage = iv_percentage_of(iv_tuple)
 
     display_name = (f'"{nickname}" ({species_name.capitalize()})' if nickname
                     else species_name.capitalize())
@@ -4120,7 +4126,8 @@ class Ecology(commands.Cog):
                 # UI ENHANCEMENT: SHOW LEVEL & IVS
                 # ==========================================
                 iv_total = sum(ivs)
-                iv_percentage = int((iv_total / 186.0) * 100)
+                # Fourth copy. See IV_PERFECT_TOTAL.
+                iv_percentage = iv_percentage_of(ivs)
                 
                 if iv_percentage >= 90: appraisal = "S-Tier (Flawless)"
                 elif iv_percentage >= 80: appraisal = "A-Tier (Excellent)"

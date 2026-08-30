@@ -20,7 +20,9 @@ import discord
 from discord.ext import commands
 
 from utils import audit, learnsets
-from utils.constants import DB_FILE, EQUIPMENT_CATALOG
+from utils.constants import (DB_FILE, EQUIPMENT_CATALOG, IV_COLUMNS,
+                             IV_PERFECT_TOTAL, iv_spread, iv_label, iv_percentage,
+                             parse_iv_request)
 from utils.formulas import get_xp_requirement
 from utils.machines import grant_tm, find_tm
 
@@ -312,7 +314,11 @@ class Admin(commands.Cog):
     @commands.is_owner()
     async def rewrite(self, ctx):
         """[ADMIN] Corrects a specimen's records."""
-        await ctx.send("Usage: `!rewrite id <tag> <new pokedex id> [ability]`.")
+        await ctx.send(
+            "**Usage**\n"
+            "`!rewrite id <tag> <new pokedex id> [ability]`\n"
+            "`!rewrite level <tag> <1-100>`\n"
+            "`!rewrite ivs <tag> <max | min | n | six numbers | spa=31 speed=0>`")
 
     @rewrite.command(name="id", aliases=["species", "dex"])
     @commands.is_owner()
@@ -503,6 +509,104 @@ class Admin(commands.Cog):
                     ("Species", species_name),
                     ("Level", f"{old_level} → {new_level}"),
                     ("Experience", f"reset to {new_xp} ({growth_rate})")])
+
+    @rewrite.command(name="ivs", aliases=["iv", "genes"])
+    @commands.is_owner()
+    async def rewrite_ivs(self, ctx, tag: str, *, request: str = None):
+        """
+        [ADMIN] Sets a specimen's IVs. `!rewrite ivs a1b2c3 max`
+
+        Takes `max`, `min`, one number for all six, six numbers in
+        HP/Atk/Def/SpA/SpD/Spe order, or named stats: `!rewrite ivs a1b2c3 spa=31 speed=0`.
+
+        The grammar lives in utils/constants.parse_iv_request so it can be tested against
+        nonsense without a database or a Discord context - which is the half of a command
+        like this that is actually worth testing.
+        """
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                specimen, problem = await resolve_specimen(db, tag)
+                if problem:
+                    return await ctx.send(problem)
+
+                (instance_id, owner_id, _pokedex_id, _ability, level, nickname,
+                 species_name, _standards, _hidden) = specimen
+
+                async with db.execute(
+                        f"SELECT {', '.join(IV_COLUMNS)} FROM caught_pokemon "
+                        f"WHERE instance_id = ?", (instance_id,)) as cursor:
+                    row = await cursor.fetchone()
+                before = iv_spread(*row)
+
+                # Parsed against the CURRENT spread, so a named edit changes only what it
+                # names and leaves the other five where they were.
+                after, complaint = parse_iv_request(
+                    (request or '').split(), current=before)
+                if complaint:
+                    return await ctx.send(complaint)
+
+                if after == before:
+                    return await ctx.send(
+                        f"⚠️ `{instance_id[:8]}` already has exactly those IVs. "
+                        f"Nothing was written.")
+
+                # The column names come from IV_COLUMNS, never from the request - the
+                # only thing a player-typed word ever becomes here is a bound value.
+                await db.execute(
+                    f"UPDATE caught_pokemon SET "
+                    f"{', '.join(f'{c} = ?' for c in IV_COLUMNS)} "
+                    f"WHERE instance_id = ?",
+                    (*[after[c] for c in IV_COLUMNS], instance_id))
+                await db.commit()
+        except Exception as e:
+            print(f"Admin rewrite ivs error: {e}")
+            return await ctx.send("❌ A database error occurred. Nothing was rewritten.")
+
+        moved = [c for c in IV_COLUMNS if before[c] != after[c]]
+        print(f"ADMIN REWRITE IVS {ctx.author.id}: {instance_id} "
+              f"{[before[c] for c in IV_COLUMNS]} -> {[after[c] for c in IV_COLUMNS]}")
+
+        embed = discord.Embed(
+            title="🧬 Genetic Record Rewritten",
+            description=f"Tag `{instance_id[:8]}`"
+                        + (f" — *{nickname}*" if nickname else "")
+                        + f", owned by `{owner_id}`.",
+            colour=discord.Colour.purple())
+        embed.add_field(name="Species",
+                        value=f"{species_name.replace('-', ' ').title()} (Lv {level})",
+                        inline=False)
+        embed.add_field(
+            name="Individual Values",
+            value="\n".join(
+                f"{'**' if c in moved else ''}{iv_label(c)}: {before[c]} → "
+                f"{after[c]}{'**' if c in moved else ''}" for c in IV_COLUMNS),
+            inline=False)
+        embed.add_field(
+            name="Total",
+            value=f"{sum(before.values())} → **{sum(after.values())}** / "
+                  f"{IV_PERFECT_TOTAL}  ·  "
+                  f"{iv_percentage(before)}% → **{iv_percentage(after)}%**",
+            inline=False)
+        # Stats are derived from IVs at read time, so nothing else needs rewriting - but
+        # saying so is what stops the next person wondering whether it does.
+        embed.add_field(name="Unchanged",
+                        value="Species, ability, moves, EVs, nature, level, held item. "
+                              "Battle stats re-derive from these on the next read.",
+                        inline=False)
+        embed.set_footer(text=f"Authorised by {ctx.author.name}")
+        await ctx.send(embed=embed)
+
+        await audit.post_admin_action(
+            self.bot, action="IV rewrite", actor=ctx.author,
+            colour=discord.Colour.purple(),
+            fields=[("Specimen", f"`{instance_id}`"
+                                 + (f" — *{nickname}*" if nickname else "")),
+                    ("Owner", f"`{owner_id}`"),
+                    ("Species", species_name),
+                    ("Changed", ", ".join(
+                        f"{iv_label(c)} {before[c]}→{after[c]}" for c in moved)),
+                    ("Total", f"{sum(before.values())} → {sum(after.values())} "
+                              f"({iv_percentage(before)}% → {iv_percentage(after)}%)")])
 
     # ==========================================
     # 📚 LEARNSETS
