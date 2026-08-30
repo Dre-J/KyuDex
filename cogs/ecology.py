@@ -35,7 +35,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              NEUTRAL_NATURES, mint_for,
                              EQUIPMENT_CATALOG, resolve_item_key,
                              EV_TOTAL_CAP, EV_STAT_CAP,
-                             ev_spread, ev_room, ev_label)
+                             ev_spread, ev_room, ev_label,
+                             nectar_for, drinks_nectar)
 from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
                           record_use, used_today, expedition_yield, describe_yield)
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
@@ -53,7 +54,7 @@ from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
                                 resolve_language, species_for_name)
 from utils.forms import (describe_options, form_item, is_held_form_item, is_fused,
-                         perform)
+                         perform, apply_form)
 from utils.species import pretty_species
 from utils.db_manager import check_evolution_trigger, evolution_context
 from utils.activity import is_command
@@ -3072,6 +3073,11 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def use_item(self, ctx, *, item_input: str):
+        """
+        Use an item. `!use <item> [target]` - the target only where one is needed.
+
+        `!use red-nectar 12` feeds box 12 a nectar; `!use purifier` takes none.
+        """
         # --- DATA SANITIZATION ---
         # Was `.replace(" ", "").replace("-", "")`, which turned "DNA Splicers" into
         # `dnasplicers` and then looked THAT up in user_inventory - where names are
@@ -3079,7 +3085,23 @@ class Ecology(commands.Cog):
         # hyphen, so this command had never worked for any of them. The one item it
         # could find was the Purifier, which is a single word, and the Purifier is the
         # only thing the dispatcher below handles.
-        formatted_item = resolve_item_key(item_input) or item_input.strip().lower()
+        #
+        # AN ITEM NAME MAY BE SEVERAL WORDS and a target may follow it, so the longest
+        # prefix that names a real item wins and the rest is the target. Same rule
+        # `!form` uses, for the same reason: without longest-match-first, "rotom catalog
+        # mow" resolves to "rotom". Whole-string first, so every item that takes no
+        # target behaves exactly as it did.
+        words = (item_input or '').split()
+        formatted_item = resolve_item_key(item_input)
+        use_target = None
+        if not formatted_item:
+            for take in range(len(words) - 1, 0, -1):
+                candidate = resolve_item_key(" ".join(words[:take]))
+                if candidate:
+                    formatted_item = candidate
+                    use_target = " ".join(words[take:]) or None
+                    break
+        formatted_item = formatted_item or item_input.strip().lower()
 
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
@@ -3097,6 +3119,56 @@ class Ecology(commands.Cog):
                 # 2. ITEM ROUTING LOGIC (The Dispatcher)
                 # ==========================================
                 
+                # ==========================================
+                # 🌺 A NECTAR IS DRUNK
+                # ==========================================
+                # Oricorio used to change style by HOLDING one of these, on entry, for
+                # exactly as long as the item stayed on. That made the nectar a permanent
+                # tenant of its item slot - a Sensu Oricorio could never hold anything
+                # else - and it is not what the games do either. Feeding it is: the
+                # nectar is spent and the style is kept.
+                nectar = nectar_for(formatted_item)
+                if nectar:
+                    specimen, complaint = await locate_specimen(
+                        db, user_id, use_target,
+                        "cp.instance_id, cp.pokedex_id, s.name, cp.nickname, cp.ability")
+                    if complaint:
+                        return await ctx.send(complaint)
+
+                    instance_id, _dex, species, nickname, ability = specimen
+                    shown = nickname or pretty_species(species)
+
+                    if not drinks_nectar(species, nectar):
+                        return await ctx.send(
+                            f"🌺 **{shown}** has no interest in nectar. It is "
+                            f"{nectar['species'].capitalize()} that dances.")
+
+                    if species == nectar['form']:
+                        return await ctx.send(
+                            f"🌺 **{shown}** is already dancing the "
+                            f"**{nectar['style']}** style. The nectar is untouched.")
+
+                    changed = await apply_form(db, instance_id, nectar['form'], ability)
+                    if not changed:
+                        return await ctx.send(
+                            f"⚠️ `{nectar['form']}` is not a species this database has. "
+                            f"Nothing was changed and the nectar is untouched.")
+
+                    # Spent only once the form change has actually landed, so a refusal
+                    # above never costs the item.
+                    await db.execute(
+                        "UPDATE user_inventory SET quantity = quantity - 1 "
+                        "WHERE user_id = ? AND item_name = ?", (user_id, formatted_item))
+                    await db.execute("DELETE FROM user_inventory WHERE quantity <= 0")
+                    await db.commit()
+
+                    label = EQUIPMENT_CATALOG.get(formatted_item, {}).get(
+                        'name', formatted_item.replace('-', ' ').title())
+                    return await ctx.send(
+                        f"🌺 **{shown}** {nectar['flavour']}!\n"
+                        f"*One {label} was consumed. The style is permanent - it needs "
+                        f"no item to hold it.*")
+
                 if formatted_item == "purifier":
                     # Check if the server actually needs purifying
                     async with db.execute("SELECT pollution_type, ecosystem_score FROM servers WHERE guild_id = ?", (guild_id,)) as cursor:

@@ -8,6 +8,14 @@ ecosystem.db
 # ...and the timestamped copies a migration takes before touching it. `ecosystem.db`
 # above is an exact name, not a glob, so a backup was landing in `git status` as an
 # untracked 13MB file waiting for somebody to `git add .`
+#
+# `bak-` was not enough: the migration scripts name their copies after what they are
+# about to change - ecosystem.db.pre-regions.1787585683, ecosystem.db.pre-dex.*,
+# ecosystem.db.pre-translations.* - and ten of those, 13 to 26MB each, were sitting in
+# `git status` for exactly the reason the paragraph above describes. The glob covers
+# every one of them, including their `-shm` and `-wal` companions, whose names end in
+# `-shm` rather than `.db-shm` and so slip past the patterns below.
+ecosystem.db.*
 ecosystem.db.bak-*
 *.db-journal
 *.db-wal
@@ -16,12 +24,16 @@ ecosystem.db.bak-*
 # One-off migration scripts
 migrate_genders.py
 
-# Sprite assets (fetched separately from PokeAPI/sprites)
-KyuSprites/
+# Sprite assets (fetched separately from PokeAPI/sprites). Anchored to the repo root
+# with a leading slash: unanchored, `KyuSprites/` would also swallow a directory of that
+# name nested anywhere else, which is a wider promise than this entry means to make.
+# Now ~1GB, since pollute.py's corrupted variants live under it too.
+/KyuSprites/
 
 # Trainer sprites for the profile card. 650 files, same provenance as KyuSprites and
-# ignored for the same reason: fetched art, not source.
-trainers/
+# ignored for the same reason: fetched art, not source. Root-anchored for the same
+# reason as above.
+/trainers/
 
 # Local battle backdrops (only consumed by the scratch battletest cog)
 assets/
