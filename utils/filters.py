@@ -34,6 +34,7 @@ filter that silently does nothing is worse than one that says it cannot.
 import re
 
 from utils.constants import IV_PERFECT_TOTAL
+from utils.tags import normalise_tag, tag_clause, tag_like_clause
 
 # The sort words. `a`/`d` because that is what the request asked for; the longer forms
 # because people type them.
@@ -98,7 +99,9 @@ FIELDS = {
     'nature':    Field('cp.nature', 'text', 'Nature'),
     'ability':   Field('cp.ability', 'like', 'Ability', aliases=('abil',)),
     'gender':    Field('cp.gender', 'text', 'Gender', aliases=('sex',)),
-    'tag':       Field('cp.custom_tag', 'like', 'Tag', aliases=('label',)),
+    # `.tag` is NOT a Field any more - a tag lives in specimen_tags, one row per label,
+    # so there is no column to compare. It is handled beside `.type` below, which is the
+    # other filter whose data is not on caught_pokemon.
     'ot':        Field('cp.original_user_id', 'text', 'Original Trainer',
                        aliases=('og', 'ogtrainer', 'originaltrainer')),
     'name':      Field('cp.name', 'like', 'Species', aliases=('species', 'dex')),
@@ -129,6 +132,39 @@ for _key, _field in FIELDS.items():
 # removing a filter people use is not an upgrade.
 TYPE_SQL = ("EXISTS (SELECT 1 FROM base_pokemon_types t "
             "WHERE t.pokedex_id = cp.pokedex_id AND LOWER(t.type_name) = ?)")
+
+# The two spellings of a tag search.
+#
+#   `.tag competitive`        loose - any tag CONTAINING it, one at a time
+#   `.tags alpha penta`       exact - carries alpha AND penta
+#   `.tags .any alpha penta`  exact - carries either
+#
+# `.tag` stays loose because that is what it has always been, and this module's own
+# docstring says a filter language that breaks what it replaces is a downgrade wearing a
+# new name. `.tags` is the precise one, and it NARROWS by default because every other
+# filter here narrows - stacking one more is expected to show fewer, not more.
+TAG_FLAGS = ('tag', 'label')
+TAGS_FLAGS = ('tags', 'labels')
+ANY_FLAGS = ('any', 'anyof', 'or')
+
+# ==========================================
+# EVERY COLUMN A FILTER MAY NAME
+# ==========================================
+# The CTE body a caller wraps its query in. `!pc` had this written out inline, and the
+# bulk tag commands needed exactly the same list - a filter names `cp.iv_hp`, so
+# `cp.iv_hp` has to be IN the roster or the query fails on a column that is not there.
+#
+# Written once because the failure mode of a second copy is silent and specific: the
+# copy that forgot a column does not break, it just refuses that one filter, and only
+# for the command that has the short list.
+FILTERABLE_COLUMNS = (
+    "s.name, cp.level, cp.is_shiny, cp.instance_id, "
+    "cp.nickname, cp.pokedex_id, cp.user_id, "
+    "cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, "
+    "cp.nature, cp.ability, cp.gender, cp.happiness, cp.gmax_factor, "
+    "cp.original_user_id, cp.is_starter, cp.origin_language, "
+    "cp.height_multiplier, cp.held_item"
+)
 
 GENDER_WORDS = {'m': 'M', 'male': 'M', 'boy': 'M',
                 'f': 'F', 'female': 'F', 'girl': 'F',
@@ -212,6 +248,12 @@ def _tokenise(query):
 EVO_FLAGS = ('evo', 'evos', 'family', 'line', 'evolution', 'evolutions')
 
 
+def _wants_tags(query):
+    """Whether this query uses a tag filter at all, so the caller can check the table."""
+    return any(flag in TAG_FLAGS or flag in TAGS_FLAGS
+               for flag, _value, _explicit in _tokenise(str(query or '')))
+
+
 def evo_targets(query):
     """
     The species named by any `.evo` flag, so a caller can resolve them before parsing.
@@ -258,7 +300,41 @@ def parse_filters(query, family_ids=None, extra_flags=()):
         else:
             normalised.append(word)
 
-    for flag, value, explicit in _tokenise(' '.join(normalised)):
+    tokens = _tokenise(' '.join(normalised))
+
+    # `.any` MODIFIES `.tags`; it is not a filter of its own. It has to be lifted out
+    # before the main loop because `_tokenise` gives every flag the next token as its
+    # value - so `.any alpha penta` would have `.any` swallow `alpha`, and the tag search
+    # would quietly look for one tag instead of two. Whatever it swallowed is put back
+    # as a bare word.
+    any_of = False
+    lifted = []
+    for flag, value, explicit in tokens:
+        if flag in ANY_FLAGS:
+            any_of = True
+            if value is not None:
+                lifted.append((None, value, False))
+            continue
+        lifted.append((flag, value, explicit))
+
+    # `.tags a b c` takes EVERY bare word that follows it, not just the first. Without
+    # this, `.tags alpha penta` reads as "tagged alpha" plus a NAME SEARCH for penta -
+    # which matches nothing and looks like the tag filter is broken.
+    collapsed, index = [], 0
+    while index < len(lifted):
+        flag, value, explicit = lifted[index]
+        if flag in TAGS_FLAGS:
+            wanted = [value] if value else []
+            index += 1
+            while index < len(lifted) and lifted[index][0] is None:
+                wanted.append(lifted[index][1])
+                index += 1
+            collapsed.append((flag, wanted, True))
+            continue
+        collapsed.append((flag, value, explicit))
+        index += 1
+
+    for flag, value, explicit in collapsed:
         # --- a bare word is a name search ---
         if flag is None:
             clauses.append("(LOWER(cp.name) LIKE ? OR LOWER(COALESCE(cp.nickname, '')) LIKE ?)")
@@ -305,6 +381,38 @@ def parse_filters(query, family_ids=None, extra_flags=()):
                 f"cp.pokedex_id IN ({','.join('?' for _ in ids)})")
             params.extend(ids)
             applied.append(f"{pretty.capitalize()} line ({len(ids)})")
+            continue
+
+        # --- `.tags alpha penta`, which is not a column either ---
+        if flag in TAGS_FLAGS:
+            wanted, bad = [], []
+            for word in (value or []):
+                tag = normalise_tag(word)
+                (wanted if tag else bad).append(tag or word)
+            if bad:
+                return None, None, None, None, (
+                    f"⚠️ {', '.join(f'`{b}`' for b in bad)} cannot be a tag. Letters, "
+                    f"digits and hyphens.")
+            if not wanted:
+                return None, None, None, None, (
+                    "⚠️ `.tags` needs at least one tag, e.g. `.tags alpha penta`. "
+                    "Add `.any` to match either instead of both.")
+            clause, bound = tag_clause(wanted, any_of=any_of)
+            clauses.append(clause)
+            params.extend(bound)
+            applied.append(("any of " if any_of else "tagged ")
+                           + " + ".join(wanted))
+            continue
+
+        # --- `.tag competitive`, the loose one ---
+        if flag in TAG_FLAGS:
+            if not value:
+                return None, None, None, None, (
+                    "⚠️ `.tag` needs something to look for, e.g. `.tag competitive`.")
+            clause, bound = tag_like_clause(value)
+            clauses.append(clause)
+            params.extend(bound)
+            applied.append(f"tag ~ {str(value).strip().lower()}")
             continue
 
         # --- `.type water`, which is not a column on this table ---
@@ -402,6 +510,17 @@ async def resolve_query(db, query, extra_flags=()):
 
     Returns exactly what `parse_filters` returns.
     """
+    # A TAG FILTER NEEDS THE TABLE TO EXIST. Without this the EXISTS subquery reaches
+    # a table that is not there on an un-migrated database and the whole `!pc` falls to
+    # the generic "a database error occurred", which tells the player nothing they can
+    # act on. Asked here because this is the one door both `!pc` and the market use.
+    if _wants_tags(query):
+        from utils.tags import has_table
+        if not await has_table(db):
+            return None, None, None, None, (
+                "\u26a0\ufe0f Tags are not set up on this database yet, so there is "
+                "nothing to filter by. Run `python migrate_specimen_tags.py --apply`.")
+
     families = {}
     for target in evo_targets(query):
         from utils.db_manager import evolution_family
@@ -427,6 +546,10 @@ def filter_help():
     lines.append("")
     words = [f"`.{k}`" for k, f in FIELDS.items() if f.kind in ('text', 'like')]
     lines.append("**Words:** " + " ".join(sorted(words)) + " `.type`")
+    lines.append("")
+    lines.append("**`.tags <a> <b>`** finds specimens carrying **both** — "
+                 "`.tags alpha penta`. Add **`.any`** to match either instead. "
+                 "`.tag <word>` is the loose one: any tag containing it.")
     lines.append("")
     lines.append("**`.evo <species>`** shows the whole evolutionary line — "
                  "`.evo charizard` finds your Charmander too.")

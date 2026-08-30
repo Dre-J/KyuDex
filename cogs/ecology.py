@@ -22,7 +22,7 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              RARITY_LABELS, rarity_filter, roll_rarity,
                              pseudo_legendaries, is_pseudo_legendary,
                              MAX_ACTIVE_DIRECTIVES, MAX_NOTES_PER_ANALYSIS,
-                             auto_tag, ALPHA_HEIGHT_THRESHOLD,
+                             auto_tags, ALPHA_HEIGHT_THRESHOLD,
                              HABITAT_BIOMES, EXPEDITION_BIOMES, habitat_types,
                              sql_type_tuple,
                              EXPEDITION_COOLDOWN_SECONDS, EXPEDITION_WARN_AT,
@@ -50,12 +50,17 @@ from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES,
                           box_number_of, ROSTER_CTE)
-from utils.filters import filter_help, resolve_query
+from utils.filters import filter_help, resolve_query, FILTERABLE_COLUMNS
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
                                 resolve_language, species_for_name)
 from utils.forms import (describe_options, form_item, is_held_form_item, is_fused,
                          perform, apply_form)
+from utils.tags import (all_tags, tags_for, add_tags, remove_tags, clean_tags,
+                        add_tag_to_many, remove_tag_from_many,
+                        has_table as has_tag_table, TABLE as TAG_TABLE,
+                        NO_TAG_TABLE, bulk_tag_result,
+                        BULK_TAG_CAP, BULK_TAG_CONFIRM_AT)
 from utils.species import pretty_species
 from utils.db_manager import check_evolution_trigger, evolution_context
 from utils.activity import is_command
@@ -497,7 +502,7 @@ async def mark_spawn_fled(bot, spawn, species_name):
         f"The **{clean}** broke free and disappeared into the undergrowth.")
 
 
-async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=None):
+async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tags=()):
     """
     Edit a spawn's own message to say it has been taken, and by whom.
 
@@ -511,10 +516,21 @@ async def mark_spawn_caught(bot, spawn, catcher, species_name, is_shiny, tag=Non
     """
     clean = str(species_name).replace('-', ' ').title()
     badge = "🌟 " if is_shiny else ""
+    # EVERY tag it earned, not the one that won a priority contest. A shiny alpha
+    # legendary now reads "Filed under `shiny` `legendary` `alpha`" where it used to say
+    # only `shiny` and quietly lose the two rarer facts.
+    #
+    # A BARE STRING IS ONE TAG, not five letters. This parameter used to be a single
+    # `tag`, and a caller that still passes one would otherwise have it iterated
+    # character by character into "`s` `h` `i` `n` `y`" - wrong in a way that renders
+    # without raising, which is the worst kind.
+    if isinstance(tags, str):
+        tags = [tags] if tags else []
+    filed = " ".join(f"`{t}`" for t in (tags or ()))
     return await rewrite_spawn_card(
         bot, spawn, "✅ Specimen Secured",
         f"The {badge}**{clean}** was tagged and rehomed by **{catcher}**."
-        + (f"\n*Filed under* `{tag}`." if tag else ""))
+        + (f"\n*Filed under* {filed}." if filed else ""))
 
 
 def spawn_is_here(spawn_data, channel_id):
@@ -846,6 +862,74 @@ class RegionSelect(discord.ui.Select):
             content=f"You selected **{region_label(selected_region)}**. "
                     f"Now, choose your starting specimen:",
             view=view)
+
+class BulkTagConfirm(discord.ui.View):
+    """
+    The confirmation for a tag edit across many specimens.
+
+    THE IDS ARE RESOLVED BEFORE THIS VIEW EXISTS, which is the same reasoning
+    ReleaseConfirmView documents: a filter is evaluated against one snapshot of the
+    roster, and it is those instance ids that are written. Re-running the filter on
+    confirm would act on whatever matched a minute later, which is not what the player
+    was shown and agreed to.
+    """
+
+    def __init__(self, ctx, db_file, instance_ids, tag, label, adding):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.db_file = db_file
+        self.instance_ids = list(instance_ids)
+        self.tag = tag
+        self.label = label
+        self.adding = adding
+
+    def embed(self):
+        return discord.Embed(
+            title=("\N{LABEL} Confirm Bulk Tag" if self.adding
+                   else "\N{LABEL} Confirm Bulk Untag"),
+            description=(
+                f"{'Add' if self.adding else 'Remove'} `{self.tag}` "
+                f"{'to' if self.adding else 'from'} **{len(self.instance_ids)}** "
+                f"specimens matching *{self.label}*?\n\n"
+                f"*Tags are reversible — `!tags "
+                f"{'removeall' if self.adding else 'addall'} {self.tag} ...` undoes it.*"),
+            colour=discord.Colour.blurple())
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.primary)
+    async def confirm(self, interaction: discord.Interaction,
+                      button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message(
+                "This isn't your request.", ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+
+        async with aiosqlite.connect(self.db_file) as db:
+            if self.adding:
+                touched, capped = await add_tag_to_many(db, self.instance_ids, self.tag)
+            else:
+                touched, capped = await remove_tag_from_many(
+                    db, self.instance_ids, self.tag), 0
+            await db.commit()
+
+        self.stop()
+        await interaction.response.edit_message(
+            content=bulk_tag_result(self.adding, self.tag, self.label, touched,
+                                    capped, len(self.instance_ids)),
+            embed=None, view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction,
+                     button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message(
+                "This isn't your request.", ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        self.stop()
+        await interaction.response.edit_message(
+            content="\N{LABEL} Nothing was tagged.", embed=None, view=self)
+
 
 class ReleaseConfirmView(discord.ui.View):
     """
@@ -1494,12 +1578,15 @@ def pc_line(row):
     impossible rather than merely unlikely - and makes it testable without a database,
     which the loop this replaces was not.
 
-    Expects the column order `!pc` selects: name, level, is_shiny, instance_id, nickname,
-    custom_tag, then six IVs, then box_number, gmax, gender, nature.
+    Expects the column order `!pc` selects: name, level, is_shiny, instance_id,
+    nickname, then six IVs, then box_number, gmax, gender, nature.
     """
-    species_name, level, is_shiny, tag_id, nickname, custom_tag = row[0:6]
-    iv_tuple = row[6:12]
-    box_number, gmax, gender, _nature = row[12:16]
+    # No custom_tag in this row any more. It was selected, unpacked and rendered as
+    # `[shiny]` on every line; the labels live in specimen_tags now and are for
+    # searching rather than for repeating the star that is already there.
+    species_name, level, is_shiny, tag_id, nickname = row[0:5]
+    iv_tuple = row[5:11]
+    box_number, gmax, gender, _nature = row[11:15]
 
     # The same 186 the `.iv` filter divides by, from one place - see IV_PERFECT_TOTAL.
     # These were two inline copies, and a filter that stopped agreeing with the number
@@ -1521,11 +1608,15 @@ def pc_line(row):
         # The red circle was a stand-in for a G-Max factor. The real emoji exists.
         marks += f"{GMAX_ICON} "
 
-    tag_display = f" `[{custom_tag}]`" if custom_tag else ""
+    # NO TAGS ON THE LINE. Every specimen carries automatic ones now - shiny, legendary,
+    # alpha and the rest - so a roster rendered them as `[shiny] [shiny] [legendary]`
+    # down the whole page, repeating what the ✨ already says and spending the width a
+    # trainer's own labels would have used. They are for SEARCHING: `!pc .tags alpha`
+    # finds them, and `!tags 4` says what one specimen carries.
     gender_display = {'M': " ♂", 'F': " ♀"}.get(gender, "")
 
     line = (f"`#{box_number:>3}` {marks}**{display_name}**{gender_display} "
-            f"· Lv {level} · IV {iv_percentage}% · `{tag_id[:8]}`{tag_display}")
+            f"· Lv {level} · IV {iv_percentage}% · `{tag_id[:8]}`")
     return line, box_number
 
 
@@ -2906,40 +2997,279 @@ class Ecology(commands.Cog):
             embed.add_field(name="🛡️ Held back", value="\n".join(blocked), inline=False)
         await ctx.send(embed=embed, view=view)
 
-    @commands.command(name="settag", aliases=["label"])
+    # ==========================================
+    # THE TAG COMMANDS
+    # ==========================================
+    # `!settag` was one command that set the one label a specimen could hold, by writing
+    # `custom_tag` directly. It also carried its own copy of the roster CTE and refused
+    # anything but a bare box number - no `partner`, no `new`, no tag.
+    #
+    # A group replaces it, because there are now five things a trainer wants to do with
+    # labels and four of them did not exist. `!settag` survives as an alias for `add`, so
+    # nobody's muscle memory breaks.
+
+    @commands.group(name="tags", aliases=["tag"], invoke_without_command=True)
     @checks.has_started()
     @checks.is_authorized()
-    async def set_custom_tag(self, ctx, box_number: str, *, custom_tag: str):
+    async def tags_group(self, ctx, *, target: str = None):
+        """
+        What is filed where. `!tags` lists yours; `!tags 4` lists one specimen's.
+
+        Searching is `!pc .tags alpha penta`, which is where every other way of finding
+        specimens already lives - a second search language would be a second thing to
+        learn and a second thing to keep in step.
+        """
         user_id = str(ctx.author.id)
-        
-        # 1. Strict Input Validation
-        if not box_number.isdigit():
-            return await ctx.send("⚠️ Please use the specimen's Box Number (e.g., `!settag 4 Favorite`).")
-            
         async with aiosqlite.connect(DB_FILE) as db:
-            # 2. Resolve Target
-            async with db.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp 
-                    WHERE cp.user_id = ?
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                ) SELECT instance_id FROM Roster WHERE box_number = ?
-            """, (user_id, int(box_number))) as cursor:
-                target = await cursor.fetchone()
-            
-            if not target:
-                return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`.")
-                
-            actual_id = target[0]
-            
-            # 3. Execute Update
-            async with db.execute("UPDATE caught_pokemon SET custom_tag = ? WHERE instance_id = ?", (custom_tag, actual_id)) as cursor:
-                if cursor.rowcount > 0:
-                    await ctx.send(f"📁 Specimen `{actual_id[:8]}` has been categorized under the tag: **[{custom_tag}]**.")
-            
+            if not await has_tag_table(db):
+                return await ctx.send(NO_TAG_TABLE)
+
+            if target is None:
+                census = await all_tags(db, user_id)
+                if not census:
+                    return await ctx.send(
+                        "\N{LABEL} Nothing in your roster is tagged yet.\n"
+                        "*`!tags add 4 competitive` files one; captures earn theirs "
+                        "automatically.*")
+                embed = discord.Embed(
+                    title="\N{LABEL} Your Tags",
+                    description="\n".join(f"`{tag}` \u2014 {count}"
+                                          for tag, count in census),
+                    colour=discord.Colour.blurple())
+                embed.set_footer(
+                    text=f"{len(census)} tags \u00b7 !pc .tags <tag> to filter \u00b7 "
+                         f"!tags <box> for one specimen")
+                return await ctx.send(embed=embed)
+
+            specimen, complaint = await locate_specimen(
+                db, user_id, target,
+                "cp.instance_id, s.name, cp.nickname, cp.level")
+            if complaint:
+                return await ctx.send(complaint)
+            instance_id, species, nickname, level = specimen
+            shown = nickname or pretty_species(species)
+            carried = await tags_for(db, instance_id)
+
+            if not carried:
+                return await ctx.send(
+                    f"\N{LABEL} **{shown}** (Lv {level}) carries no tags.\n"
+                    f"*`!tags add {target} <tag>` files it.*")
+            return await ctx.send(
+                f"\N{LABEL} **{shown}** (Lv {level}) \u2014 "
+                + " ".join(f"`{t}`" for t in carried))
+
+    @tags_group.command(name="add", aliases=["set", "settag", "file"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def tags_add(self, ctx, target: str = None, *, request: str = None):
+        """Put one or more tags on a specimen. `!tags add 4 competitive shiny-hunt`"""
+        if target is None or not request:
+            return await ctx.send(
+                "\N{LABEL} Usage: `!tags add <box> <tag> [more tags]`\n"
+                "e.g. `!tags add 4 competitive`, or `!tags add partner trade-fodder`.")
+
+        wanted, complaint = clean_tags(request.split())
+        if complaint:
+            return await ctx.send(complaint)
+
+        user_id = str(ctx.author.id)
+        async with aiosqlite.connect(DB_FILE) as db:
+            specimen, complaint = await locate_specimen(
+                db, user_id, target, "cp.instance_id, s.name, cp.nickname")
+            if complaint:
+                return await ctx.send(complaint)
+            instance_id, species, nickname = specimen
+            shown = nickname or pretty_species(species)
+
+            added, skipped, complaint = await add_tags(db, instance_id, wanted)
+            if complaint:
+                return await ctx.send(complaint)
             await db.commit()
+
+        parts = []
+        if added:
+            parts.append("filed under " + " ".join(f"`{t}`" for t in added))
+        if skipped:
+            parts.append("already carried " + " ".join(f"`{t}`" for t in skipped))
+        return await ctx.send(f"\N{LABEL} **{shown}** " + ", and ".join(parts) + ".")
+
+    @tags_group.command(name="remove", aliases=["rm", "delete", "del", "unfile"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def tags_remove(self, ctx, target: str = None, *, request: str = None):
+        """Take tags off a specimen. `!tags remove 4 competitive`"""
+        if target is None or not request:
+            return await ctx.send("\N{LABEL} Usage: `!tags remove <box> <tag> [more]`.")
+
+        wanted, complaint = clean_tags(request.split())
+        if complaint:
+            return await ctx.send(complaint)
+
+        user_id = str(ctx.author.id)
+        async with aiosqlite.connect(DB_FILE) as db:
+            specimen, complaint = await locate_specimen(
+                db, user_id, target, "cp.instance_id, s.name, cp.nickname")
+            if complaint:
+                return await ctx.send(complaint)
+            instance_id, species, nickname = specimen
+            shown = nickname or pretty_species(species)
+
+            removed, missing = await remove_tags(db, instance_id, wanted)
+            await db.commit()
+
+        if not removed:
+            return await ctx.send(
+                f"\N{LABEL} **{shown}** was not carrying "
+                + " ".join(f"`{t}`" for t in missing) + ".")
+        line = (f"\N{LABEL} **{shown}** is no longer filed under "
+                + " ".join(f"`{t}`" for t in removed) + ".")
+        if missing:
+            line += ("\n*It was not carrying "
+                     + " ".join(f"`{t}`" for t in missing) + " either.*")
+        return await ctx.send(line)
+
+    # ==========================================
+    # THE BULK ONES
+    # ==========================================
+    # A bulk tag edit takes either a list of box numbers or a `!pc` filter, because both
+    # are how a trainer already thinks about "these ones". The filter form matters more
+    # than it looks: `!tags addall keepers .shiny .iv >=90` is the request people
+    # actually have, and enumerating forty box numbers by hand to express it is how the
+    # feature goes unused.
+    #
+    # BOUNDED AND CONFIRMED. It is a mutation over a set the player did not enumerate, so
+    # anything over BULK_TAG_CONFIRM_AT says what it is about to touch and asks first.
+    async def _bulk_targets(self, ctx, db, user_id, selector):
+        """
+        The instance ids a bulk tag command should act on, as `(rows, label, complaint)`.
+
+        Box numbers and filters go down the SAME path deliberately: a box number list is
+        resolved through the shared roster CTE and a filter through `resolve_query`, and
+        both come back as ids, so the caller cannot treat one kind of selection
+        differently from the other by accident.
+        """
+        words = (selector or '').split()
+        if not words:
+            return None, None, ("\u26a0\ufe0f Which specimens? Box numbers "
+                                "(`4 7 12`, `4-9`) or a filter (`.shiny .iv >=90`).")
+
+        # A filter if ANY word looks like one; otherwise box numbers.
+        if any(w.startswith('.') for w in words):
+            clauses, params, _order, applied, complaint = await resolve_query(
+                db, " ".join(words))
+            if complaint:
+                return None, None, complaint
+            where = " AND ".join(["1=1"] + clauses)
+            async with db.execute(
+                    ROSTER_CTE.format(columns=FILTERABLE_COLUMNS)
+                    + f" SELECT instance_id FROM Roster cp WHERE {where}",
+                    [user_id] + params) as cursor:
+                rows = [r[0] for r in await cursor.fetchall()]
+            return rows, (" \u00b7 ".join(applied) or "everything"), None
+
+        numbers, complaint = parse_box_numbers(words)
+        if complaint:
+            return None, None, complaint
+        found = []
+        for number in numbers:
+            row, problem = await locate_specimen(
+                db, user_id, str(number), "cp.instance_id")
+            if not problem:
+                found.append(row[0])
+        if not found:
+            return None, None, "\u274c None of those box numbers is in your roster."
+        return found, f"boxes {', '.join(str(n) for n in numbers)}", None
+
+    @tags_group.command(name="addall", aliases=["massadd", "tagall"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def tags_addall(self, ctx, tag: str = None, *, selector: str = None):
+        """Put one tag on many specimens. `!tags addall keepers .shiny .iv >=90`"""
+        if not tag or not selector:
+            return await ctx.send(
+                "\N{LABEL} Usage: `!tags addall <tag> <box numbers | filter>`\n"
+                "e.g. `!tags addall keepers 4 7 12` or "
+                "`!tags addall keepers .shiny .iv >=90`.")
+
+        wanted, complaint = clean_tags([tag])
+        if complaint:
+            return await ctx.send(complaint)
+        tag = wanted[0]
+
+        user_id = str(ctx.author.id)
+        async with aiosqlite.connect(DB_FILE) as db:
+            if not await has_tag_table(db):
+                return await ctx.send(NO_TAG_TABLE)
+            rows, label, complaint = await self._bulk_targets(
+                ctx, db, user_id, selector)
+            if complaint:
+                return await ctx.send(complaint)
+
+            if len(rows) > BULK_TAG_CAP:
+                return await ctx.send(
+                    f"\u26a0\ufe0f That matches {len(rows)} specimens. "
+                    f"{BULK_TAG_CAP} is the most one tag command takes - narrow it.")
+
+            if len(rows) >= BULK_TAG_CONFIRM_AT:
+                view = BulkTagConfirm(ctx, DB_FILE, rows, tag, label, adding=True)
+                return await ctx.send(embed=view.embed(), view=view)
+
+            added, capped = await add_tag_to_many(db, rows, tag)
+            await db.commit()
+
+        return await ctx.send(bulk_tag_result(True, tag, label, added, capped,
+                                              len(rows)))
+
+    @tags_group.command(name="removeall", aliases=["massremove", "untagall", "clearall"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def tags_removeall(self, ctx, tag: str = None, *, selector: str = None):
+        """Take one tag off many specimens. `!tags removeall keepers .shiny`"""
+        if not tag or not selector:
+            return await ctx.send(
+                "\N{LABEL} Usage: `!tags removeall <tag> <box numbers | filter>`\n"
+                "e.g. `!tags removeall keepers 4 7 12`, or `!tags removeall keepers "
+                "all` to take it off everything.")
+
+        wanted, complaint = clean_tags([tag])
+        if complaint:
+            return await ctx.send(complaint)
+        tag = wanted[0]
+
+        user_id = str(ctx.author.id)
+        async with aiosqlite.connect(DB_FILE) as db:
+            if not await has_tag_table(db):
+                return await ctx.send(NO_TAG_TABLE)
+
+            # `all` means every specimen CARRYING THIS TAG, which is the only reading of
+            # "remove it everywhere" that is useful - and it is bounded by how many
+            # actually have it rather than by the size of the roster.
+            if selector.strip().lower() in ('all', 'everything', 'everywhere'):
+                async with db.execute(
+                        f"SELECT t.instance_id FROM {TAG_TABLE} t "
+                        f"JOIN caught_pokemon cp ON cp.instance_id = t.instance_id "
+                        f"WHERE cp.user_id = ? AND t.tag = ?",
+                        (user_id, tag)) as cursor:
+                    rows = [r[0] for r in await cursor.fetchall()]
+                label = f"everything tagged `{tag}`"
+            else:
+                rows, label, complaint = await self._bulk_targets(
+                    ctx, db, user_id, selector)
+                if complaint:
+                    return await ctx.send(complaint)
+
+            if not rows:
+                return await ctx.send(
+                    f"\N{LABEL} Nothing in that selection carries `{tag}`.")
+
+            if len(rows) >= BULK_TAG_CONFIRM_AT:
+                view = BulkTagConfirm(ctx, DB_FILE, rows, tag, label, adding=False)
+                return await ctx.send(embed=view.embed(), view=view)
+
+            gone = await remove_tag_from_many(db, rows, tag)
+            await db.commit()
+
+        return await ctx.send(bulk_tag_result(False, tag, label, gone, 0, len(rows)))
 
     @commands.command(name="partner", aliases=["select"])
     @checks.has_started()
@@ -3713,26 +4043,12 @@ class Ecology(commands.Cog):
                 # eight the display needed, which is why the old parser could only ever
                 # filter on four things - the columns simply were not there to ask about.
                 query = f"""
-                    WITH AnchoredRoster AS (
-                        SELECT
-                            s.name, cp.level, cp.is_shiny, cp.instance_id,
-                            cp.nickname, cp.custom_tag, cp.pokedex_id, cp.user_id,
-                            cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                            cp.nature, cp.ability, cp.gender, cp.happiness, cp.gmax_factor,
-                            cp.original_user_id, cp.is_starter, cp.origin_language,
-                            cp.height_multiplier, cp.held_item,
-                            ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                        FROM caught_pokemon cp
-                        JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                        WHERE cp.user_id = ?
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                        AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                    )
+                    {ROSTER_CTE.format(columns=FILTERABLE_COLUMNS)}
                     SELECT
-                        cp.name, cp.level, cp.is_shiny, cp.instance_id, cp.nickname, cp.custom_tag,
+                        cp.name, cp.level, cp.is_shiny, cp.instance_id, cp.nickname,
                         cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
                         cp.box_number, cp.gmax_factor, cp.gender, cp.nature
-                    FROM AnchoredRoster cp
+                    FROM Roster cp
                     WHERE {where_string}
                     {order_clause}
                 """
@@ -3979,11 +4295,13 @@ class Ecology(commands.Cog):
                 h_mult, w_mult, size_class = generate_biometrics()
                 is_alpha = (h_mult >= ALPHA_HEIGHT_THRESHOLD)
 
-                # The tag a specimen earns by being what it is. One tag, because
-                # `custom_tag` is one column and the box browser compares it with `=`;
-                # the order is in constants.AUTO_TAGS. Nothing here ever overwrites a
-                # tag a player chose - a fresh capture has an empty one.
-                earned_tag = auto_tag(
+                # EVERY tag a specimen earns by being what it is - a shiny alpha
+                # legendary gets all three. It used to get one, because `custom_tag`
+                # was a single column and something had to win; the Alpha marking, the
+                # rarest of the five at 2% of captures, was invisible on any shiny.
+                # Written to specimen_tags after the INSERT, since the rows point at
+                # an instance_id that does not exist until then.
+                earned_tags = auto_tags(
                     is_shiny=bool(target['is_shiny']),
                     is_mythical=bool(is_mythical),
                     is_legendary=bool(is_legendary),
@@ -4017,11 +4335,16 @@ class Ecology(commands.Cog):
                 await db.execute("""
                     INSERT INTO caught_pokemon (
                         instance_id, user_id, pokedex_id, caught_in_guild, gender, level, nature, is_shiny, original_user_id,
-                        iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed, ability, height_multiplier, weight_multiplier, origin_language,
-                        custom_tag
+                        iv_hp, iv_attack, iv_defense, iv_sp_atk, iv_sp_def, iv_speed, ability, height_multiplier, weight_multiplier, origin_language
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (instance_id, user_id, target['pokedex_id'], guild_id, gender, level, nature, target['is_shiny'], user_id, *ivs, assigned_ability, h_mult, w_mult, origin_lang, earned_tag))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (instance_id, user_id, target['pokedex_id'], guild_id, gender, level, nature, target['is_shiny'], user_id, *ivs, assigned_ability, h_mult, w_mult, origin_lang))
+
+                # The earned tags, now that the specimen exists to hang them on.
+                # Silently skipped on a database without the migration - a capture must
+                # not fail because the labels have nowhere to go.
+                if earned_tags:
+                    await add_tags(db, instance_id, earned_tags)
                 
                 target_species = pokemon_name 
 
@@ -4098,7 +4421,7 @@ class Ecology(commands.Cog):
                 # spawn is gone from memory - so anybody scrolling past sees a specimen
                 # to catch that was taken minutes ago. Say what happened to it.
                 await mark_spawn_caught(self.bot, target, ctx.author.display_name,
-                                        pokemon_name, target['is_shiny'], earned_tag)
+                                        pokemon_name, target['is_shiny'], earned_tags)
 
                 # ==========================================
                 # LOCAL SPRITE GENERATOR
