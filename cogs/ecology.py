@@ -55,6 +55,7 @@ from utils.forms import (describe_options, form_item, is_held_form_item, is_fuse
                          perform)
 from utils.species import pretty_species
 from utils.db_manager import check_evolution_trigger, evolution_context
+from utils.activity import is_command
 from utils.prefs import trainer_skies
 from utils.regions import current_region
 from utils import guild_config as cfg
@@ -1935,16 +1936,25 @@ class Ecology(commands.Cog):
         # 2. Safety Net: Ignore Direct Messages (DMs)
         if message.guild is None:
             return
-        
+
+        # 3. Ignore command invocations. A habitat fills up because people are TALKING in
+        #    it, not because somebody paged through their box - and `!pc`, `!party` and
+        #    `!box` are the commands a trainer runs most, so the counter was being driven
+        #    hardest by the players doing the least talking. `cogs/experience.py` has
+        #    excluded commands from passive XP since it was written; this is the same
+        #    rule, now asked in one place so the two listeners cannot drift again.
+        if await is_command(self.bot, message):
+            return
+
         guild_id = str(message.guild.id)
-        
-        # 3. Increment the server's activity counter
+
+        # 4. Increment the server's activity counter
         if guild_id not in self.habitat_activity:
             self.habitat_activity[guild_id] = 0
-        
+
         self.habitat_activity[guild_id] += 1
 
-        # 4. If the threshold is reached, trigger the spawn sequence. How much
+        # 5. If the threshold is reached, trigger the spawn sequence. How much
         #    conversation that takes is the server's own business - twenty people
         #    and two thousand people need very different numbers, and the cached
         #    read costs nothing after the first message.

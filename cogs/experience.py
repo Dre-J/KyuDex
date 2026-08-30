@@ -3,6 +3,7 @@ from discord.ext import commands
 import aiosqlite
 import time
 import random
+from utils.activity import is_command
 from utils.constants import DB_FILE, current_skies
 from utils.prefs import trainer_skies
 from utils.regions import current_region
@@ -73,8 +74,9 @@ class PassiveExperienceCog(commands.Cog):
 
         # 2. Ignore command invocations. Passive XP is meant to reward conversation, and
         #    without this every `!catch`, `!battle` and `!party` paid out as well.
-        ctx = await self.bot.get_context(message)
-        if ctx.valid:
+        #    The test moved to utils/activity.py when the spawn counter turned out to
+        #    need the same sentence; the behaviour here is unchanged.
+        if await is_command(self.bot, message):
             return
 
         user_id = str(message.author.id)
