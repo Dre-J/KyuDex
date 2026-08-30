@@ -1564,14 +1564,9 @@ SPECIES_FORM_ITEMS = {
                         'flavour': 'unfolded into its Origin Forme'},
     'griseous-core':   {'species': 'giratina', 'form': 'giratina-origin',
                         'flavour': 'was drawn into its Origin Forme'},
-    'red-nectar':    {'species': 'oricorio', 'form': 'oricorio-baile',
-                      'flavour': 'drank deep and danced the Baile style'},
-    'yellow-nectar': {'species': 'oricorio', 'form': 'oricorio-pom-pom',
-                      'flavour': 'drank deep and danced the Pom-Pom style'},
-    'pink-nectar':   {'species': 'oricorio', 'form': 'oricorio-pau',
-                      'flavour': "drank deep and danced the Pa'u style"},
-    'purple-nectar': {'species': 'oricorio', 'form': 'oricorio-sensu',
-                      'flavour': 'drank deep and danced the Sensu style'},
+    # THE FOUR NECTARS ARE NOT HERE ANY MORE. See SPECIES_NECTARS below: a nectar is
+    # DRUNK, not worn, and it belonged in this table only because the Orbs' machinery was
+    # the closest thing that already existed.
     # ITEM PHASE 10: the masks are the Griseous Orb's shape exactly - each one reshapes
     # its holder AND lifts its damage - so they are rows in this table and the one above
     # rather than a mechanism of their own.
@@ -1582,6 +1577,65 @@ SPECIES_FORM_ITEMS = {
     'wellspring-mask':  {'species': 'ogerpon', 'form': 'ogerpon-wellspring-mask',
                          'flavour': 'donned the Wellspring Mask'},
 }
+
+# ==========================================
+# 🌺 THE NECTARS: DRUNK, NOT WORN
+# ==========================================
+# Oricorio was in SPECIES_FORM_ITEMS above, which made it behave like Zacian and the
+# Primal pair: hand it a nectar, and it changed style the moment it walked onto the
+# field, changing back the instant the item came off. That is not what a nectar is. In
+# the games you FEED it - the item is consumed, the new style is permanent, and nothing
+# is being held afterwards.
+#
+# The practical difference is that a held nectar was occupying Oricorio's item slot
+# forever to hold a form it should have kept for free. A trainer who wanted Sensu
+# Oricorio holding a Choice Scarf could not have one.
+#
+# Kept as its own table rather than a flag on the row above because the two mechanisms
+# now differ in every respect that matters: when they fire, whether the item survives,
+# and whether the change outlives the battle.
+SPECIES_NECTARS = {
+    'red-nectar':    {'species': 'oricorio', 'form': 'oricorio-baile',
+                      'style': 'Baile',
+                      'flavour': 'drank deep and danced the Baile style'},
+    'yellow-nectar': {'species': 'oricorio', 'form': 'oricorio-pom-pom',
+                      'style': 'Pom-Pom',
+                      'flavour': 'drank deep and danced the Pom-Pom style'},
+    'pink-nectar':   {'species': 'oricorio', 'form': 'oricorio-pau',
+                      'style': "Pa'u",
+                      'flavour': "drank deep and danced the Pa'u style"},
+    'purple-nectar': {'species': 'oricorio', 'form': 'oricorio-sensu',
+                      'style': 'Sensu',
+                      'flavour': 'drank deep and danced the Sensu style'},
+}
+
+
+# Which species names a nectar will act on, built FROM the table above rather than by
+# splitting a name on its first hyphen. That split works for `oricorio-baile` and
+# destroys `mr-mime`, `ho-oh`, `type-null` and `porygon-z`, and a rule that is right by
+# accident here is one somebody will copy to where it is wrong.
+NECTAR_DRINKERS = {}
+for _key, _row in SPECIES_NECTARS.items():
+    NECTAR_DRINKERS.setdefault(_row['species'], {_row['species']}).add(_row['form'])
+
+
+def nectar_for(item_name):
+    """The row a nectar names, or None. Normalised, so `Red Nectar` finds it too."""
+    key = str(item_name or '').strip().lower().replace(' ', '-')
+    return SPECIES_NECTARS.get(key)
+
+
+def drinks_nectar(species_name, nectar_row):
+    """Whether this specimen is the species that nectar is for, in any of its forms."""
+    return (str(species_name or '').strip().lower()
+            in NECTAR_DRINKERS.get((nectar_row or {}).get('species'), set()))
+
+
+# The nectars must not still be reachable as held forms - that is the bug this split
+# fixes, and a row left behind in both tables would reintroduce it silently.
+assert not (set(SPECIES_NECTARS) & set(SPECIES_FORM_ITEMS)), (
+    "a nectar is in SPECIES_FORM_ITEMS as well: it would change form on entry AND be "
+    "drinkable")
 
 # ==========================================
 # 🎭 ITEM PHASE 10: THE UNPHASED SHELF, PART TWO
@@ -1658,8 +1712,16 @@ def build_phase6_stock():
     # shelf, but an Adamant Crystal is a key item and is listed unpurchaseable in
     # EQUIPMENT_CATALOG. This assertion fired the moment they were added to the engine
     # tables, which is exactly what it is for - it just wanted telling where they went.
+    #
+    # SPECIES_NECTARS is in this union because the four nectars are still implemented -
+    # they simply moved out of SPECIES_FORM_ITEMS when Oricorio stopped changing style by
+    # HOLDING one. This assertion fired the moment they moved, which is exactly what it
+    # is for: it noticed four shop items had lost their engine table and wanted telling
+    # where they went. Leaving them out of the union would have been the wrong repair -
+    # it would have said the nectars are unimplemented, which is the opposite of true.
     implemented = ((set(SPECIES_STAT_ITEMS) | set(SPECIES_CRIT_ITEMS)
-                    | set(SPECIES_TYPE_BOOST_ITEMS) | set(SPECIES_FORM_ITEMS))
+                    | set(SPECIES_TYPE_BOOST_ITEMS) | set(SPECIES_FORM_ITEMS)
+                    | set(SPECIES_NECTARS))
                    - set(PHASE10_DESCRIPTIONS) - GEN8_ORB_ITEMS)
     missing = implemented - set(PHASE6_DESCRIPTIONS)
     assert not missing, f"Phase 6 items with no shop entry: {sorted(missing)}"

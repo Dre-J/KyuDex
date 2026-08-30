@@ -2388,11 +2388,24 @@ def side_of(state, specimen):
 #
 # The ability does not change: base and Crowned both carry Intrepid Sword / Dauntless
 # Shield in base_pokemon_species. Those are Block 10 and do nothing yet either way.
+#
+# THE RESHAPED SLOT'S CEILING. Iron Head carries 15 PP; the Behemoth moves are worth 8
+# and no more, which is the cap they have in the games once PP Ups are counted. Without
+# it the relic was a straight upgrade in stamina as well as power - the same slot kept
+# Iron Head's fifteen uses and just hit harder.
+#
+# Carried here rather than read from base_moves because base_moves records the BASE PP
+# (5) and every other move in this engine takes its ceiling from that column. Eight is
+# a ruling about these two moves specifically, so it lives beside the swap that causes
+# it rather than being smuggled into the moves table where it would change what a
+# Behemoth Blade taught any other way is worth.
 CROWNED_FORMS = {
     'zacian':    {'item': 'rusted-sword',  'form': 'zacian-crowned',
-                  'swap': ('iron-head', 'behemoth-blade'), 'flavour': 'drew its sword'},
+                  'swap': ('iron-head', 'behemoth-blade'), 'max_pp': 8,
+                  'flavour': 'drew its sword'},
     'zamazenta': {'item': 'rusted-shield', 'form': 'zamazenta-crowned',
-                  'swap': ('iron-head', 'behemoth-bash'), 'flavour': 'raised its shield'},
+                  'swap': ('iron-head', 'behemoth-bash'), 'max_pp': 8,
+                  'flavour': 'raised its shield'},
 }
 
 
@@ -2457,7 +2470,7 @@ async def assume_species_form(db, combatant, form_name):
     return True
 
 
-async def reshape_move_slot(combatant, old_name, new_name):
+async def reshape_move_slot(combatant, old_name, new_name, max_pp=None):
     """
     Turn one move slot into another, keeping the PP already spent on it.
 
@@ -2465,6 +2478,12 @@ async def reshape_move_slot(combatant, old_name, new_name):
     holds its position and its remaining PP rather than being handed a fresh one. The
     engine re-reads the payload from base_moves by name every turn, so renaming the slot
     is what actually changes the move; the rest is kept in step for the button label.
+
+    `max_pp` LOWERS THE SLOT'S CEILING. Iron Head has fifteen uses and Behemoth Blade is
+    worth eight, so without this the relic handed out more power AND more stamina from
+    the same slot. What is already spent stays spent - a half-used Iron Head does not
+    refill by being reshaped - so the remaining PP is CLAMPED to the new ceiling rather
+    than reset to it: 15/15 becomes 8/8, and 6/15 stays 6/8.
     """
     payload = await fetch_move_payload(new_name)
     if not payload:
@@ -2478,6 +2497,10 @@ async def reshape_move_slot(combatant, old_name, new_name):
         for key in ('name', 'type', 'power', 'accuracy', 'class'):
             if key in payload:
                 slot[key] = payload[key]
+        if max_pp is not None:
+            slot['max_pp'] = max_pp
+            # `pp` can be absent on a slot built by a fixture that only named the move.
+            slot['pp'] = min(slot.get('pp', max_pp), max_pp)
         reshaped = True
     return reshaped
 
@@ -2671,7 +2694,8 @@ async def trigger_single_entry_ability(entering_combatant, opponent, owner_str, 
             async with aiosqlite.connect(DB_FILE) as db:
                 if await assume_species_form(db, entering_combatant, crowned['form']):
                     old_move, new_move = crowned['swap']
-                    await reshape_move_slot(entering_combatant, old_move, new_move)
+                    await reshape_move_slot(entering_combatant, old_move, new_move,
+                                            max_pp=crowned.get('max_pp'))
                     combat_log += (
                         f"⚔️ **{owner_str.strip()} {base_name.capitalize()}** "
                         f"{crowned['flavour']} and became "

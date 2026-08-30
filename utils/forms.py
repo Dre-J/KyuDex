@@ -67,6 +67,16 @@ FORM_ITEMS = {
         'rings': (('rotom', 'rotom-heat', 'rotom-wash', 'rotom-frost', 'rotom-fan',
                    'rotom-mow'),),
         'flavour': "{name} leaps into a new appliance",
+        # EACH APPLIANCE OWNS ONE MOVE. Overheat belongs to the oven, Leaf Storm to the
+        # mower, Blizzard to the fridge, Air Slash to the fan, Hydro Pump to the washer -
+        # and the move is the appliance, not the ghost. Without pruning, a player could
+        # tour the catalogue collecting all five and end up with a Rotom-Heat holding
+        # Leaf Storm, which no form of Rotom can learn.
+        #
+        # Measured against species_movepool, switching appliance drops exactly one move,
+        # and moving from base Rotom into any appliance drops none - base Rotom's 66
+        # moves are a subset of every appliance's 67.
+        'prunes_moves': True,
     },
     'gracidea': {
         'kind': RING,
@@ -630,11 +640,25 @@ async def _perform_ring(db, spec, instance_id, species, shown, ability, argument
     if target == species:
         return f"🧬 **{shown}** is already in that forme."
 
-    if not await apply_form(db, instance_id, target, ability):
+    changed = await apply_form(db, instance_id, target, ability)
+    if not changed:
         return f"⚠️ `{target}` is not a species this database has."
+
+    # PRUNED AFTER THE FORM CHANGES, not before: what the specimen may keep is decided
+    # against the movepool of the form it is BECOMING, and `apply_form` is what makes it
+    # that form. Same ordering the fusion path uses, for the same reason.
+    forgotten = []
+    if spec.get('prunes_moves'):
+        forgotten = await prune_moves(db, instance_id, changed[0])
+
     flavour = spec.get('flavour', "{name} changes shape").format(name=shown)
-    return (f"{spec['emoji']} {flavour[0].upper()}{flavour[1:]} — **{shown}** is now "
+    line = (f"{spec['emoji']} {flavour[0].upper()}{flavour[1:]} — **{shown}** is now "
             f"**{form_label(target)}**.")
+    if forgotten:
+        listed = ", ".join(m.replace('-', ' ').title() for m in forgotten)
+        line += (f"\n📝 It forgot {listed} — that belonged to the appliance it left, "
+                 f"not to Rotom.")
+    return line
 
 
 async def _perform_grid(db, spec, instance_id, species, shown, ability, argument):
