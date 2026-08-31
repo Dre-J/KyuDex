@@ -4979,7 +4979,17 @@ class Ecology(commands.Cog):
 
     async def execute_return_logic(self, interaction: discord.Interaction, user_id: str, target_mission: str):
         """The heavy lifting function triggered by the Discord Buttons."""
-        
+
+        # WHICH SERVER THIS RECALL IS HAPPENING IN. The evolution check below needs it
+        # for the trainer's sky and for the specimen's context, and PR 116 passed a
+        # `guild_id` that was never defined in this scope - so the moment a specimen
+        # levelled on a field mission, the recall raised NameError, the transaction
+        # rolled back, and it stayed in active_deployments with no way out. Exactly the
+        # failure the `ev_speeded` bug caused, by a different route.
+        #
+        # None in a DM, which both callees already accept.
+        guild_id = str(interaction.guild.id) if interaction.guild else None
+
         async with aiosqlite.connect(DB_FILE) as db:
             # 🚨 UPDATE: Joined held_item and ability logic
             query = """

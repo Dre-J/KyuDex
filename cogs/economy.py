@@ -882,9 +882,18 @@ class MarketView(discord.ui.View):
     # to a page stays readable and leaves the ceiling a long way off.
     ITEMS_PER_PAGE = 10
 
-    def __init__(self, catalog, category="all"):
+    def __init__(self, catalog, category="all", user_id=None, tokens=None):
         super().__init__(timeout=120)
         self.catalog = catalog
+        # WHOSE WALLET, AND HOW FULL. The footer showed the page number and the item
+        # count and nothing about whether the reader could afford any of it, so pricing
+        # a purchase meant leaving the shop to run `!balance` and coming back.
+        #
+        # Re-read on every page turn rather than captured once: the view lives for two
+        # minutes, and a purchase made in that window would otherwise leave the shelf
+        # quoting a balance the trainer no longer has.
+        self.user_id = str(user_id) if user_id is not None else None
+        self.tokens = tokens
         # `!tmshop` opens this same view already on its own shelf, which is what makes
         # folding the TM shop in here a consolidation rather than a removal - one
         # implementation, one UI, and the command people already type still works.
@@ -925,6 +934,7 @@ class MarketView(discord.ui.View):
         # A shorter category must not strand the reader past its last page.
         self.current_page = 0
         self.update_buttons()
+        await self.refresh_tokens()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
     def generate_embed(self):
@@ -947,24 +957,52 @@ class MarketView(discord.ui.View):
                 inline=False
             )
 
-        if not stock:
-            embed.description += "\n\n*No items available in this category.*"
+        # NO PAGE COUNTER ON AN EMPTY SHELF - "Page 1/1 | 0 items in stock" is three
+        # facts about nothing. THE BALANCE STAYS THOUGH: an empty category is exactly
+        # when a trainer is deciding where else to look, and the number they are
+        # deciding with should not vanish with the stock.
+        parts = []
+        if stock:
+            parts.append(f"Page {self.current_page + 1}/{self.max_pages} "
+                         f"| {len(stock)} items in stock")
         else:
-            embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_pages} "
-                                  f"| {len(stock)} items in stock")
+            embed.description += "\n\n*No items available in this category.*"
+        if self.tokens is not None:
+            parts.append(f"🪙 {self.tokens:,} Eco-Tokens")
+
+        if parts:
+            embed.set_footer(text=" | ".join(parts))
 
         return embed
+
+    async def refresh_tokens(self):
+        """Re-read the wallet, so a purchase made mid-browse is reflected."""
+        if self.user_id is None:
+            return
+        try:
+            async with aiosqlite.connect(DB_FILE) as db:
+                async with db.execute(
+                        "SELECT eco_tokens FROM users WHERE user_id = ?",
+                        (self.user_id,)) as cursor:
+                    row = await cursor.fetchone()
+            self.tokens = row[0] if row else 0
+        except Exception:
+            # A shelf that will not open because the wallet could not be read is worse
+            # than one that shows the stock without a balance. Keep the last figure.
+            pass
 
     @discord.ui.button(label="◀️ Prev", style=discord.ButtonStyle.primary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page -= 1
         self.update_buttons()
+        await self.refresh_tokens()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
     @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page += 1
         self.update_buttons()
+        await self.refresh_tokens()
         await interaction.response.edit_message(embed=self.generate_embed(), view=self)
 
 # Flags the market answers itself. Declared to the shared parser so it lets them
@@ -2005,7 +2043,8 @@ Def: {iv_def:<2} | Spe: {iv_spe:<2}
     @checks.is_authorized()
     async def view_market(self, ctx):
         """Displays available field equipment for purchase."""
-        view = MarketView(SHOP_CATALOG)
+        view = MarketView(SHOP_CATALOG, user_id=ctx.author.id)
+        await view.refresh_tokens()
         embed = view.generate_embed()
         await ctx.send(embed=embed, view=view)
 

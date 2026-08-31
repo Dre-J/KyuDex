@@ -507,6 +507,16 @@ EQUIPMENT_CATALOG = {
     # cheaper road - which is the balance it should have had.
     "rare-candy":    {"name": "Rare Candy", "price": 1200, "desc": "A sweet treat that increases a pokemon's level by 1.", "emoji": "🍬", "category": "evoitems"},
 
+    # THE EVERSTONE WAS ALREADY IMPLEMENTED AND UNOBTAINABLE. Six separate places honour
+    # it - passive XP, the trade, `!candy`, the field-mission return and both battle
+    # reward paths - and every one of those checks was dead code, because the item
+    # appeared in no shop, no drop table and no catalogue. A player could not hold one.
+    #
+    # Priced under a stone: it is the cheaper half of the same decision. A stone spends
+    # itself to force an evolution, an Everstone is kept to refuse one, and refusing
+    # should not cost more than causing.
+    "everstone":     {"name": "Everstone", "price": 400, "desc": "Held. Its bearer will not evolve - quietly, with no announcement either way.", "emoji": "🪨", "category": "evoitems"},
+
     # ==========================================
     # HELD BATTLE EQUIPMENT
     # ==========================================
