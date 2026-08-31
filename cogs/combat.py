@@ -7838,9 +7838,16 @@ class BattleDashboard(discord.ui.View):
                                     held_item = resolve_persisted_item(p).lower().replace(' ', '-')
 
                                     # Block 1: The Everstone Suppressant
+                                    #
+                                    # SILENT. It used to announce the suppression every
+                                    # battle, which is the one thing an Everstone is
+                                    # bought to stop hearing - a trainer who equipped one
+                                    # has already decided, and does not need telling
+                                    # again after each fight. The other four places that
+                                    # honour the stone say nothing; this is now the same.
                                     if held_item == 'everstone':
-                                        rewards_log += f"🪨 **{p['name'].capitalize()}**'s biological mutation was suppressed by its Everstone!\n"
-                                    
+                                        pass
+
                                     # Block 2: Check for Mutation
                                     else:
                                         print(f"\n[DEBUG EVO PvE] 1. Checking evolution for {p['name']} (Level {p['level']})")
@@ -10467,10 +10474,14 @@ class Combat(commands.Cog):
                                         if 'instance_id' in p:
                                             held_item = resolve_persisted_item(p).lower().replace(' ', '-')
                                             
-                                            # Block 1: The Everstone Suppressant
+                                            # Block 1: The Everstone Suppressant.
+                                            # Silent, for the reason the PvE path above
+                                            # gives - and silent in BOTH, because a stone
+                                            # that is quiet after a wild battle and loud
+                                            # after a duel is worse than either.
                                             if held_item == 'everstone':
-                                                rewards_log += f"\n🪨 **{p['name'].capitalize()}**'s biological mutation was suppressed by its Everstone!"
-                                                
+                                                pass
+
                                             # Block 2: Check for Mutation
                                             else:
                                                 try:
