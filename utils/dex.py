@@ -12,6 +12,12 @@ paging through the same sentence three times. Bulbasaur's 22 entries become 12 p
 """
 from collections import OrderedDict
 
+from utils.constants import (CONDITION_TRIGGERS, HABITAT_BIOMES, RITUAL_MIN_LEVEL,
+                             RITUAL_RITES)
+from utils.db_manager import rule_is_checkable, stated
+from utils.formulas import pretty_item
+from utils.regions import region_label
+
 DEX_TABLE = 'species_dex'
 FLAVOUR_TABLE = 'species_flavour'
 
@@ -283,3 +289,272 @@ async def species_types(db, pokedex_id):
             "SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ? "
             "ORDER BY rowid", (pokedex_id,)) as cursor:
         return [row[0] for row in await cursor.fetchall()]
+
+
+# ==========================================
+# HOW A LINE EVOLVES, IN WORDS
+# ==========================================
+# `evolution_stages` above draws the SHAPE of a family - Bulbasaur → Ivysaur → Venusaur -
+# and says nothing about how to walk it. Everything needed to say that has been sitting in
+# evolution_rules' thirteen columns the whole time, unread by anything but the rulebook.
+#
+# THE ROUTE IS DESCRIBED AS AN INSTRUCTION, NOT AS A ROW. Two places where that means
+# reporting on THIS world rather than on the games:
+#
+#   * a ritual route quotes the level `!evolve <specimen> ritual` actually wants, not the
+#     min_level its row happens to carry - Tandemaus' row says 25 and the ritual wants 40,
+#     and the row's number is the one a trainer cannot act on.
+#   * a level-up rule whose real requirement was never recorded - a mossy rock, a magnetic
+#     field, an affection level - says so. It cannot fire, and a blank method beside an
+#     arrow reads as "just level it up", which is the one thing that will never work.
+EVOLUTION_TABLE = 'evolution_rules'
+
+# The columns every copy of this table has, and the ones that arrive by migration. Guarded
+# the same way db_manager guards them and for the same reason: the dex has to keep
+# answering on a database that is mid-upgrade.
+CORE_RULE_COLUMNS = ('trigger_name', 'min_level', 'item_name', 'min_happiness',
+                     'time_of_day', 'held_item', 'known_move', 'known_move_type')
+OPTIONAL_RULE_COLUMNS = ('region', 'gender', 'biome', 'stat_rule', 'personality')
+
+# The four skies, said out loud. `dusk` and `full-moon` sit INSIDE day and night rather
+# than replacing them - see constants.SPECIAL_SKIES - which is why they read as moments.
+SKY_PHRASES = {
+    'day': "in daylight", 'night': "at night",
+    'dusk': "at dusk", 'full-moon': "under a full moon",
+}
+
+GENDER_PHRASES = {'f': "♀ females only", 'm': "♂ males only"}
+
+# What a rule with nothing checkable on it is. Stated once so the panel and any test read
+# the same sentence.
+NO_ROUTE = "no route here — the games settle this one somewhere this world cannot see"
+
+
+def article(phrase):
+    """`'a'`, or `'an'` before a word that opens with a vowel. 'Use a Ice Stone' was
+    the first thing anybody noticed about this panel."""
+    return "an" if str(phrase or '')[:1].lower() in 'aeiou' else "a"
+
+
+def describe_stat_rule(text):
+    """`'attack>defense'` -> `'Attack > Defense'`."""
+    text = str(text or '').strip().lower()
+    for symbol in ('>', '<', '='):
+        if symbol in text:
+            left, _, right = text.partition(symbol)
+            return f"{left.strip().title()} {symbol} {right.strip().title()}"
+    return text
+
+
+def describe_biome(key):
+    """`'forest'` -> `'a 🌳 Forest habitat'`, off the one habitat table."""
+    key = str(key or '').strip().lower()
+    entry = HABITAT_BIOMES.get(key)
+    emoji = f"{entry['emoji']} " if entry else ""
+    return f"a {emoji}{key.title()} habitat"
+
+
+def describe_evolution_rule(rule):
+    """
+    One row of evolution_rules as something a trainer can go and do.
+
+    `rule` is any mapping carrying the table's column names - a sqlite3.Row, or the dicts
+    `evolution_routes` hands back. A column that is missing is a requirement that is not
+    made, which is what lets this read a half-migrated table without special-casing it.
+    """
+    trigger = str(rule.get('trigger_name') or '').strip().lower()
+
+    # The two conditions this engine really counts. Their sentence lives beside the
+    # threshold it quotes, so raising the bar cannot leave the dex naming the old figure.
+    if trigger in CONDITION_TRIGGERS:
+        spec = CONDITION_TRIGGERS[trigger]
+        return spec['dex'].format(**spec).capitalize()
+
+    # The rites this world has no equivalent of. What the games ask for is worth printing
+    # anyway - it is the reason the specimen is stuck - but the actionable half is ours.
+    if trigger in RITUAL_RITES:
+        return (f"Ritual at Lv. {RITUAL_MIN_LEVEL}+ — in the games, "
+                f"{RITUAL_RITES[trigger]}")
+
+    clauses = []
+    if trigger == 'use-item':
+        item = pretty_item(rule.get('item_name'))
+        clauses.append(f"Use {article(item)} {item}")
+    elif trigger == 'trade':
+        clauses.append("Trade")
+    elif stated(rule.get('min_level')):
+        clauses.append(f"Lv. {int(rule['min_level'])}")
+    elif not stated(rule.get('min_happiness')):
+        # Neither a level nor a friendship bar: whatever else it wants, it wants it on a
+        # level-up. Suppressed when friendship IS the bar, so Golbat does not read
+        # "Level up · friendship 160+" when friendship is the whole of it.
+        clauses.append("Level up")
+
+    if stated(rule.get('min_happiness')):
+        clauses.append(f"friendship {int(rule['min_happiness'])}+")
+    if stated(rule.get('held_item')):
+        worn = pretty_item(rule['held_item'])
+        clauses.append(f"holding {article(worn)} {worn}")
+    if stated(rule.get('time_of_day')):
+        sky = str(rule['time_of_day']).strip().lower()
+        clauses.append(SKY_PHRASES.get(sky, f"at {sky.replace('-', ' ')}"))
+    if stated(rule.get('known_move')):
+        clauses.append(f"knowing {pretty_item(rule['known_move'])}")
+    if stated(rule.get('known_move_type')):
+        clauses.append(f"knowing a {str(rule['known_move_type']).title()}-type move")
+    if stated(rule.get('region')):
+        clauses.append(f"in {region_label(rule['region'])}")
+    if stated(rule.get('biome')):
+        clauses.append(f"in {describe_biome(rule['biome'])}")
+    if stated(rule.get('gender')):
+        clauses.append(GENDER_PHRASES.get(
+            str(rule['gender']).strip().lower(), str(rule['gender'])))
+    if stated(rule.get('stat_rule')):
+        clauses.append(describe_stat_rule(rule['stat_rule']))
+    if stated(rule.get('personality')):
+        # Wurmple's coin, which was flipped when it was caught and cannot be flipped
+        # again. Both of its rules read alike here on purpose - the difference between
+        # them is not something a trainer can see, let alone change.
+        clauses.append("decided at capture")
+
+    # A level-up rule with nothing checkable on it never fires - the same judgement the
+    # rulebook makes, made by the same predicate rather than by a second copy of it.
+    if trigger == 'level-up' and not rule_is_checkable(rule):
+        return NO_ROUTE
+    return " · ".join(clauses)
+
+
+async def evolution_routes(db, family):
+    """
+    Every rule out of every member of one line, as dicts keyed by column name.
+
+    Ordered by the parent species and then by row id, so the routes out of one rung stay
+    together and the order is the same on every read.
+    """
+    ids = [int(i) for i in (family or ()) if i is not None]
+    if not ids or not await _table_exists(db, EVOLUTION_TABLE):
+        return []
+
+    async with db.execute(f"PRAGMA table_info({EVOLUTION_TABLE})") as cursor:
+        present = {row[1] for row in await cursor.fetchall()}
+    columns = list(CORE_RULE_COLUMNS) + [name for name in OPTIONAL_RULE_COLUMNS
+                                         if name in present]
+
+    placeholders = ','.join('?' * len(ids))
+    selected = ', '.join(f"er.{name}" for name in columns)
+    async with db.execute(
+            f"SELECT er.base_species_id, er.evolved_species_id, {selected} "
+            f"FROM {EVOLUTION_TABLE} er "
+            f"WHERE er.base_species_id IN ({placeholders}) "
+            f"ORDER BY er.base_species_id, er.id", tuple(ids)) as cursor:
+        rows = await cursor.fetchall()
+
+    return [dict(zip(('base', 'evolved') + tuple(columns), row)) for row in rows]
+
+
+def stage_index(stages):
+    """{pokedex_id: which rung it stands on}, off `evolution_stages`' output."""
+    return {pokedex_id: rung
+            for rung, members in enumerate(stages or ())
+            for pokedex_id, _name in members}
+
+
+def evolution_route_lines(routes, names, highlight=(), order=None):
+    """
+    The routes as `Parent → Child — how`, one line each, deduplicated.
+
+    THE DEDUPLICATION IS THE POINT. evolution_rules carries a row per qualifying rule
+    rather than per outcome: Eevee has four identical Sylveon rows and Magneton five
+    identical Magnezone ones, so a straight render prints Magnezone five times over. Two
+    rows describing the same journey the same way ARE one route to a reader.
+
+    A PAIR THAT HAS A REAL ROUTE DOES NOT ALSO ADVERTISE ITS DEAD ONE. Three species keep
+    both: Eevee's Leafeon has the unrecorded mossy rock AND a Leaf Stone, Magneton's
+    Magnezone the magnetic field AND a Thunder Stone, Feebas' Milotic the beauty stat AND
+    a Prism Scale trade. Printing "no route here" beside a route that works is worse than
+    saying nothing - it reads as the whole answer.
+
+    `names` maps pokedex_id to something printable; `highlight` is the ids to embolden,
+    which is how the species on screen finds itself in its own family tree.
+
+    `order` maps a species to the rung it stands on - `stage_index` builds it - and puts
+    the routes in the order they are WALKED. Without it they come back sorted by species
+    number, which for Pikachu prints "Pikachu → Raichu" above "Pichu → Pikachu" because
+    Pichu is #172 and was added two generations later.
+    """
+    highlight = set(highlight or ())
+    order = order or {}
+    routes = sorted(routes or (),
+                    key=lambda route: (order.get(route.get('base'), len(order)),
+                                       route.get('base') or 0,
+                                       route.get('evolved') or 0))
+    described = [(route, describe_evolution_rule(route)) for route in routes]
+    reachable = {(route.get('base'), route.get('evolved'))
+                 for route, method in described if method != NO_ROUTE}
+
+    seen, lines = set(), []
+    for route, method in described:
+        pair = (route.get('base'), route.get('evolved'))
+        if method == NO_ROUTE and pair in reachable:
+            continue
+        key = pair + (method,)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        def label(pokedex_id):
+            shown = names.get(pokedex_id, f"#{pokedex_id}")
+            return f"**{shown}**" if pokedex_id in highlight else shown
+
+        lines.append(f"{label(route.get('base'))} → {label(route.get('evolved'))}"
+                     f"  —  {method}")
+    return lines
+
+
+# ==========================================
+# WHAT THE READER ALREADY OWNS
+# ==========================================
+CAUGHT_TABLE = 'caught_pokemon'
+
+
+async def owned_counts(db, user_id, pokedex_ids):
+    """
+    How many of each of these species one trainer holds, as {id: (total, shiny)}.
+
+    COUNTS EVERYTHING ON THEIR SHEET, including specimens away on a field mission or
+    sitting on the GTS. They are still caught: a tally that dropped by one when a
+    specimen was deployed would read as one having gone missing.
+    """
+    ids = [int(i) for i in dict.fromkeys(pokedex_ids or ()) if i is not None]
+    if not user_id or not ids:
+        return {}
+    placeholders = ','.join('?' * len(ids))
+    async with db.execute(
+            f"SELECT pokedex_id, COUNT(*), "
+            f"SUM(CASE WHEN is_shiny THEN 1 ELSE 0 END) "
+            f"FROM {CAUGHT_TABLE} WHERE user_id = ? "
+            f"AND pokedex_id IN ({placeholders}) GROUP BY pokedex_id",
+            (str(user_id), *ids)) as cursor:
+        return {row[0]: (row[1], row[2] or 0) for row in await cursor.fetchall()}
+
+
+def describe_ownership(counts, pokedex_id, forms=()):
+    """
+    What the trainer has of the shape on screen, and of the species behind it.
+
+    The two numbers are separate on purpose: a Rotom Heat is stored under its own
+    pokedex_id, so a trainer with five Rotoms in five shapes has one of each and would
+    otherwise be told they have never caught the one they are looking at.
+    """
+    own, shiny = counts.get(pokedex_id, (0, 0))
+    across = sum(total for _id, (total, _s) in counts.items())
+    others = [pid for pid, _n in (forms or ()) if pid != pokedex_id]
+
+    if not across:
+        return "none caught yet"
+    parts = [f"**{own}** of this form" if own else "**none** of this form"]
+    if shiny:
+        parts.append(f"✨ {shiny} shiny")
+    if others and across != own:
+        parts.append(f"**{across}** across {len(others) + 1} forms")
+    return "  ·  ".join(parts)

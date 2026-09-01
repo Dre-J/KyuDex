@@ -40,7 +40,7 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              iv_percentage as iv_percentage_of)
 from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
                           record_use, used_today, expedition_yield, describe_yield)
-from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs
+from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs, pretty_item
 import re
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
@@ -49,7 +49,9 @@ from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES,
-                          box_number_of, ROSTER_CTE)
+                          box_number_of, make_partner, ROSTER_CTE)
+from utils.cards import TabbedCard, card_button, divider, row, text
+from utils.dex import stat_bar
 from utils.filters import filter_help, resolve_query, FILTERABLE_COLUMNS
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
@@ -1026,207 +1028,348 @@ class ReleaseConfirmView(discord.ui.View):
             content=f"Release cancelled. The {noun} in your PC.", embed=None, view=self)
 
 
-class PokemonPaginator(discord.ui.View):
+class PokemonPaginator(TabbedCard):
+    """
+    The box browser, as a Components V2 card.
+
+    **WHAT CHANGED, AND WHY.** It was an embed carrying an eight-line description and a
+    stat block, all of it on screen at once - so the header a reader walks the roster by
+    was pushed off the top of a phone by six IVs they were not looking at. The header is
+    all that shows now; Stats, Moves and Extras open one at a time and the same button
+    closes what it opened.
+
+    **THE ROSTER QUERY IS THE SHARED ONE.** This carried its own copy of the CTE, which
+    is the seventh found in this codebase. `ROSTER_CTE` is the definition; the columns are
+    named rather than positional, because "unpack all 32 variables" is exactly how a
+    height multiplier ends up being read as a weight.
+    """
+
+    TABS = {
+        'stats':  ("Stats", "📊"),
+        'moves':  ("Moves", "💥"),
+        'extras': ("Extras", "➕"),
+    }
+    NOT_YOURS = "❌ This is not your field notebook!"
+
+    # name -> the SQL that fills it. One list, so the SELECT and the unpacking cannot
+    # come to disagree about the order.
+    FIELDS = (
+        ('nickname', 'cp.nickname'), ('pokedex_id', 'cp.pokedex_id'),
+        ('level', 'cp.level'), ('nature', 'cp.nature'), ('is_shiny', 'cp.is_shiny'),
+        ('species', 's.name'), ('instance_id', 'cp.instance_id'),
+        ('original_user_id', 'cp.original_user_id'), ('experience', 'cp.experience'),
+        ('growth_rate', 's.growth_rate'),
+        ('iv_hp', 'cp.iv_hp'), ('iv_attack', 'cp.iv_attack'),
+        ('iv_defense', 'cp.iv_defense'), ('iv_sp_atk', 'cp.iv_sp_atk'),
+        ('iv_sp_def', 'cp.iv_sp_def'), ('iv_speed', 'cp.iv_speed'),
+        ('ev_hp', 'cp.ev_hp'), ('ev_attack', 'cp.ev_attack'),
+        ('ev_defense', 'cp.ev_defense'), ('ev_sp_atk', 'cp.ev_sp_atk'),
+        ('ev_sp_def', 'cp.ev_sp_def'), ('ev_speed', 'cp.ev_speed'),
+        ('ability', 'cp.ability'), ('happiness', 'cp.happiness'),
+        ('held_item', 'cp.held_item'), ('gmax_factor', 'cp.gmax_factor'),
+        ('height_multiplier', 'cp.height_multiplier'),
+        ('weight_multiplier', 'cp.weight_multiplier'),
+        ('base_height', 's.height'), ('base_weight', 's.weight'),
+        ('gender', 'cp.gender'),
+        ('move_1', 'cp.move_1'), ('move_2', 'cp.move_2'),
+        ('move_3', 'cp.move_3'), ('move_4', 'cp.move_4'),
+    )
+
+    # The six stats, as (label, real-stat key, IV column, EV column). The stat names are
+    # the ones calculate_real_stat expects, which is why 'special-attack' is spelled out.
+    STAT_ROWS = (
+        ('HP', 'hp', 'iv_hp', 'ev_hp'),
+        ('Attack', 'attack', 'iv_attack', 'ev_attack'),
+        ('Defense', 'defense', 'iv_defense', 'ev_defense'),
+        ('Sp. Atk', 'special-attack', 'iv_sp_atk', 'ev_sp_atk'),
+        ('Sp. Def', 'special-defense', 'iv_sp_def', 'ev_sp_def'),
+        ('Speed', 'speed', 'iv_speed', 'ev_speed'),
+    )
+
     def __init__(self, bot, user_id, current_index, total_pokemon, active_partner_id):
-        super().__init__(timeout=180) # Buttons disable after 3 minutes
+        super().__init__(int(user_id), tab='stats')
         self.bot = bot
-        self.user_id = user_id
+        self.user_id = str(user_id)
         self.current_index = current_index
         self.total_pokemon = total_pokemon
         self.active_partner_id = active_partner_id
-        #self.update_button_states()
+        self.data = None
+        self.stats = {}
+        self.types = []
+        self.moves = []
+        self.tags = []
+        self.sprite_path = None
 
-    def update_button_states(self):
-        # Disable 'Prev' if we are at Pokemon #1, disable 'Next' if we are at the end
-        self.children[0].disabled = self.current_index <= 1
-        self.children[1].disabled = self.current_index >= self.total_pokemon
-
-    async def generate_embed(self):
-        """Fetches the data for the current Field Number and builds the UI with local assets."""
-        
+    # ------------------------------------------------------------------
+    async def load(self):
+        """Read the specimen at the current box number. Returns its sprite, or None."""
+        columns = ", ".join(f"{sql} AS {name}" for name, sql in self.FIELDS)
         async with aiosqlite.connect(DB_FILE) as db:
-                
-            async with db.execute("""
-                WITH Roster AS (
-                    SELECT 
-                        cp.nickname, cp.pokedex_id, cp.level, cp.nature, cp.is_shiny, s.name, 
-                        cp.instance_id, cp.original_user_id, cp.experience, s.growth_rate,
-                        cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed,
-                        cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, 
-                        cp.ability, cp.happiness, cp.held_item, cp.gmax_factor,
-                        cp.height_multiplier, cp.weight_multiplier, s.height, s.weight,
-                        cp.gender, 
-                        ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as field_number
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                )
-                SELECT * FROM Roster WHERE field_number = ?
-            """, (self.user_id, self.current_index)) as cursor:
-                data = await cursor.fetchone()
-            
-            if not data:
-                return discord.Embed(title="Error", description="Specimen data corrupted."), None
+            async with db.execute(
+                    ROSTER_CTE.format(columns=columns)
+                    + " SELECT * FROM Roster WHERE box_number = ?",
+                    (self.user_id, self.current_index)) as cursor:
+                found = await cursor.fetchone()
+            if not found:
+                self.data = None
+                return None
+            self.data = dict(zip([name for name, _sql in self.FIELDS] + ['box_number'],
+                                 found))
 
-            # Unpack all 32 variables!
-            (nickname, poke_id, level, nature, is_shiny, name, actual_tag_id, original_user_id, current_xp, growth_rate,
-            iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, 
-            ability, happiness, held_item, gmax_factor, 
-            h_mult, w_mult, base_h, base_w, gender, field_number) = data
+            async with db.execute(
+                    "SELECT stat_name, base_value FROM base_pokemon_stats "
+                    "WHERE pokedex_id = ?", (self.data['pokedex_id'],)) as cursor:
+                self.stats = {row[0]: row[1] for row in await cursor.fetchall()}
 
-            # Fetch Base Stats
-            async with db.execute("SELECT stat_name, base_value FROM base_pokemon_stats WHERE pokedex_id = ?", (poke_id,)) as cursor:
-                stats = {stat[0]: stat[1] for stat in await cursor.fetchall()}
-                
-            # Fetch Typings!
-            async with db.execute("SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ?", (poke_id,)) as cursor:
-                type_rows = await cursor.fetchall()
-                type_str = type_badges([row[0] for row in type_rows])
+            async with db.execute(
+                    "SELECT type_name FROM base_pokemon_types WHERE pokedex_id = ? "
+                    "ORDER BY rowid", (self.data['pokedex_id'],)) as cursor:
+                self.types = [row[0] for row in await cursor.fetchall()]
 
-        # --- CALCULATIONS ---
-        # Format the Gender Icon
-        gender_badge = " " + gender_icon(gender)
-        
-        # --- Original Trainer Logic ---
-        if str(original_user_id) == str(self.user_id):
-            ot_display = "You"
-        else:
-            # Look up the user in the bot's cache
-            ot_user = self.bot.get_user(int(original_user_id))
-            
-            if ot_user:
-                # .display_name grabs their server nickname if they have one, otherwise their global username
-                ot_display = ot_user.display_name 
-            else:
-                # Fallback just in case the original catcher left the server or the bot's cache cleared
-                ot_display = "Unknown Researcher"
+            self.moves = await self.read_moves(db)
+            self.tags = await tags_for(db, self.data['instance_id'])
 
-        display_title = f'"{nickname}" {name.capitalize()}' if nickname else name.capitalize()
-        display_ability = ability.replace('-', ' ').title() if ability else "Unknown"
-        item_display = held_item.replace('-', ' ').title() if held_item != 'none' else "None"
-        # The shiny star stays on `title_prefix` below, which already carries it, so
-        # only the two trait badges are asked for here.
-        gmax_icon = trait_badges(gmax=gmax_factor, height_multiplier=h_mult)
+        return self.sprite_file()
 
-        if happiness < 50: bond_icon = "🤍🤍🤍 (Acclimating)"
-        elif happiness < 150: bond_icon = "❤️🤍🤍 (Trusting)"
-        elif happiness < 220: bond_icon = "❤️❤️🤍 (Bonded)"
-        else: bond_icon = "❤️❤️❤️ (Symbiotic)"
+    async def read_moves(self, db):
+        """The four equipped moves with their numbers, in slot order and no other."""
+        wanted = [self.data.get(f'move_{slot}') for slot in (1, 2, 3, 4)]
+        named = [name for name in wanted if name]
+        if not named:
+            return []
+        placeholders = ','.join('?' * len(named))
+        async with db.execute(
+                f"SELECT name, type, damage_class, power, accuracy, pp "
+                f"FROM base_moves WHERE name IN ({placeholders})", named) as cursor:
+            rows = {row[0]: row for row in await cursor.fetchall()}
+        # Ordered by the SLOT, not by whatever the IN clause returned. A moveset read
+        # back in the wrong order is a moveset the trainer cannot match to `!learn 3`.
+        return [rows.get(name, (name, None, None, None, None, None))
+                for name in wanted if name]
 
-        xp_for_next_level = get_xp_requirement(level, growth_rate) 
-        
-        real_hp = calculate_real_stat('hp', stats.get('hp', 0), iv_hp, ev_hp, level)
-        real_atk = calculate_real_stat('attack', stats.get('attack', 0), iv_atk, ev_atk, level)
-        real_def = calculate_real_stat('defense', stats.get('defense', 0), iv_def, ev_def, level)
-        real_spa = calculate_real_stat('special-attack', stats.get('special-attack', 0), iv_spa, ev_spa, level)
-        real_spd = calculate_real_stat('special-defense', stats.get('special-defense', 0), iv_spd, ev_spd, level)
-        real_spe = calculate_real_stat('speed', stats.get('speed', 0), iv_spe, ev_spe, level)
+    def sprite_name(self):
+        return sprite_attachment_name(self.data['pokedex_id'], self.data['is_shiny'],
+                                      self.data['gender'])
 
-        # --- BIOMETRIC MATH ---
-        h_mult = h_mult or 1.0
-        w_mult = w_mult or 1.0
-        
-        actual_height_m = round((base_h / 10.0) * h_mult, 2)
-        actual_weight_kg = round((base_w / 10.0) * w_mult, 2)
-        
+    def sprite_file(self):
+        """Resolve the picture ONCE and remember the path.
+
+        The header has to know whether there is one - a media block pointing at an
+        attachment that was never sent renders as a broken image - and asking the
+        resolver a second time to find that out would walk the fallback chain twice per
+        redraw for an answer already in hand.
+        """
+        self.sprite_path = resolve_sprite(
+            self.data['pokedex_id'], shiny=self.data['is_shiny'],
+            gender=self.data['gender'], style=HOME)
+        if not self.sprite_path:
+            print(f"⚠️ WARNING: no sprite anywhere for ID {self.data['pokedex_id']} "
+                  f"(shiny={self.data['is_shiny']}, gender={self.data['gender']})")
+            return None
+        return discord.File(self.sprite_path, filename=self.sprite_name())
+
+    async def walk(self, interaction, index):
+        """Move to another box number and redraw, picture and all."""
+        was, self.current_index = self.data, max(1, min(self.total_pokemon, index))
+        attachment = await self.load()
+        if self.data is None:
+            # The roster shrank while the card was open - something was released, traded
+            # or deployed - so the box number this button was drawn for no longer names
+            # anything. Say so and leave the card on the specimen that IS still there,
+            # rather than redrawing a header off a row that came back empty.
+            self.data = was
+            return await interaction.response.send_message(
+                "📦 That box slot is empty now - your roster changed while this was "
+                "open. Run `!view` again.", ephemeral=True)
+        await self.redraw(interaction, attachments=[attachment] if attachment else [])
+
+    def accent(self):
+        return (discord.Colour.gold() if self.data and self.data['is_shiny']
+                else discord.Colour.green())
+
+    # --- the numbers --------------------------------------------------
+    def real_stats(self):
+        """The six computed stats, keyed by label."""
+        return {label: calculate_real_stat(key, self.stats.get(key, 0),
+                                           self.data[iv], self.data[ev],
+                                           self.data['level'])
+                for label, key, iv, ev in self.STAT_ROWS}
+
+    def size(self):
+        """(size tag, height in metres, weight in kilos) for this specimen."""
+        h_mult = self.data['height_multiplier'] or 1.0
+        w_mult = self.data['weight_multiplier'] or 1.0
         # The Alpha cutoff is the shared constant, not a number written out again. It
         # decides two separate things - the badge shown here, and the `alpha` tag a
         # capture earns - and the two disagreeing would be invisible until somebody
         # noticed a specimen labelled ALPHA that had not been tagged as one.
-        size_tag = "Average"
-        if h_mult <= 0.80: size_tag = "Teeny"
-        elif h_mult <= 0.95: size_tag = "Small"
-        elif is_alpha_size(h_mult): size_tag = f"{ALPHA_ICON} ALPHA"
-        elif h_mult >= 1.06: size_tag = "Large"
+        tag = "Average"
+        if h_mult <= 0.80:
+            tag = "Teeny"
+        elif h_mult <= 0.95:
+            tag = "Small"
+        elif is_alpha_size(h_mult):
+            tag = f"{ALPHA_ICON} ALPHA"
+        elif h_mult >= 1.06:
+            tag = "Large"
+        return (tag,
+                round((self.data['base_height'] / 10.0) * h_mult, 2),
+                round((self.data['base_weight'] / 10.0) * w_mult, 2))
 
-        # ==========================================
-        # LOCAL ASSET LOADING
-        # ==========================================
-        # The box browser shows HOME artwork, and shows the FEMALE sprite for the
-        # hundred-odd species that have one. Both questions are asked by utils.sprites,
-        # which owns the fallback chain - only about 8% of the roster has a female
-        # image, so "give me the female HOME sprite" has to be a preference with
-        # somewhere to land rather than a filename.
-        safe_filename = sprite_attachment_name(poke_id, is_shiny, gender)
-        file_path = resolve_sprite(poke_id, shiny=is_shiny, gender=gender, style=HOME)
+    def trainer(self):
+        """Who caught it, as something to print."""
+        if str(self.data['original_user_id']) == str(self.user_id):
+            return "You"
+        found = self.bot.get_user(int(self.data['original_user_id'])) if self.bot else None
+        # .display_name is their server nickname if they have one. A catcher who has left
+        # or fallen out of the cache is not an error - it is just somebody else.
+        return found.display_name if found else "Unknown Researcher"
 
-        sprite_file = None
-        if file_path:
-            sprite_file = discord.File(file_path, filename=safe_filename)
+    # --- the card -----------------------------------------------------
+    def header(self):
+        data = self.data
+        display = (f'"{data["nickname"]}" {data["species"].capitalize()}'
+                   if data['nickname'] else data['species'].capitalize())
+        badges = gender_icon(data['gender']) + trait_badges(
+            gmax=data['gmax_factor'], height_multiplier=data['height_multiplier'])
+        star = "🌟 " if data['is_shiny'] else ""
+        partner = ("❤️ **Active Partner**\n"
+                   if data['instance_id'] == self.active_partner_id else "")
+        ability = (data['ability'] or 'unknown').replace('-', ' ').title()
+
+        blocks = [text(f"# {star}{display} {badges}".rstrip()),
+                  divider(visible=False)]
+        if self.sprite_path:
+            blocks.append(discord.ui.MediaGallery(discord.MediaGalleryItem(
+                f"attachment://{self.sprite_name()}", description=self.sprite_name())))
+        blocks.append(text(
+            f"{partner}"
+            f"**Level {data['level']}** | {type_badges(self.types) or '—'}\n"
+            f"🧬 **Ability:** `{ability}` | **Nature:** {data['nature']}\n"
+            f"-# Box No. {data['box_number']} of {self.total_pokemon} · "
+            f"Tag ID `{data['instance_id'][:8]}`"))
+        return blocks
+
+    def panel(self, tab):
+        return {'stats': self.stats_panel, 'moves': self.moves_panel,
+                'extras': self.extras_panel}[tab]()
+
+    def stats_panel(self):
+        data = self.data
+        real = self.real_stats()
+        percent = iv_percentage_of(tuple(data[iv] for _l, _k, iv, _e in self.STAT_ROWS))
+        if percent >= 90:
+            appraisal = "S-Tier (Flawless)"
+        elif percent >= 80:
+            appraisal = "A-Tier (Excellent)"
+        elif percent >= 60:
+            appraisal = "B-Tier (Strong)"
+        elif percent >= 40:
+            appraisal = "C-Tier (Average)"
         else:
-            print(f"⚠️ WARNING: no sprite anywhere for ID {poke_id} "
-                  f"(shiny={is_shiny}, gender={gender})")
+            appraisal = "D-Tier (Weak)"
 
-        # --- BUILD EMBED ---
-        color = discord.Color.gold() if is_shiny else discord.Color.green()
-        title_prefix = "🌟" if is_shiny else ""
+        # THE BAR RUNS TO THIS SPECIMEN'S OWN BEST STAT. A fixed ceiling leaves every
+        # stat on a level 20 specimen at one or two segments, so all six bars look alike
+        # and say nothing; the shape of the spread is the point, and the absolute number
+        # is printed beside it anyway.
+        ceiling = max(real.values()) or 1
+        table = "\n".join(
+            f"{label:<8}{real[label]:>4}  {stat_bar(real[label], ceiling=ceiling)}"
+            f"   IV {data[iv]:>2}   EV {data[ev]:>3}"
+            for label, _key, iv, ev in self.STAT_ROWS)
+        evs = sum(data[ev] for _l, _k, _iv, ev in self.STAT_ROWS)
+        return [text(
+            "### 📊 Biological Stats\n"
+            f"🧬 **Genetic Potential:** `{percent}%` — *{appraisal}*\n"
+            f"📈 **Effort Investment:** `{evs}/{EV_TOTAL_CAP}`\n"
+            f"```\n{table}\n```\n"
+            f"-# Bars run to this specimen's best stat ({ceiling})")]
 
-        # Inject the gender icon directly into the title!
-        embed = discord.Embed(title=f"{title_prefix}{display_title}{gender_badge}{gmax_icon}", color=color)
-        
-        # Attach the local file to the embed using the safe filename
-        if sprite_file:
-            embed.set_image(url=f"attachment://{safe_filename}")
+    def moves_panel(self):
+        if not self.moves:
+            return [text("### 💥 Known Moves\n*This specimen knows nothing at all.*\n"
+                         "-# `!learn <move>` teaches one.")]
+        rows = []
+        for name, element, damage_class, power, accuracy, pp in self.moves:
+            rows.append(
+                f"{pretty_item(name):<16}{str(element or '?').title():<9}"
+                f"{str(damage_class or '?').title():<9}"
+                f"{power if power else '—':>4}"
+                f"{f'{accuracy}%' if accuracy else '—':>7}   PP {pp if pp else '—'}")
+        coverage = type_badges(
+            list(dict.fromkeys(m[1] for m in self.moves if m[1]))) or "—"
+        return [text(
+            "### 💥 Known Moves\n"
+            f"```\n{chr(10).join(rows)}\n```\n"
+            f"**Coverage:** {coverage}\n"
+            "-# `!learn <move>` to teach · `!moveset` for everything it could learn")]
 
-        desc_prefix = "❤️ **Active Partner**\n" if actual_tag_id == self.active_partner_id else ""
-        
-        # 🚨 Added Original Trainer and Typings to the main description block!
-        embed.description = f"{desc_prefix}**Level {level}** | **Nature:** {nature}\n**Type:** {type_str}\n🧬 **Ability:** {display_ability}\n🎒 **Held Item:** `{item_display}`\n📏 **Dimensions:** {size_tag} ({actual_height_m}m, {actual_weight_kg}kg)\n🤝 **Bond:** {bond_icon}\n✨ **XP:** {current_xp} / {xp_for_next_level}\n👤 **Original Trainer:** {ot_display}"
-
-        # ==========================================
-        # GENETICS & STAT FORMATTING
-        # ==========================================
-        # Calculate Genetic Potential (IVs)
-        iv_total = iv_hp + iv_atk + iv_def + iv_spa + iv_spd + iv_spe
-        # Third of four copies of this sum. See IV_PERFECT_TOTAL.
-        iv_percentage = iv_percentage_of(
-            (iv_hp, iv_atk, iv_def, iv_spa, iv_spd, iv_spe))
-        
-        if iv_percentage >= 90: appraisal = "S-Tier (Flawless)"
-        elif iv_percentage >= 80: appraisal = "A-Tier (Excellent)"
-        elif iv_percentage >= 60: appraisal = "B-Tier (Strong)"
-        elif iv_percentage >= 40: appraisal = "C-Tier (Average)"
-        else: appraisal = "D-Tier (Weak)"
-
-        # 🚨 UPDATED: Shows Genetic Potential, IVs, and EVs all in one clean block!
-        stat_block = f"""
-🧬 **Genetic Potential:** {iv_percentage}% *({appraisal})*\n**HP:** {real_hp} `[IV: {iv_hp} | EV: {ev_hp}]`\n**Attack:** {real_atk} `[IV: {iv_atk} | EV: {ev_atk}]`\n**Defense:** {real_def} `[IV: {iv_def} | EV: {ev_def}]`\n**Sp. Atk:** {real_spa} `[IV: {iv_spa} | EV: {ev_spa}]`\n**Sp. Def:** {real_spd} `[IV: {iv_spd} | EV: {ev_spd}]`\n**Speed:** {real_spe} `[IV: {iv_spe} | EV: {ev_spe}]`
-        """
-        
-        # Add a quick EV Total tracker to the header
-        total_evs = ev_hp + ev_atk + ev_def + ev_spa + ev_spd + ev_spe
-        embed.add_field(name=f"Current Biological Stats (EV Total: {total_evs}/510)", value=stat_block, inline=False)
-        
-        embed.set_footer(text=f"Field No. {field_number} of {self.total_pokemon} | Tag ID: {actual_tag_id[:8]}")
-        return embed, sprite_file
-
-    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.primary, custom_id="prev_poke")
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != self.user_id:
-            return await interaction.response.send_message("❌ This is not your field notebook!", ephemeral=True)
-        self.current_index -= 1
-        self.update_button_states() # Update the states!
-
-        embed, sprite_file = await self.generate_embed()
-        if sprite_file:
-            await interaction.response.edit_message(embed=embed, attachments=[sprite_file], view=self)
+    def extras_panel(self):
+        data = self.data
+        happiness = data['happiness']
+        if happiness < 50:
+            bond = "🤍🤍🤍 (Acclimating)"
+        elif happiness < 150:
+            bond = "❤️🤍🤍 (Trusting)"
+        elif happiness < 220:
+            bond = "❤️❤️🤍 (Bonded)"
         else:
-            await interaction.response.edit_message(embed=embed, attachments=[], view=self)
+            bond = "❤️❤️❤️ (Symbiotic)"
 
-    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.primary, custom_id="next_poke")
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != self.user_id:
-            return await interaction.response.send_message("❌ This is not your field notebook!", ephemeral=True)
-        self.current_index += 1
-        self.update_button_states()
-        embed, sprite_file = await self.generate_embed()
-        
-        if sprite_file:
-            await interaction.response.edit_message(embed=embed, attachments=[sprite_file], view=self)
-        else:
-            await interaction.response.edit_message(embed=embed, attachments=[], view=self)
+        size_tag, height, weight = self.size()
+        needed = get_xp_requirement(data['level'], data['growth_rate'])
+        item = (data['held_item'].replace('-', ' ').title()
+                if data['held_item'] and data['held_item'] != 'none' else "None")
+        lines = [
+            "### ➕ Field Record",
+            f"🎒 **Held Item:** `{item}`",
+            f"🤝 **Bond:** {bond} `({happiness}/{MAX_HAPPINESS})`",
+            f"📏 **Dimensions:** {size_tag} — {height} m, {weight} kg",
+            f"✨ **Experience:** {stat_bar(data['experience'], ceiling=needed or 1)} "
+            f"`{data['experience']:,} / {needed:,}`",
+            f"👤 **Original Trainer:** {self.trainer()}",
+        ]
+        # The tags were taken off `!pc` deliberately - they crowded a line that had to
+        # carry a hundred specimens - and this is the card with room for them.
+        if self.tags:
+            lines.append("🏷️ **Tags:** " + " ".join(f"`{tag}`" for tag in self.tags))
+        return [text("\n".join(lines))]
+
+    def controls(self):
+        return [row(
+            card_button("◀ Previous", style=discord.ButtonStyle.primary,
+                        callback=self.previous, disabled=self.current_index <= 1),
+            card_button("Select", emoji="❤️", style=discord.ButtonStyle.success,
+                        callback=self.select,
+                        # Already the lead: the press would say nothing new.
+                        disabled=self.data['instance_id'] == self.active_partner_id),
+            card_button("Next ▶", style=discord.ButtonStyle.primary,
+                        callback=self.following,
+                        disabled=self.current_index >= self.total_pokemon),
+        )]
+
+    # --- presses ------------------------------------------------------
+    async def previous(self, interaction):
+        await self.walk(interaction, self.current_index - 1)
+
+    async def following(self, interaction):
+        await self.walk(interaction, self.current_index + 1)
+
+    async def select(self, interaction):
+        """Make the specimen on screen the lead, through the same door `!select` uses."""
+        async with aiosqlite.connect(DB_FILE) as db:
+            ok, told = await make_partner(db, self.user_id, self.data['instance_id'],
+                                          self.data['species'])
+        if ok:
+            self.active_partner_id = self.data['instance_id']
+            # Redrawn rather than merely answered: the header gains its Active Partner
+            # line and the button greys out, so the card agrees with what just happened.
+            self.rebuild()
+            await interaction.response.edit_message(view=self)
+            return await interaction.followup.send(told, ephemeral=True)
+        await interaction.response.send_message(told, ephemeral=True)
+
 
 def split_note_count(typed):
     """
@@ -3299,22 +3442,11 @@ class Ecology(commands.Cog):
 
             name, actual_tag = pokemon
 
-            # ==========================================
-            # 🚨 NEW: DEPLOYMENT LOCKOUT CHECK
-            # ==========================================
-            async with db.execute("SELECT start_time FROM active_deployments WHERE instance_id = ?", (actual_tag,)) as cursor:
-                if await cursor.fetchone():
-                    return await ctx.send(f"⚠️ You cannot equip **{name.capitalize()}** right now, they are currently deployed on a field mission!")
-            
-            try:
-                await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-                await db.execute("UPDATE users SET active_partner = ? WHERE user_id = ?", (actual_tag, user_id))
-                await db.commit()
-                
-                await ctx.send(f"❤️ You have chosen **{name.capitalize()}** (`{actual_tag[:8]}`) as your lead fieldwork partner!")
-            except Exception as e:
-                await ctx.send("❌ A database error occurred while setting your partner.")
-                print(f"Partner error: {e}")
+            # The deployment lockout, the row that may not exist yet and the commit all
+            # live in `make_partner` now, because the box browser's Select button needs
+            # exactly the same three and a second copy is a second place to lose one.
+            _ok, told = await make_partner(db, user_id, actual_tag, name)
+            await ctx.send(told)
 
     @commands.command(name="intervene", aliases=["respond"])
     @checks.has_started()
@@ -4787,15 +4919,16 @@ class Ecology(commands.Cog):
                     "📦 That specimen is deployed or listed on the GTS, so it has no "
                     "box number to open. Recall it first, or name another.")
 
-        # 3. Launch the Paginator!
-        view = PokemonPaginator(self.bot, user_id, target_index, total_pokemon, active_partner_id)
-        view.update_button_states()
-        embed, sprite_file = await view.generate_embed()
+        # 3. Launch the card. It reads its own row - the count and the partner above are
+        # the two facts that belong to the ROSTER rather than to any one specimen.
+        view = PokemonPaginator(self.bot, user_id, target_index, total_pokemon,
+                                active_partner_id)
+        sprite_file = await view.load()
+        if view.data is None:
+            return await ctx.send("❌ That specimen's record could not be read.")
 
-        if sprite_file:
-            await ctx.send(embed=embed, file=sprite_file, view=view)
-        else:
-            await ctx.send(embed=embed, view=view)
+        await ctx.send(view=view.rebuild(),
+                       file=sprite_file if sprite_file else discord.utils.MISSING)
     
     @commands.command(name="rarecandy", aliases=["candy"])
     @checks.has_started()
@@ -4989,7 +5122,7 @@ class Ecology(commands.Cog):
         #
         # None in a DM, which both callees already accept.
         guild_id = str(interaction.guild.id) if interaction.guild else None
-
+        
         async with aiosqlite.connect(DB_FILE) as db:
             # 🚨 UPDATE: Joined held_item and ability logic
             query = """

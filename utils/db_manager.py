@@ -152,6 +152,45 @@ async def evolution_context(db, instance_id, guild_id=None):
     }
 
 
+# ==========================================
+# 🔎 WHETHER A LEVEL-UP RULE HAS ANY REQUIREMENT THIS SCHEMA CAN SEE
+# ==========================================
+# 27 of this table's level-up rules carry no level, no happiness, no held item, no move
+# and no region, because their real requirement is a mossy rock, a magnetic field or an
+# affection level - none of which evolution_rules records. Treating "no requirement" as
+# "requirement satisfied" would turn every Eevee into a Leafeon on its first level-up, so
+# such a rule never fires.
+#
+# EXTRACTED because `!dex` now has to say the same thing in words. Written out a second
+# time inside the dex panel, the two would drift the first time a column was added - the
+# panel would keep calling a route unreachable that the engine had just learned to fire.
+# One predicate, two readers.
+#
+# `time_of_day` is deliberately NOT here: a sky narrows a rule that is already checkable
+# rather than making one checkable on its own, which is how the rulebook has always read
+# it. No rule in the table carries a sky and nothing else.
+CHECKABLE_REQUIREMENTS = ('min_level', 'min_happiness', 'held_item', 'known_move',
+                          'known_move_type', 'region', 'gender', 'biome', 'stat_rule',
+                          'personality')
+
+
+def stated(value):
+    """
+    Whether a column actually carries a requirement.
+
+    `None` and `''` are both "no requirement" in this table - PokeAPI's importer wrote
+    empty strings into time_of_day and NULLs everywhere else - and ZERO is not: Wurmple's
+    `personality` bucket is 0 or 1, and a falsiness test would have read half of Wurmple's
+    rulebook as blank.
+    """
+    return value is not None and value != ''
+
+
+def rule_is_checkable(rule):
+    """Whether a level-up rule states a requirement this world can actually verify."""
+    return any(stated(rule.get(column)) for column in CHECKABLE_REQUIREMENTS)
+
+
 async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
                                   held_item=None, moves=None, region=None,
                                   specimen=None):
@@ -303,30 +342,29 @@ async def check_evolution_trigger(db, pokedex_id, level, happiness, time_of_day,
         if req_personality is not None and req_personality != its_personality:
             continue
 
+        if min_level is not None and level < min_level:
+            continue
+        if min_happiness is not None and happiness < min_happiness:
+            continue
+
         # A REGION IS A REQUIREMENT THAT WAS CHECKED, and has to count as one. The clause
         # below refuses a rule whose real condition this schema cannot see; a
         # region-gated rule's condition is one it CAN see and has just met, so omitting
         # it here would make every regional form unreachable again by a second route -
         # `dartrix -> decidueye-hisui` carries no item, no sky and no move.
-        # The four above are requirements that WERE checked, for the same reason a region
-        # is: `burmy -> mothim` carries no item, no sky, no move and no region, and
-        # counting only the old four would refuse it as unverifiable after it had just
-        # been verified.
-        checkable = (bool(req_item) or bool(req_move) or bool(req_move_type)
-                     or bool(req_region) or bool(req_gender) or bool(req_biome)
-                     or bool(req_stat) or req_personality is not None)
-
-        if min_level is not None:
-            if level < min_level:
-                continue
-            checkable = True
-
-        if min_happiness is not None:
-            if happiness < min_happiness:
-                continue
-            checkable = True
-
-        if not checkable:
+        # The four decided-elsewhere columns are requirements that WERE checked, for the
+        # same reason a region is: `burmy -> mothim` carries no item, no sky, no move and
+        # no region, and counting only the old four would refuse it as unverifiable after
+        # it had just been verified.
+        #
+        # The predicate itself lives above, because `!dex` renders the same judgement as
+        # a sentence and two copies of it would drift.
+        if not rule_is_checkable({
+                'min_level': min_level, 'min_happiness': min_happiness,
+                'held_item': req_item, 'known_move': req_move,
+                'known_move_type': req_move_type, 'region': req_region,
+                'gender': req_gender, 'biome': req_biome, 'stat_rule': req_stat,
+                'personality': req_personality}):
             # The real requirement is not in this schema. Never fires by itself.
             continue
 
