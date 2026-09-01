@@ -513,3 +513,29 @@ async def has_party_column(db):
     """Whether this database has had the multi-party migration run."""
     async with db.execute("PRAGMA table_info(user_party)") as cursor:
         return any(row[1] == 'party_name' for row in await cursor.fetchall())
+
+
+async def make_partner(db, user_id, instance_id, name):
+    """
+    Set a trainer's lead, or say why not. Returns a message either way, already written.
+
+    Extracted when the box browser grew a Select button of its own: `!select` had the
+    deployment lockout, the `INSERT OR IGNORE` that copes with a trainer who has no row
+    yet, and the commit, and a second copy of those three would have been a second place
+    for one of them to go missing. Commits, because both callers want it saved.
+    """
+    async with db.execute("SELECT start_time FROM active_deployments "
+                          "WHERE instance_id = ?", (instance_id,)) as cursor:
+        if await cursor.fetchone():
+            return (False, f"⚠️ You cannot equip **{name.capitalize()}** right now - "
+                           f"they are currently deployed on a field mission!")
+    try:
+        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        await db.execute("UPDATE users SET active_partner = ? WHERE user_id = ?",
+                         (instance_id, user_id))
+        await db.commit()
+    except Exception as e:
+        print(f"Partner error: {e}")
+        return False, "❌ A database error occurred while setting your partner."
+    return (True, f"❤️ You have chosen **{name.capitalize()}** "
+                  f"(`{instance_id[:8]}`) as your lead fieldwork partner!")

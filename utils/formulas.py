@@ -1483,9 +1483,18 @@ def pretty_ability(ability):
     return (ability or 'none').replace('-', ' ').title()
 
 
+# The words a title leaves in lower case. Four names in the reference data are built
+# around one - 'scroll-of-darkness', 'roar-of-time', 'light-of-ruin', 'guardian-of-alola' -
+# and `.title()` alone rendered every one of them with a capital 'Of'.
+TITLE_MINOR_WORDS = frozenset({'of', 'the', 'and', 'in', 'on', 'to', 'a', 'an'})
+
+
 def pretty_item(item):
-    """'choice-scarf' -> 'Choice Scarf', for combat log lines."""
-    return (item or 'none').replace('-', ' ').title()
+    """'choice-scarf' -> 'Choice Scarf', for combat log lines and the dex."""
+    words = (item or 'none').replace('-', ' ').split()
+    return " ".join(word.title() if index == 0 or word.lower() not in TITLE_MINOR_WORDS
+                    else word.lower()
+                    for index, word in enumerate(words))
 
 
 def get_stored_ability(pokemon):

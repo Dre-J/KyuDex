@@ -3613,14 +3613,21 @@ SPECIAL_SKIES = frozenset({'dusk', 'full-moon'})
 # `per_battle` says whether the counter resets when a new battle starts - a Sirfetch'd
 # wants three criticals in ONE battle, while Runerigus only cares about the hardest hit
 # its Yamask has ever taken.
+#
+# `dex` is the same requirement stated as an instruction rather than as a memory: the
+# `flavour` line is read out AFTER the evolution has happened, and `!dex` needs to say
+# what to go and do BEFORE it has. It carries `{threshold}` rather than the number so
+# that raising the bar cannot leave the dex quoting the old one.
 CONDITION_TRIGGERS = {
     'take-damage': {
         'column': 'biggest_hit_taken', 'threshold': 49, 'per_battle': False,
         'flavour': "endured a devastating blow and its spirit reshaped the clay",
+        'dex': "survive a single hit of {threshold} or more",
     },
     'three-critical-hits': {
         'column': 'crits_landed_battle', 'threshold': 3, 'per_battle': True,
         'flavour': "struck three times with lethal precision and stood taller for it",
+        'dex': "land {threshold} critical hits in one battle",
     },
 }
 
@@ -3631,11 +3638,25 @@ CONDITION_TRIGGERS = {
 #
 # The level is a stand-in, and is named here rather than buried so it reads as the
 # deliberate substitution it is.
-RITUAL_TRIGGERS = frozenset({
-    'strong-style-move', 'agile-style-move', 'use-move', 'tower-of-waters',
-    'tower-of-darkness', 'recoil-damage', 'spin', 'shed', 'three-defeated-bisharp',
-    'gimmmighoul-coins', 'other',
-})
+#
+# Written as a MAP from the trigger to what it is in the games, because `!dex` prints the
+# route now and `three-defeated-bisharp`.replace('-', ' ').title() is not a sentence
+# anybody should be shown. The set is derived from the map rather than kept beside it, so
+# a trigger cannot be added to one and forgotten in the other.
+RITUAL_RITES = {
+    'strong-style-move':      "use a Strong Style move",
+    'agile-style-move':       "use an Agile Style move",
+    'use-move':               "use a particular move enough times",
+    'tower-of-waters':        "train at the Tower of Waters",
+    'tower-of-darkness':      "train at the Tower of Darkness",
+    'recoil-damage':          "take heavy recoil damage",
+    'spin':                   "spin while holding sweets",
+    'shed':                   "evolve with a spare ball and a free box slot",
+    'three-defeated-bisharp': "defeat three Bisharp leading a pack",
+    'gimmmighoul-coins':      "gather 999 Gimmighoul coins",
+    'other':                  "meet a condition the games record nowhere",
+}
+RITUAL_TRIGGERS = frozenset(RITUAL_RITES)
 RITUAL_MIN_LEVEL = 40
 RITUAL_KEYWORD = 'ritual'
 
@@ -4719,6 +4740,19 @@ BIOLOGICAL_TRAITS = {
 
         'fluffy': [{'condition': 'contact', 'multiplier': 0.5},
                    {'condition': 'move_type', 'types': ['fire'], 'multiplier': 2.0}],
+
+        # AURA GUARD - Mega Lucario Z's signature, and Fluffy's contact half without the
+        # Fire clause. Half damage from anything that TOUCHES it.
+        #
+        # The brief spelled out the Long Reach case, and it needs no clause of its own:
+        # `contact` is answered by makes_contact(), which already refuses for a Long Reach
+        # attacker and for one wearing Protective Pads or a Punching Glove. A move that
+        # does not touch is not a contact move, so it meets nothing here and lands at full
+        # power - the same answer Rough Skin, Static and a Rocky Helmet give.
+        #
+        # The ability was already on lucario-mega-z in base_pokemon_species; until now
+        # nothing in the engine read the name, so it was a Mega with no ability at all.
+        'aura-guard':     {'condition': 'contact', 'multiplier': 0.5},
     },
 
     # A flat multiplier on one of the specimen's OWN stats, read where the damage formula
