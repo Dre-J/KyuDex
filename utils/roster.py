@@ -128,6 +128,20 @@ def looks_like_newest(target):
 # is a plausible typo for `!release 1-5`; it should be refused, not confirmed.
 MAX_BULK_BOXES = 25
 
+# The same ceiling for a release named by a FILTER rather than by number, and it is
+# deliberately larger: `.shiny not .iv <=40` is a real request that legitimately matches
+# more than twenty-five, and a trainer clearing out a season's catches should not have to
+# run it eleven times. Larger than 25 and smaller than the tag cap of 250, because a tag
+# can be taken off again and a release cannot be undone at all.
+BULK_RELEASE_CAP = 100
+
+# How many names a release actually PRINTS, before and after. A hundred bullet points do
+# not fit in an embed description at all, and the message that gets refused by Discord is
+# the confirmation - so the roll call is cut and the remainder counted rather than
+# dropped. Both the confirmation and the receipt read this, so they cannot disagree about
+# what was shown.
+RELEASE_ROLL_CALL = 20
+
 
 def parse_box_numbers(words):
     """
@@ -241,6 +255,35 @@ ROSTER_CTE = """
         AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
     )
 """
+
+
+async def selected_by_filter(db, user_id, query, columns="cp.instance_id"):
+    """
+    Every specimen in one trainer's box matching a `!pc` filter, as `(rows, label, complaint)`.
+
+    THE ONE PLACE A FILTER BECOMES A SET OF SPECIMENS. `!tags addall` had this inline and
+    `!release` was about to grow a second copy - two commands that both mean "these ones"
+    and would have disagreed the first time a filter grew a clause. `label` is what the
+    filter matched, already written for a player to read, because both callers show it
+    back before they touch anything.
+
+    Deployed specimens and anything sitting on the GTS are excluded, because the CTE is
+    the same one every box command counts through.
+    """
+    # Imported here rather than at module scope: utils/filters.py reads this module's
+    # ROSTER_CTE, and importing it at the top would close the loop.
+    from utils.filters import resolve_query, FILTERABLE_COLUMNS
+
+    clauses, params, _order, applied, complaint = await resolve_query(db, query)
+    if complaint:
+        return None, None, complaint
+    where = " AND ".join(["1=1"] + clauses)
+    async with db.execute(
+            ROSTER_CTE.format(columns=FILTERABLE_COLUMNS)
+            + f" SELECT {columns} FROM Roster cp WHERE {where}",
+            [user_id] + params) as cursor:
+        rows = await cursor.fetchall()
+    return rows, (" · ".join(applied) or "everything"), None
 
 
 async def box_number_of(db, user_id, instance_id):

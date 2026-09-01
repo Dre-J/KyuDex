@@ -9,7 +9,7 @@ import math
 import traceback
 import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
-                             EV_LOWERING_BERRIES, EV_BERRY_HAPPINESS, MAX_HAPPINESS,
+                             EV_LOWERING_BERRIES, MAX_HAPPINESS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
                              STARTER_CAN_BE_SHINY, type_badges,
                              scaled_rarity, roll_shiny, ecosystem_multiplier,
@@ -49,9 +49,11 @@ from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
 from utils.trading import mark_as_starter
 from utils.roster import (locate_specimen, capsule_swap, patch_swap,
                           parse_candy_request, parse_box_numbers, MAX_BULK_BOXES,
-                          box_number_of, make_partner, ROSTER_CTE)
+                          box_number_of, make_partner, selected_by_filter,
+                          BULK_RELEASE_CAP, RELEASE_ROLL_CALL, ROSTER_CTE)
 from utils.cards import TabbedCard, card_button, divider, row, text
 from utils.dex import stat_bar
+from utils.growth import (MAX_FRIENDSHIP, bond_label, boosted_xp, raise_friendship)
 from utils.filters import filter_help, resolve_query, FILTERABLE_COLUMNS
 from utils.sprites import resolve_sprite, sprite_attachment_name, HOME
 from utils.translations import (LANGUAGE_ORDER, language_label, name_in_language,
@@ -1002,8 +1004,13 @@ class ReleaseConfirmView(discord.ui.View):
                                      f"and released their **{name.capitalize()}** back into the wild.")
                 embed.set_footer(text=f"Tag ID Deleted: {tags[0][:8]}")
             else:
+                # Cut to the same length the confirmation used, so the receipt reads
+                # like the thing that was agreed to rather than a different list.
+                shown = self.specimens[:RELEASE_ROLL_CALL]
                 roll = "\n".join(f"• **{n.capitalize()}** (Lv. {lv})"
-                                 for n, lv, _t in self.specimens)
+                                 for n, lv, _t in shown)
+                if len(self.specimens) > len(shown):
+                    roll += f"\n• …and **{len(self.specimens) - len(shown)}** more"
                 embed.description = (f"**{self.ctx.author.name}** successfully rehabilitated "
                                      f"and released **{len(self.specimens)}** specimens back "
                                      f"into the wild.\n\n{roll}")
@@ -3030,11 +3037,22 @@ class Ecology(commands.Cog):
     @checks.is_authorized()
     async def release_pokemon(self, ctx, *boxes: str):
         """
-        Release one specimen, or several at once.
+        Release one specimen, several at once, or everything a filter matches.
 
         `!release 4` - one, as before.
         `!release 4 7 12` - three.
         `!release 4-9` - a run of six.
+        `!release .shiny not .iv <=40` - everything the filter names.
+
+        THE FILTER IS THE SAME ONE `!pc` AND `!tags addall` SPEAK, so what a trainer
+        already knows how to write for looking at their box works for clearing it out -
+        and `!pc <the same words>` is the way to see exactly what a release would take
+        before running it. It goes through the shared selector rather than a second copy
+        of the query, so the two cannot come to mean different things.
+
+        BOUNDED HARDER THAN A TAG IS. A filter names a set the trainer did not write out,
+        and this is the one command in the bot that cannot be undone, so it refuses above
+        `BULK_RELEASE_CAP` rather than confirming a number nobody meant.
 
         EVERY NUMBER IS RESOLVED AGAINST ONE SNAPSHOT of the roster before anything is
         deleted, and this is the whole reason a bulk release needs writing rather than
@@ -3051,39 +3069,64 @@ class Ecology(commands.Cog):
         rather than being told the number does not exist.
         """
         user_id = str(ctx.author.id)
+        words = [w for w in boxes if w]
+        if not words:
+            return await ctx.send(
+                "🌿 Usage: `!release <box numbers | filter>`\n"
+                "e.g. `!release 4`, `!release 4-9`, or `!release .shiny not .iv >=60`.")
 
-        numbers, complaint = parse_box_numbers(boxes)
-        if complaint:
-            return await ctx.send(complaint)
+        # A FILTER IF ANY WORD LOOKS LIKE ONE, the same test `!tags addall` applies, so
+        # "these ones" means the same thing to both commands.
+        by_filter = any(w.startswith('.') for w in words)
 
         async with aiosqlite.connect(DB_FILE) as db:
-            # ONE snapshot, every number resolved against it. The placeholders are
-            # generated from the count rather than interpolated, so the numbers stay
-            # parameters.
-            placeholders = ','.join('?' for _ in numbers)
-            async with db.execute(f"""
-                WITH Roster AS (
-                    SELECT s.name, cp.level, cp.instance_id, ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp
-                    JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ?
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                ) SELECT box_number, name, level, instance_id FROM Roster
-                  WHERE box_number IN ({placeholders})
-                  ORDER BY box_number
-            """, (user_id, *numbers)) as cursor:
-                rows = await cursor.fetchall()
+            missing, label = [], None
+            if by_filter:
+                rows, label, complaint = await selected_by_filter(
+                    db, user_id, " ".join(words),
+                    columns="cp.box_number, cp.name, cp.level, cp.instance_id")
+                if complaint:
+                    return await ctx.send(complaint)
+                if not rows:
+                    return await ctx.send(
+                        f"🔍 Nothing in your box matches **{label}**, so there is "
+                        f"nothing to release.")
+                # A FILTER IS NOT A LIST THE TRAINER WROTE OUT. `!release 4 7 12` names
+                # three specimens; `!release .shiny not` could name four hundred, and
+                # this is the one command in the bot that cannot be undone. Capped, and
+                # the cap says how to narrow rather than just refusing.
+                if len(rows) > BULK_RELEASE_CAP:
+                    return await ctx.send(
+                        f"🛑 **{label}** matches {len(rows)} specimens. "
+                        f"{BULK_RELEASE_CAP} is the most one release takes - narrow it, "
+                        f"or check what you are about to lose with `!pc {' '.join(words)}`.")
+                rows = sorted(rows)
+            else:
+                numbers, complaint = parse_box_numbers(words)
+                if complaint:
+                    return await ctx.send(complaint)
+
+                # ONE snapshot, every number resolved against it. The placeholders are
+                # generated from the count rather than interpolated, so the numbers stay
+                # parameters.
+                placeholders = ','.join('?' for _ in numbers)
+                async with db.execute(
+                        ROSTER_CTE.format(columns="s.name, cp.level, cp.instance_id")
+                        + f" SELECT box_number, name, level, instance_id FROM Roster"
+                          f"  WHERE box_number IN ({placeholders})"
+                          f"  ORDER BY box_number",
+                        (user_id, *numbers)) as cursor:
+                    rows = await cursor.fetchall()
+                missing = [n for n in numbers if n not in {r[0] for r in rows}]
+
+                if not rows:
+                    if len(numbers) == 1:
+                        return await ctx.send(f"❌ Could not find a specimen in Box `#{numbers[0]}`.")
+                    return await ctx.send(
+                        "❌ None of those box numbers named a specimen you can release. "
+                        "Deployed specimens and anything on the GTS are not numbered.")
 
             found = {row[0]: row for row in rows}
-            missing = [n for n in numbers if n not in found]
-
-            if not found:
-                if len(numbers) == 1:
-                    return await ctx.send(f"❌ Could not find a specimen in Box `#{numbers[0]}`.")
-                return await ctx.send(
-                    "❌ None of those box numbers named a specimen you can release. "
-                    "Deployed specimens and anything on the GTS are not numbered.")
 
             # The two locks that refuse by NAME rather than by absence.
             async with db.execute("SELECT active_partner FROM users WHERE user_id = ?", (user_id,)) as cursor:
@@ -3122,10 +3165,18 @@ class Ecology(commands.Cog):
             body = (f"Are you sure you want to release **{name.capitalize()}** "
                     f"(Lv. {level})?")
         else:
+            # THE ROLL CALL IS SHOWN, and a hundred of them do not fit in an embed
+            # description. Cut to a length that does, with the remainder counted rather
+            # than dropped - a confirmation that quietly shows less than it is about to
+            # delete is worse than one that shows nothing.
+            shown = releasable[:RELEASE_ROLL_CALL]
             roll = "\n".join(f"• **{n.capitalize()}** (Lv. {lv})"
-                             for n, lv, _t in releasable)
+                             for n, lv, _t in shown)
+            if len(releasable) > len(shown):
+                roll += f"\n• …and **{len(releasable) - len(shown)}** more"
+            matched = f" matching **{label}**" if label else ""
             body = (f"Are you sure you want to release these "
-                    f"**{len(releasable)}** specimens?\n\n{roll}")
+                    f"**{len(releasable)}** specimens{matched}?\n\n{roll}")
 
         embed = discord.Embed(
             title="⚠️ Confirm Reintroduction",
@@ -3136,8 +3187,13 @@ class Ecology(commands.Cog):
                         value=f"🪙 +{view.reward} Eco-Tokens", inline=False)
         if blocked:
             # Shown rather than silently dropped. A bulk command that quietly does less
-            # than it was asked to is the one that teaches people not to trust it.
-            embed.add_field(name="🛡️ Held back", value="\n".join(blocked), inline=False)
+            # than it was asked to is the one that teaches people not to trust it. Cut
+            # to the roll call's length for the same reason it is: an embed field holds
+            # 1024 characters, and a filter matching a whole party would blow past it.
+            held = blocked[:RELEASE_ROLL_CALL]
+            if len(blocked) > len(held):
+                held.append(f"…and {len(blocked) - len(held)} more")
+            embed.add_field(name="🛡️ Held back", value="\n".join(held), inline=False)
         await ctx.send(embed=embed, view=view)
 
     # ==========================================
@@ -3296,19 +3352,15 @@ class Ecology(commands.Cog):
             return None, None, ("\u26a0\ufe0f Which specimens? Box numbers "
                                 "(`4 7 12`, `4-9`) or a filter (`.shiny .iv >=90`).")
 
-        # A filter if ANY word looks like one; otherwise box numbers.
+        # A filter if ANY word looks like one; otherwise box numbers. The filter half
+        # lives in utils/roster.py now, because `!release` asks the same question and a
+        # second copy of it would be a second thing to keep in step with the parser.
         if any(w.startswith('.') for w in words):
-            clauses, params, _order, applied, complaint = await resolve_query(
-                db, " ".join(words))
+            rows, label, complaint = await selected_by_filter(
+                db, user_id, " ".join(words))
             if complaint:
                 return None, None, complaint
-            where = " AND ".join(["1=1"] + clauses)
-            async with db.execute(
-                    ROSTER_CTE.format(columns=FILTERABLE_COLUMNS)
-                    + f" SELECT instance_id FROM Roster cp WHERE {where}",
-                    [user_id] + params) as cursor:
-                rows = [r[0] for r in await cursor.fetchall()]
-            return rows, (" \u00b7 ".join(applied) or "everything"), None
+            return [r[0] for r in rows], label, None
 
         numbers, complaint = parse_box_numbers(words)
         if complaint:
@@ -3922,11 +3974,14 @@ class Ecology(commands.Cog):
                     if await cursor.fetchone():
                         return await ctx.send("⚠️ Your Active Partner is currently deployed on a field mission! Recall them with `!return` or equip a different specimen first.")
                     
-                # Grab the partner's name for the UI
-                async with db.execute("SELECT s.name FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id WHERE cp.instance_id = ?", (active_partner_id,)) as cursor:
+                # Grab the partner's name for the UI - and what it is holding, because a
+                # Lucky Egg is worth 50% more of the XP awarded below and the read is
+                # already here.
+                async with db.execute("SELECT s.name, cp.held_item FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id WHERE cp.instance_id = ?", (active_partner_id,)) as cursor:
                     name_data = await cursor.fetchone()
                     if name_data:
                         partner_name = name_data[0].capitalize()
+                        xp_gained = boosted_xp(xp_gained, name_data[1])
 
             # 5% chance to find something incredibly rare in the pollution
             if random.random() <= 0.05:
@@ -4998,16 +5053,30 @@ class Ecology(commands.Cog):
                 """, (levels_gained, user_id))
                 await db.execute("DELETE FROM user_inventory WHERE quantity <= 0")
                 await db.execute("""
-                    UPDATE caught_pokemon SET level = ?, experience = ? 
+                    UPDATE caught_pokemon SET level = ?, experience = ?
                     WHERE instance_id = ?
                 """, (new_level, new_total_xp, instance_id))
+                # A CANDY IS A LEVEL-UP, and the games raise friendship on one. This
+                # command levelled a specimen without the bond moving at all, which for
+                # Golbat, Chansey and Pichu is the difference between a route and a
+                # dead end - each candy is banded on its own, so ten at once come to
+                # the same total as ten one at a time.
+                bonded = await raise_friendship(db, instance_id, 'level-up',
+                                                happiness, held_item,
+                                                times=levels_gained)
                 await db.commit()
             except Exception as e:
                 await db.rollback()
                 print(f"Candy Error: {e}")
                 return await ctx.send("❌ A database error occurred while consuming the item.")
 
+            # Carried forward, so the friendship gate below reads what the candies just
+            # earned rather than the figure from before them.
+            happiness = min(MAX_FRIENDSHIP, (happiness or 0) + bonded)
+
             response_msg = f"🍬 **{species_name.capitalize()}** consumed `{levels_gained}x Rare Candy` and grew to **Level {new_level}**!"
+            if bonded:
+                response_msg += f"\n*❤️ +{bonded} friendship — {bond_label(happiness)}*"
             if refunded_candies > 0:
                 response_msg += f"\n*(Capped at Lv. 100! Refunded `{refunded_candies}x` unused candies to your inventory.)*"
 
@@ -5186,6 +5255,18 @@ class Ecology(commands.Cog):
                             gains_text = f"gained **{base_xp} XP** *(Type Bonus!)*"
                         else:
                             gains_text = f"gained **{base_xp} XP**"
+
+                        # AFTER the type bonus, so the two stack rather than the egg
+                        # being swallowed by the multiplication above. A specimen sent
+                        # out holding a Lucky Egg comes back with half again as much.
+                        boosted = boosted_xp(base_xp, held_item)
+                        if boosted != base_xp:
+                            gains_text = (f"gained **{boosted} XP** "
+                                          f"*(🥚 Lucky Egg"
+                                          + (" + Type Bonus!)*"
+                                             if mission_data["preferred_type"] in type_list
+                                             else ")*"))
+                        base_xp = boosted
                             
                         new_total_xp += base_xp
                         
@@ -5395,21 +5476,24 @@ class Ecology(commands.Cog):
             target_amount = min(amount, owned_amount) # Don't let them use more than they own
             
             # 3. Resolve Target (Using Soft Hide to prevent feeding deployed Pokemon!)
-            async with db.execute("""
-                WITH Roster AS (
-                    SELECT cp.instance_id, s.name, cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, cp.happiness,
-                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
-                    FROM caught_pokemon cp JOIN base_pokemon_species s ON cp.pokedex_id = s.pokedex_id
-                    WHERE cp.user_id = ? AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
-                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
-                ) SELECT * FROM Roster WHERE box_number = ?
-            """, (user_id, int(box_number))) as cursor:
+            #
+            # Through the shared CTE rather than a copy of it, and carrying `held_item`
+            # as well - the Soothe Bell decides how much friendship the berry below is
+            # worth, and the alternative was a second query for one column.
+            async with db.execute(
+                    ROSTER_CTE.format(columns=
+                        "cp.instance_id, s.name, cp.ev_hp, cp.ev_attack, cp.ev_defense, "
+                        "cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, cp.happiness, "
+                        "cp.held_item")
+                    + " SELECT * FROM Roster WHERE box_number = ?",
+                    (user_id, int(box_number))) as cursor:
                 target = await cursor.fetchone()
-                
+
             if not target:
                 return await ctx.send(f"❌ Could not find a specimen in Box `#{box_number}`. Are they deployed?")
-                
-            (instance_id, name, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, happiness, _) = target
+
+            (instance_id, name, ev_hp, ev_atk, ev_def, ev_spa, ev_spd, ev_spe, happiness,
+             held_item, _box) = target
 
             # 4. Enforce Strict EV Caps
             # Map the exact current value based on the column name
@@ -5462,12 +5546,16 @@ class Ecology(commands.Cog):
             # The berries are bitter, and putting up with one is a favour. Happiness is
             # read by the evolution triggers, so this is not decoration - it is a second
             # reason to feed one.
-            happiness_gain = 0
-            if lowering:
-                happiness_gain = max(0, min(EV_BERRY_HAPPINESS * vitamins_to_consume,
-                                            MAX_HAPPINESS - (happiness or 0)))
-                if happiness_gain:
-                    await db.execute("UPDATE caught_pokemon SET happiness = happiness + ? WHERE instance_id = ?", (happiness_gain, instance_id))
+            #
+            # BOTH HALVES PAY NOW, and both are BANDED. This was a flat +10 per berry
+            # and nothing at all for a vitamin, which is neither of the games' figures:
+            # there a berry is worth 10, 5 or 2 and a vitamin 5, 3 or 2, depending on
+            # how fond the specimen already is. The flat rate made the first ten points
+            # as hard as the last ten and left the six vitamins paying nothing, so a
+            # trainer maxing EVs got no bond for it. Both tables live in utils/growth.py.
+            happiness_gain = await raise_friendship(
+                db, instance_id, 'ev-berry' if lowering else 'vitamin',
+                happiness, held_item, times=vitamins_to_consume)
 
             # Deduct the vitamins from inventory (If it hits 0, delete the row to keep the DB clean)
             if owned_amount - vitamins_to_consume <= 0:
@@ -5485,10 +5573,15 @@ class Ecology(commands.Cog):
 
             if lowering:
                 embed.add_field(name="Stat Reduction", value=f"⬇️ -{actual_ev_gain} {stat_label} EVs")
-                if happiness_gain:
-                    embed.add_field(name="Bond", value=f"❤️ +{happiness_gain} happiness")
             else:
                 embed.add_field(name="Stat Increase", value=f"⬆️ +{actual_ev_gain} {stat_label} EVs")
+            # Shown for BOTH now. A vitamin raises the bond too, and reporting it only on
+            # the berry half was how nobody noticed the vitamin half paid nothing.
+            if happiness_gain:
+                embed.add_field(
+                    name="Bond",
+                    value=f"❤️ +{happiness_gain} friendship\n"
+                          f"{bond_label((happiness or 0) + happiness_gain)}")
 
             if vitamins_to_consume < amount:
                 embed.set_footer(text="Notice: Consumption was halted early to prevent exceeding genetic stat caps."

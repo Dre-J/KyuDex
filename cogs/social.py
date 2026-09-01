@@ -565,7 +565,14 @@ class ActiveTradeView(discord.ui.View):
             # stone rulebooks, so all three halves of "what does this evolve into" are
             # asked in one place and a test can drive the real query rather than a copy.
             # This used to be a `fetchone()` here - see that function for what it cost.
-            traded = await trade_evolution(db, base_pokedex_id, held_item_clean)
+            #
+            # `cursor`, NOT `db`. There is no `db` in this method and never was: it is a
+            # local of `execute_trade`, one frame up. The name resolved to nothing, so
+            # this line raised NameError - and it is reached by EVERY specimen that is
+            # not one of the hard-coded catalysts, which is nearly all of them, so no
+            # trade could complete at all. `trade_evolution` takes either, which is why
+            # it uses `await db.execute(...)` rather than the context-manager form.
+            traded = await trade_evolution(cursor, base_pokedex_id, held_item_clean)
             if traded:
                 new_dex_id, consumed = traded
                 consume_item = bool(consumed)
