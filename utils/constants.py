@@ -545,6 +545,18 @@ EQUIPMENT_CATALOG = {
     "focus-sash":    {"name": "Focus Sash", "price": 600, "desc": "Survives one otherwise-lethal hit on 1 HP, from full health. Single use.", "emoji": "🎀", "category": "battleitems"},
     "assault-vest":  {"name": "Assault Vest", "price": 600, "desc": "1.5x Special Defense, but the holder cannot use status moves.", "emoji": "🦺", "category": "battleitems"},
 
+    # -- the two that pay OUTSIDE a battle --
+    # Neither touches damage, which is why they sit apart from everything above: one
+    # bends what the holder earns and the other bends what it feels. Both are read by
+    # utils/growth.py, which is the only place either number lives.
+    #
+    # The Soothe Bell is the item this world needed most and had no equivalent of. Its
+    # whole job is to make friendship arrive faster, and until now nothing in the bot
+    # raised friendship at all except a bitter berry - so a Golbat that wanted 160 to
+    # become a Crobat had one route, and it took sixteen berries.
+    "lucky-egg":     {"name": "Lucky Egg", "price": 900, "desc": "Held. Its bearer earns 1.5x experience from messages, battles, field missions and conservation work.", "emoji": "🥚", "category": "battleitems"},
+    "soothe-bell":   {"name": "Soothe Bell", "price": 500, "desc": "Held. Its bearer grows fond of you half again as quickly - from messages, battles, vitamins, berries and Rare Candies alike.", "emoji": "🔔", "category": "battleitems"},
+
     # -- situational --
     "black-sludge":  {"name": "Black Sludge", "price": 400, "desc": "Restores 1/16 max HP each turn to Poison types, and costs 1/8 to everything else.", "emoji": "🧪", "category": "battleitems"},
     "expert-belt":   {"name": "Expert Belt", "price": 400, "desc": "1.2x damage on super-effective hits.", "emoji": "🥋", "category": "battleitems"},
@@ -1801,10 +1813,11 @@ EV_LOWERING_BERRIES = {
     if row.get('type') == 'ev_lower'
 }
 
-# What a berry is worth to a specimen's opinion of you. The games pay this for the same
-# reason they let the berry lower an EV: the berry is bitter, and putting up with it is
-# a favour. Happiness is read by the evolution triggers, so this is not decoration.
-EV_BERRY_HAPPINESS = 10
+# EV_BERRY_HAPPINESS was here: a flat 10 per berry, and the only thing in the whole bot
+# that ever raised friendship. It is gone because it was never the games' figure - there
+# a berry is worth 10, 5 or 2 depending on how fond the specimen already is, and five
+# other things raise friendship besides. Every source and every band now lives in one
+# table in utils/growth.py, which is also what the Soothe Bell multiplies.
 MAX_HAPPINESS = 255
 
 # ==========================================

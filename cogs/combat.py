@@ -11,6 +11,7 @@ from utils.formulas import record_battle_conditions, advance_field_tenure, apply
 from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.db_manager import (check_evolution_trigger, check_condition_evolution,
                              evolution_context)
+from utils.growth import MAX_FRIENDSHIP, boosted_xp, raise_friendship
 from utils.machines import owns_tm, owned_tms, price_of
 from utils import learnsets
 from utils.regions import current_region
@@ -7823,7 +7824,30 @@ class BattleDashboard(discord.ui.View):
                         
                         # 5. Process Level Ups for the Team
                         for p in surviving_team:
-                            p['experience'] = p.get('experience', 0) + exp_per_specimen
+                            # A Lucky Egg pays its HOLDER, not the team, so the boost is
+                            # applied per specimen after the even split rather than to
+                            # the pot before it.
+                            worn = resolve_persisted_item(p)
+                            earned = boosted_xp(exp_per_specimen, worn)
+                            if earned != exp_per_specimen:
+                                rewards_log += (f"🥚 **{p['name'].capitalize()}**'s Lucky "
+                                                f"Egg turned that into **{earned} EXP**!\n")
+                            p['experience'] = p.get('experience', 0) + earned
+
+                            # THE BOND. The games raise friendship on a level up; a
+                            # battle here can pay experience without tipping one, and
+                            # surviving a win is the moment a trainer expects it. Written
+                            # straight through rather than carried on the payload,
+                            # because `happiness` is not one of the columns the block
+                            # below writes back.
+                            if p.get('instance_id'):
+                                bonded = await raise_friendship(
+                                    db, p['instance_id'], 'battle',
+                                    p.get('happiness'), worn)
+                                if bonded:
+                                    p['happiness'] = min(
+                                        MAX_FRIENDSHIP, (p.get('happiness') or 0) + bonded)
+
                             threshold = p.get('level', 5) * 100
                             
                             if p['experience'] >= threshold and p.get('level', 5) < 100:
@@ -10462,7 +10486,29 @@ class Combat(commands.Cog):
                                 rewards_log += f"\n\n📈 **{player_obj.display_name}'s** surviving team gained **{exp_per} EXP**!"
 
                                 for p in survivors:
-                                    p['experience'] = p.get('experience', 0) + exp_per
+                                    # Per HOLDER, after the even split - the same reading
+                                    # the PvE path takes.
+                                    worn = resolve_persisted_item(p)
+                                    earned = boosted_xp(exp_per, worn)
+                                    if earned != exp_per:
+                                        rewards_log += (f"\n🥚 **{p['name'].capitalize()}**'s "
+                                                        f"Lucky Egg turned that into "
+                                                        f"**{earned} EXP**!")
+                                    p['experience'] = p.get('experience', 0) + earned
+
+                                    # A duel is still a battle won, so it still earns the
+                                    # bond. A capped exhibition pays no experience and
+                                    # never reaches here, which is the same line the
+                                    # comment above draws.
+                                    if p.get('instance_id'):
+                                        bonded = await raise_friendship(
+                                            db, p['instance_id'], 'battle',
+                                            p.get('happiness'), worn)
+                                        if bonded:
+                                            p['happiness'] = min(
+                                                MAX_FRIENDSHIP,
+                                                (p.get('happiness') or 0) + bonded)
+
                                     threshold = p.get('level', 5) * 100
 
                                     if p['experience'] >= threshold and p.get('level', 5) < 100:

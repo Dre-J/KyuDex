@@ -9,6 +9,7 @@ from utils.prefs import trainer_skies
 from utils.regions import current_region
 from utils.db_manager import check_evolution_trigger, evolution_context
 from utils.formulas import get_xp_requirement
+from utils.growth import MAX_FRIENDSHIP, boosted_xp, raise_friendship
 from utils.accounts import levelup_pings_enabled
 
 
@@ -120,12 +121,34 @@ class PassiveExperienceCog(commands.Cog):
                  current_ability, species_name, growth_rate, current_standards,
                  current_hidden, *known_moves) = pokemon
 
+                # ==========================================
+                # 4b. THE BOND
+                # ==========================================
+                # The games raise friendship for every 128 steps walked. There is no
+                # overworld here, so a message with the specimen out is the equivalent -
+                # the same trigger and the same one-minute cooldown the experience above
+                # already uses.
+                #
+                # RAISED BEFORE THE LEVEL-100 GUARD, deliberately. A maxed specimen is
+                # still following its trainer around, and friendship is not experience:
+                # it has its own ceiling and its own reasons to matter.
+                bonded = await raise_friendship(db, instance_id, 'walk',
+                                                happiness, held_item)
+                if bonded:
+                    await db.commit()
+                    # Carried forward so the evolution check below reads the friendship
+                    # this message just earned rather than the one before it. Golbat
+                    # wants 160; being one tick stale means waiting a whole level.
+                    happiness = min(MAX_FRIENDSHIP, (happiness or 0) + bonded)
+
                 # Stop if they are already max level
                 if current_level >= 100:
                     return
 
-                # 5. Calculate Passive XP Gain (e.g., 15 to 25 XP per valid message)
-                xp_gain = random.randint(15, 25)
+                # 5. Calculate Passive XP Gain (e.g., 15 to 25 XP per valid message),
+                #    and whatever the specimen is holding has its say - a Lucky Egg pays
+                #    the holder half again as much.
+                xp_gain = boosted_xp(random.randint(15, 25), held_item)
                 new_total_xp = current_xp + xp_gain
                 new_level = current_level
 
