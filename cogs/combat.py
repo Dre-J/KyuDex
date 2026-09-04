@@ -8,7 +8,7 @@ import random
 import asyncio
 import math
 from utils.formulas import record_battle_conditions, advance_field_tenure, apply_max_sanitisation, apply_item_sustenance, apply_bag_item, bag_item_is_useless, calculate_damage, calculate_stats, fetch_base_stats, calculate_real_stat, apply_entry_hazards, check_consumables, is_grounded, FORMULA_BYPASS_MOVES, estimate_bypass_payload, resolve_dynamic_power, format_power_hint, describe_power_range, get_effective_priority, DELAYED_ATTACK_MOVES, snapshot_delayed_attack, resolve_delayed_strike, UPROAR_MOVES, ENCORE_IMMUNE_MOVES, is_uproar_active, GUARANTEED_HIT_MOVES, ALWAYS_CRIT_MOVES, SIDE_SCREEN_MOVES, reset_stat_stages, leave_field, baton_pass_state, clear_base_stat_snapshot, get_active_ability, ability_move_would_land, item_move_would_land, get_active_item, snapshot_team_items, resolve_persisted_item, mark_item_consumed, begin_charge, end_charge, break_stale_charge, move_is_restricted, usable_moves, record_move_used, last_resort_ready, LAST_RESORT, apply_grudge, snapshot_wish, resolve_wish, PARTY_CURE_MOVES, struggle_move, apply_struggle_recoil, is_trapped as specimen_is_trapped, apply_trap, can_be_trapped, COPY_MOVES, resolve_copied_move, ME_FIRST_MULTIPLIER, collected_coins, coin_sources, magic_coat_bounces, snatch_steals, clear_interceptors, apply_healing_wish, AQUA_RING_FRACTION, consume_lock_on, prize_multiplier, CURSE_DRAIN_FRACTION, store_bide_damage, is_infatuated, infatuation_holds_it_back, accuracy_multiplier, battle_speed, is_unburdened, get_stored_item, hit_chance, evasion_multiplier, turn_order_key, priority_tier, blocks_priority_moves, is_dance_move, refuses_volatile, refuses_status, move_family_blocked, refuses_status_moves, smothers_explosion, is_explosive_move, resolve_stat_stages, shrugs_off_intimidate, apply_stat_stage, OHKO_MOVES, paradox_engine_running, paradox_best_stat, resists_forced_switch, intimidate_reversal, wants_to_bail_out, pretty_ability, is_wind_move, refuses_wind, on_hit_reaction, charge_multiplier, crossed_below_half, hp_threshold_stages, flinch_reaction, faint_recoil, hp_form_for, hunger_form_for, stance_form_for, gulp_catch_for, request_form_flip, knockout_boost, mourning_boost, mark_mourned, copies_stat_boosts, fallen_allies, supreme_overlord_multiplier, weather_form_for, truancy_holds_it_back, is_effectively_asleep, apply_berry_effect, harvest_regrows, cud_chew_due, pickup_finds, clear_spent_item_markers, item_is_stuck, is_berry, traced_ability, disguise_model, wear_illusion, drop_illusion, true_pokedex_id, rewrite_plate_type, restore_own_types, apply_transform, set_active_ability, refresh_neutralizing_gas, breaks_moulds, MOLD_BREAKER_IGNORES, personal_weather, battle_bond_form_for, wears_bonded_form, STANDARD_SHIELDS, item_hit_reaction, terrain_seed_fires, sound_move_spray, blunder_policy_fires, room_service_fires, apply_white_herb, apply_mental_herb, spend_item, pending_pivot, clear_pivot_request, involuntary_pivot, shrugs_off_weather_chip, ignores_hazards, species_form_for, true_species_name, roll_gender, declared_gender, expire_action_markers
-from utils.constants import DB_FILE, NATURE_MULTIPLIERS, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
+from utils.constants import DB_FILE, NATURE_MULTIPLIERS, nature_multiplier, TYPE_CHART, BIOLOGICAL_TRAITS, METRONOME_POOL, WEATHER_CHIP_IMMUNE_ABILITIES, CHOICE_LOCK_ABILITIES, BURN_TOLL_HALVED_BY, shrugs_off_weather, EARLY_BIRD_SLEEP_RATE, ALLY_DODGE_ABILITIES, STAT_STAGE_KEYS, EXPLOSIVE_MOVES, ENTRY_STAT_BOOST_ABILITIES, ENTRY_STAT_DROP_ABILITIES, ONCE_PER_BATTLE_MARKER, DOWNLOAD_ABILITIES, FRISK_ABILITIES, FOREWARN_ABILITIES, ANTICIPATION_ABILITIES, BERRY_BLOCKING_ABILITIES, SCREEN_CLEANING_ABILITIES, SIDE_SCREEN_KEYS, FIELD_NEUTRALISING_ABILITIES, ENTRY_FORM_SHIFTS, RUIN_ABILITIES, ALLY_ONLY_ENTRY_ABILITIES, TERRAIN_SETTER_ABILITIES, PARADOX_ABILITIES, BOOSTER_ENERGY, BOOSTER_SPENT_MARKER, BAIL_OUT_MARKER, HP_THRESHOLD_MARKER, FORM_FLIP_REQUEST, NO_FLEE_MECHANIC_ABILITIES, TARGET_ATTACKER, TARGET_DEFENDER, TARGET_ATTACKER_FROM_FOE, TARGET_DEFENDER_SELF, TARGET_FIELD, HIDDEN_ABILITY_CHANCE, KNOCKOUT_BOOST_ABILITIES, MOURNING_ABILITIES, MOURNED_MARKER, OPPORTUNIST_ABILITIES, SUPREME_OVERLORD_ABILITIES, LEVITATION_ABILITIES, TRUANT_ABILITIES, TRUANT_MARKER, COMATOSE_ABILITIES, WEATHER_FORM_ABILITIES, CLUMSY_ABILITIES, STICKY_HOLD_ABILITIES, GLUTTONY_ABILITIES, RIPEN_ABILITIES, CHEEK_POUCH_ABILITIES, HARVEST_ABILITIES, CUD_CHEW_ABILITIES, PICKUP_ABILITIES, HONEY_GATHER_ABILITIES, AFTER_BATTLE_FIND_CHANCE, HONEY_GATHER_ITEM, PICKUP_POOL, NO_ALLY_ITEM_ABILITIES, NO_BALL_THROW_ABILITIES, TRACE_ABILITIES, IMPOSTER_ABILITIES, ILLUSION_ABILITIES, ILLUSION_MARKER, PLATE_TYPE_ABILITIES, PLATE_BASE_TYPES, ITEM_WELDED_ABILITIES, ALLY_FAINT_ABILITIES, BATTLE_STATE_TEAM_KEYS, MOLD_BREAKING_ABILITIES, MOULD_BROKEN_MARKER, NEUTRALIZING_GAS_ABILITIES, GAS_SUPPRESSED_MARKER, UNAWARE_ABILITIES, PERSONAL_SUN_ABILITIES, DOUBLES_ONLY_ABILITIES, BATTLE_BOND_ABILITIES, BATTLE_BOND_FORM, GIMMICK_LOCKED_FORMS, spawnable_forms, ultra_beasts
 from utils.db_manager import (check_evolution_trigger, check_condition_evolution,
                              evolution_context)
 from utils.growth import MAX_FRIENDSHIP, boosted_xp, raise_friendship
@@ -3227,6 +3227,110 @@ class EvolutionConfirmView(discord.ui.View):
             print(f"\n🚨 CRITICAL BUTTON CRASH (cancel_evo): {e}")
             traceback.print_exc()
 
+# ==========================================
+# 📪 GETTING A PRIVATE MENU TO SOMEBODY WHOSE DMs ARE SHUT
+# ==========================================
+# **A DUEL USED TO END WHEN A PLAYER'S DMs WERE CLOSED, AND NOT CLEANLY.** Four places
+# in the PvP engine hand a player something only they should see - a forced swap after a
+# knockout, a mid-turn pivot, and the Red Card notice - and all four did it with a bare
+# `member.send(...)`.
+#
+# Discord refuses that with `Forbidden` for anybody who has DMs off for the server, has
+# the bot blocked, or simply shares no mutual server setting that allows it. That is a
+# *setting*, not a rare accident, and none of the four call sites caught it:
+#
+#   * the two forced-swap sites raised inside `process_pvp_turn`, which left `phase`
+#     stuck on 'faint_swap' with a commit nobody could ever supply - the same wedge
+#     `has_replacement` was written to close, arriving through a different door. Both
+#     players stayed in `active_battles` until the process restarted;
+#   * the mid-turn pivot site raised while the engine was mid-turn, and if it had not
+#     raised it would have gone on to `await swap_view.swap_event.wait()` - a wait with
+#     no timeout, on an event only a DM nobody received could ever set.
+#
+# So delivery is one function, and it has two routes. The DM is still tried first
+# because it is the quieter one. When it is refused, the menu is offered in the battle
+# channel behind a button, and the button hands it over as an EPHEMERAL - which is
+# private in exactly the way the DM was for, is not blockable, and needs no setting
+# changed by somebody in the middle of a fight.
+PRIVATE_RELAY_LABEL = "Open your options"
+
+
+class PrivateRelay(discord.ui.View):
+    """A public button that hands one duellist a menu their DMs would not accept.
+
+    The menu itself is passed through untouched and sent ephemerally, so the buttons the
+    player presses are the SAME view object the engine is waiting on - a copy would set
+    an event nobody is listening to.
+
+    Deliberately re-pressable. Ephemerals can be dismissed by accident, and a relay that
+    spent itself on the first press would strand the duel exactly where this whole
+    function exists to stop it being stranded. Pressing twice is safe because both menus
+    below refuse a second answer themselves.
+    """
+
+    def __init__(self, player_id, menu, prompt, *, timeout=BATTLE_IDLE_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.player_id = str(player_id)
+        self.menu = menu
+        self.prompt = prompt
+
+    async def interaction_check(self, interaction):
+        if str(interaction.user.id) != self.player_id:
+            await interaction.response.send_message(
+                "🔒 These are somebody else's options.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label=PRIVATE_RELAY_LABEL, style=discord.ButtonStyle.primary,
+                       emoji="📋")
+    async def open(self, interaction: discord.Interaction,
+                   button: discord.ui.Button):
+        await interaction.response.send_message(self.prompt, view=self.menu,
+                                                ephemeral=True)
+
+
+async def deliver_privately(state, tag, content, view=None, *, prompt=None):
+    """
+    Get one duellist something private, whether or not their DMs are open.
+
+    `tag` is 'p1' or 'p2'. Returns True if it reached them by either route, and False
+    only when there is nowhere left to put it - which the caller must treat as "this
+    player cannot answer", not as "keep waiting".
+
+    NEVER RAISES. Every caller is inside the turn resolver, and a delivery failure must
+    not be the thing that ends a duel.
+    """
+    member = state.get(tag)
+    player_id = state.get(f"{tag}_id")
+
+    try:
+        await member.send(content, view=view) if view else await member.send(content)
+        return True
+    except Exception as dm_error:
+        # Forbidden is the expected one and by far the commonest; the rest are caught
+        # with it because the answer to all of them is the same fallback.
+        print(f"📪 Could not DM {tag} ({player_id}): {dm_error!r} - relaying to channel.")
+
+    channel = getattr(state.get('message_obj'), 'channel', None)
+    if channel is None:                                        # pragma: no cover
+        print(f"🚨 No channel to relay to for {tag} ({player_id}).")
+        return False
+
+    mention = getattr(member, 'mention', f"<@{player_id}>")
+    try:
+        if view is None:
+            await channel.send(f"{mention} {content}")
+        else:
+            await channel.send(
+                f"{mention} {content}\n-# Your DMs are closed, so press the button - "
+                f"only you can see what it opens.",
+                view=PrivateRelay(player_id, view, prompt or content))
+        return True
+    except Exception as relay_error:                           # pragma: no cover
+        print(f"🚨 Could not relay to the channel for {tag}: {relay_error!r}")
+        return False
+
+
 class PvPForcedSwapMenu(discord.ui.View):
     def __init__(self, cog, state, player_id):
         super().__init__(timeout=60)
@@ -3252,15 +3356,32 @@ class PvPForcedSwapMenu(discord.ui.View):
             #Reject stale menus and wrong phases!
             if self.state['turn_number'] != self.turn_created:
                 return await interaction.response.send_message("⚠️ This swap menu has expired!", ephemeral=True)
-            
+
+            # ONE ANSWER PER TURN. A second commit overwrites the first and calls
+            # `check_pvp_commits` again, which resolves a turn that is already
+            # resolving. Unreachable while this menu only ever existed once, in a DM
+            # that vanished when it was used - and reachable now that the channel relay
+            # can hand the same menu out twice, so it is answered here rather than
+            # left to the relay to be careful.
+            if self.state['commits'].get(self.player_id) is not None:
+                return await interaction.response.send_message(
+                    "🔒 You have already chosen your replacement.", ephemeral=True)
+
             self.state['commits'][self.player_id] = {'type': 'forced_swap', 'data': idx}
             await interaction.response.edit_message(content=f"🔒 Locked in: Deploying **{poke['name'].capitalize()}**!", view=None)
             await self.cog.check_pvp_commits(self.state)
         return swap_callback
 
+# How long the engine will hold a half-resolved turn open waiting for a pivot answer.
+# The MENU's own timeout is not this: a View timeout only stops the buttons working, and
+# the coroutine parked on `swap_event` never hears about it. Both are the same number so
+# the buttons and the wait give up together.
+PIVOT_SWAP_TIMEOUT = 120
+
+
 class MidTurnSwapMenu(discord.ui.View):
     def __init__(self, cog, state, player_id):
-        super().__init__(timeout=120) # Give them 2 minutes to think!
+        super().__init__(timeout=PIVOT_SWAP_TIMEOUT)  # Give them 2 minutes to think!
         self.cog = cog
         self.state = state
         self.player_id = player_id
@@ -3288,7 +3409,15 @@ class MidTurnSwapMenu(discord.ui.View):
         async def swap_callback(interaction: discord.Interaction):
             if str(interaction.user.id) != str(self.player_id):
                 return await interaction.response.send_message("⚠️ You cannot make this substitution!", ephemeral=True)
-            
+
+            # The engine reads `selected_index` the instant the event is set and then
+            # carries on, so a second press would be changing an answer that has
+            # already been acted on. Same reason as the forced-swap menu above: the
+            # channel relay can hand this menu out more than once.
+            if self.swap_event.is_set():
+                return await interaction.response.send_message(
+                    "🔒 Your replacement is already on the way out.", ephemeral=True)
+
             # 1. Lock in the choice and update the Discord message so they know it worked
             self.selected_index = idx
             await interaction.response.edit_message(content=f"🔒 Withdrawing... Deploying **{poke['name'].capitalize()}**!", view=None)
@@ -6559,11 +6688,31 @@ class BattleDashboard(discord.ui.View):
                                     # Use edit_original_response instead of searching the state dict!
                                     await interaction.edit_original_response(embed=embed, attachments=[], view=swap_view)
                                     
-                                    # 🛑 FREEZE THE THREAD UNTIL THEY CLICK A BUTTON
-                                    await swap_view.swap_event.wait()
-                                    
+                                    # 🛑 FREEZE THE THREAD UNTIL THEY CLICK A BUTTON -
+                                    # BUT NOT FOREVER. Same unbounded wait the PvP pivot
+                                    # carried: a View timeout stops the buttons working
+                                    # and says nothing to the coroutine parked here, so
+                                    # anyone who closed the tab mid-pivot left this
+                                    # expedition in `active_battles` until restart. The
+                                    # bench answers for them rather than losing the duel.
+                                    player_bench = [
+                                        i for i, p in enumerate(state['player_team'])
+                                        if p['current_hp'] > 0 and i != active_idx]
+                                    try:
+                                        await asyncio.wait_for(swap_view.swap_event.wait(),
+                                                               timeout=PIVOT_SWAP_TIMEOUT)
+                                        new_idx = swap_view.selected_index
+                                    except asyncio.TimeoutError:
+                                        new_idx = player_bench[0]
+                                        combat_log += ("⌛ You did not answer in time, so "
+                                                       "the next specimen on the bench "
+                                                       "stepped up.\n")
+                                        # Close the menu against a late press, which
+                                        # would announce a swap already made for them.
+                                        swap_view.swap_event.set()
+                                        swap_view.stop()
+
                                     # 🟢 RESUME! Grab the index they selected
-                                    new_idx = swap_view.selected_index
                                     state['active_player_index'] = new_idx
                                     new_active = state['player_team'][new_idx]
                                     
@@ -9798,18 +9947,54 @@ class Combat(commands.Cog):
                             embed = discord.Embed(title="⚠️ Mid-Turn Substitution!", description=f"{combat_log}\nWaiting for {owner_name} to deploy a replacement...", color=discord.Color.orange())
                             await state['message_obj'].edit(embed=embed, attachments=[], view=None)
                             
-                            # 2. Spawn the menu and send it to the specific player's DMs!
+                            # 2. Spawn the menu and get it to them - DM if they will take
+                            #    one, a button in this channel if they will not.
                             player_id_to_ping = state[f"{player_tag}_id"]
                             swap_view = MidTurnSwapMenu(self, state, player_id_to_ping)
-                            
-                            # Ping the user directly (identical to your faint_swap logic)
-                            await state[player_tag].send(f"⚠️ **{attacker['name'].capitalize()}** is pivoting out! Select a replacement quickly:", view=swap_view)
-                            
-                            # 3. 🛑 FREEZE THE THREAD UNTIL THEY CLICK A BUTTON IN THEIR DMS
-                            await swap_view.swap_event.wait()
-                            
+
+                            delivered = await deliver_privately(
+                                state, player_tag,
+                                f"⚠️ **{attacker['name'].capitalize()}** is pivoting out! "
+                                f"Select a replacement quickly:",
+                                view=swap_view,
+                                prompt="Select a benched specimen to deploy:")
+
+                            # 3. 🛑 FREEZE THE THREAD UNTIL THEY ANSWER - BUT NOT FOREVER.
+                            #
+                            # This was a bare `await swap_view.swap_event.wait()`, which
+                            # is a wait with no timeout on an event that only a click can
+                            # set. Anybody who closed the tab, or whose DMs refused the
+                            # menu that used to be the only way to send it, left this
+                            # coroutine parked for the lifetime of the process with both
+                            # duellists still in `active_battles`.
+                            #
+                            # The engine picks for them rather than abandoning the duel:
+                            # a pivot has already happened in the log above, so there is
+                            # no state to rewind to, and the first healthy specimen is
+                            # the same choice a Red Card would have made.
+                            bench_slots = [i for i, p in enumerate(state[f"{player_tag}_team"])
+                                           if p['current_hp'] > 0 and i != active_idx]
+                            new_idx = None
+                            if delivered:
+                                try:
+                                    await asyncio.wait_for(swap_view.swap_event.wait(),
+                                                           timeout=PIVOT_SWAP_TIMEOUT)
+                                    new_idx = swap_view.selected_index
+                                except asyncio.TimeoutError:
+                                    print(f"⌛ {player_tag} did not answer the pivot menu.")
+
+                            if new_idx is None:
+                                new_idx = bench_slots[0]
+                                combat_log += (f"⌛ {owner_name} did not answer in time, so "
+                                               f"the next specimen on the bench stepped up.\n")
+                                # The relay button may still be sitting in the channel.
+                                # Setting the event closes the menu behind it against a
+                                # late press, which would otherwise announce a swap that
+                                # the engine had already made for them.
+                                swap_view.swap_event.set()
+                                swap_view.stop()
+
                             # 4. 🟢 RESUME! Grab the index they selected and mutate the state
-                            new_idx = swap_view.selected_index
                             state[f"{player_tag}_active_index"] = new_idx
                             new_active = state[f"{player_tag}_team"][new_idx]
 
@@ -10689,30 +10874,45 @@ class Combat(commands.Cog):
                 _p1_drag = _drag_commit('p1', p1_needs_swap, new_p1_active)
                 _p2_drag = _drag_commit('p2', p2_needs_swap, new_p2_active)
 
-                if _p1_drag:
-                    state['commits'][p1_id] = _p1_drag
-                    await state['p1'].send(
-                        "🟥 Your active specimen was dragged out by a Red Card - "
-                        "the replacement was chosen for you!")
-                elif p1_needs_swap:
-                    view1 = PvPForcedSwapMenu(self, state, p1_id)
-                    reason = "fainted" if new_p1_active['current_hp'] <= 0 else "is pivoting out"
-                    await state['p1'].send(f"⚠️ Your active specimen {reason}! Select a replacement:", view=view1)
-                else:
-                    state['commits'][p1_id] = {'type': 'pass'}
-                    
-                # Ping P2 if they triggered a swap, otherwise auto-ready them!
-                if _p2_drag:
-                    state['commits'][p2_id] = _p2_drag
-                    await state['p2'].send(
-                        "🟥 Your active specimen was dragged out by a Red Card - "
-                        "the replacement was chosen for you!")
-                elif p2_needs_swap:
-                    view2 = PvPForcedSwapMenu(self, state, p2_id)
-                    reason = "fainted" if new_p2_active['current_hp'] <= 0 else "is pivoting out"
-                    await state['p2'].send(f"⚠️ Your active specimen {reason}! Select a replacement:", view=view2)
-                else:
-                    state['commits'][p2_id] = {'type': 'pass'}
+                # Both sides prompted through `deliver_privately`, which falls back to a
+                # button in the battle channel when the DM is refused. A bare `.send`
+                # here raised `Forbidden` for anybody with DMs closed, and it raised
+                # AFTER `phase` had been set to 'faint_swap' and the commits wiped -
+                # so the duel sat waiting for an answer from a menu that was never
+                # delivered, with both players locked out of starting another.
+                for tag, player_id, drag, needs_swap, active in (
+                        ('p1', p1_id, _p1_drag, p1_needs_swap, new_p1_active),
+                        ('p2', p2_id, _p2_drag, p2_needs_swap, new_p2_active)):
+                    if drag:
+                        state['commits'][player_id] = drag
+                        await deliver_privately(
+                            state, tag,
+                            "🟥 Your active specimen was dragged out by a Red Card - "
+                            "the replacement was chosen for you!")
+                    elif needs_swap:
+                        reason = "fainted" if active['current_hp'] <= 0 else "is pivoting out"
+                        menu = PvPForcedSwapMenu(self, state, player_id)
+                        delivered = await deliver_privately(
+                            state, tag,
+                            f"⚠️ Your active specimen {reason}! Select a replacement:",
+                            view=menu,
+                            prompt="Select a benched specimen to deploy:")
+                        if not delivered:
+                            # Nowhere to ask. Choosing FOR them is the only move that
+                            # is not a permanent wedge, and it is the same choice the
+                            # Red Card makes above.
+                            bench = [i for i, p in enumerate(state[f'{tag}_team'])
+                                     if p['current_hp'] > 0
+                                     and i != state[f'{tag}_active_index']]
+                            state['commits'][player_id] = (
+                                {'type': 'forced_swap', 'data': bench[0]} if bench
+                                else {'type': 'pass'})
+                    else:
+                        state['commits'][player_id] = {'type': 'pass'}
+
+                # Every drag and every undeliverable prompt filled a commit in without
+                # going through a menu, so both sides may already be answered.
+                await self.check_pvp_commits(state)
                 return
 
             embed = discord.Embed(title="⚔️ PvP Field Duel", description=battle_log_description(combat_log), color=discord.Color.blue())
@@ -10951,13 +11151,14 @@ class Combat(commands.Cog):
                         p_id = rows[0][2]
                         
                         nature = pkmn.get('nature', 'hardy').lower()
-                        inc_stat, dec_stat = NATURE_MULTIPLIERS.get(nature, (None, None))
-                        
+
+                        # The shared lookup rather than a third hand-rolled comparison.
+                        # This one passed `special-attack` and so happened to work; the
+                        # copy in `calculate_stats` passed `sp_atk` and never did.
                         def apply_nature(stat_name, val):
-                            if stat_name == inc_stat: return math.floor(val * 1.1)
-                            if stat_name == dec_stat: return math.floor(val * 0.9)
-                            return val
-                        
+                            return math.floor(val * nature_multiplier(nature, stat_name))
+
+
                         real_hp = calculate_real_stat('hp', stats.get('hp', 0), pkmn['ivs']['hp'], pkmn['evs']['hp'], pkmn['level'])
                         real_atk = apply_nature('attack', calculate_real_stat('attack', stats.get('attack', 0), pkmn['ivs']['attack'], pkmn['evs']['attack'], pkmn['level']))
                         real_def = apply_nature('defense', calculate_real_stat('defense', stats.get('defense', 0), pkmn['ivs']['defense'], pkmn['evs']['defense'], pkmn['level']))

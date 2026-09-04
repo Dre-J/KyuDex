@@ -27,13 +27,16 @@ from utils.accounts import (RESET_COOLDOWN_DAYS, account_summary,
                             levelup_pings_enabled, reset_available_at,
                             set_levelup_pings, wipe_user)
 from utils.constants import DB_FILE
-from utils.constants import BIOME_ORDER, biome_label, current_skies
+from utils.constants import (BALL_LADDER, BIOME_ORDER, ball_is_stocked, ball_name,
+                             biome_label, current_skies)
 from utils.prefs import (CARD_BIOME_AUTO, CARD_EMBED, CARD_IMAGE, COMMON_ZONES,
-                         SOURCE_DEFAULT, SOURCE_GUILD, SOURCE_USER, clear_timezone,
-                         describe_zone, get_card_biome, get_card_style, now_in,
-                         resolve_biome_word, resolve_card_biome, resolve_card_style,
-                         resolve_timezone, resolve_zone, set_card_biome,
-                         set_card_style, set_timezone)
+                         SOURCE_DEFAULT, SOURCE_GUILD, SOURCE_USER, ball_stock,
+                         clear_timezone, describe_zone, get_card_biome,
+                         get_card_style, get_preferred_ball, now_in,
+                         resolve_ball_choice, resolve_biome_word, resolve_card_biome,
+                         resolve_card_style, resolve_timezone, resolve_zone,
+                         set_card_biome, set_card_style, set_preferred_ball,
+                         set_timezone)
 from utils.regions import (REGION_ORDER, REGIONS, may_switch_region,
                           region_label, regional_forms, resolve_region_word,
                           set_region, trainer_region)
@@ -339,6 +342,7 @@ class Account(commands.Cog):
             pings = await levelup_pings_enabled(db, user_id)
             style = await get_card_style(db, user_id)
             stored_biome = await get_card_biome(db, user_id)
+            ball = await get_preferred_ball(db, user_id)
             async with db.execute("SELECT unlocked_visas FROM users WHERE user_id = ?",
                                   (user_id,)) as cursor:
                 visa_row = await cursor.fetchone()
@@ -370,6 +374,12 @@ class Account(commands.Cog):
                    + ("" if stored_biome else " *(your deepest clearance)*")
                    + f" · `!settings biome`\n"
                    f"*{len(held)} of {len(BIOME_ORDER)} sectors cleared.*"),
+            inline=False)
+        embed.add_field(
+            name="🔴 Capture gear",
+            value=(f"`!catch` throws **{ball_name(ball) if ball else 'the best ball in your pack'}**"
+                   + ("" if ball else " *(automatic)*")
+                   + f" · `!settings ball <ball|auto>`"),
             inline=False)
         embed.add_field(
             name="🔔 Level-up announcements",
@@ -429,6 +439,67 @@ class Account(commands.Cog):
                  "\n*The embed is plain text - selectable, screen-reader friendly, and "
                  "far smaller to send.*")
         return await ctx.send(f"🖼️ `!profile` will be drawn as **{resolved}**.{extra}")
+
+    @settings.command(name="ball", aliases=["balls", "capture", "pokeball"])
+    @checks.has_started()
+    async def settings_ball(self, ctx, *, ball: str = None):
+        """
+        Which ball `!catch` throws when you do not name one. `!settings ball greatball`
+
+        The default is `auto`, which is what the command has always done: reach for the
+        best thing in the pack. That is the right guess when you are chasing something
+        rare, and an expensive one when you are clearing a channel of Rattata - and
+        until now the only way to stop it was to type the ball out on every throw.
+        """
+        user_id = str(ctx.author.id)
+
+        if ball is None:
+            async with aiosqlite.connect(DB_FILE) as db:
+                current = await get_preferred_ball(db, user_id)
+                held = await ball_stock(db, user_id)
+            # Cheapest first, matching the encounter panel - a list that opens on the
+            # Master Ball reads as an inventory of the thing you have none of.
+            pack = " · ".join(f"{ball_name(key)} **{held.get(key, 0)}**"
+                              for key in reversed(BALL_LADDER) if ball_is_stocked(key))
+            now = (f"always a **{ball_name(current)}**" if current
+                   else "the best ball in your pack *(automatic)*")
+            return await ctx.send(
+                f"🔴 `!catch` throws {now}.\n"
+                f"🎒 In your pack: {pack} · Poké Balls are free and unlimited.\n"
+                f"Change it with `!settings ball greatball`, or `!settings ball auto`.")
+
+        resolved, complaint = resolve_ball_choice(ball)
+        if resolved is None:
+            return await ctx.send(complaint)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            stored = await set_preferred_ball(db, user_id, resolved)
+            await db.commit()
+
+        if not stored:
+            return await ctx.send(
+                "⚠️ This database cannot store the preference yet, so it was not saved. "
+                "`!catch` keeps reaching for the best ball in your pack for now.")
+
+        if not resolved:
+            return await ctx.send(
+                "🔴 `!catch` will throw **the best ball in your pack** again - Ultra "
+                "before Great before Poké. It never reaches for a Master Ball on its "
+                "own; that one has to be named.")
+
+        # Two warnings, and both are about spending something. Neither refuses the
+        # setting: it is their pack, and a preference the bot argues with is a
+        # preference the bot should not have offered.
+        extra = ""
+        if resolved == 'masterball':
+            extra = ("\n⚠️ **Every throw will now spend a Master Ball** - including at a "
+                     "Rattata. Set it back with `!settings ball auto` when you are done.")
+        elif resolved == 'pokeball':
+            extra = ("\n*Nothing will be spent from your pack again unless you name a "
+                     "ball yourself.*")
+        return await ctx.send(
+            f"🔴 `!catch` will throw a **{ball_name(resolved)}**, and will drop to the "
+            f"next ball down only when you run out.{extra}")
 
     @settings.command(name="biome", aliases=["sector", "background", "bg"])
     @checks.has_started()
