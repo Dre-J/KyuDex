@@ -1,7 +1,7 @@
 import sqlite3
 # Assuming you define DB_FILE = "ecosystem.db" in constants.py
 from utils.constants import (DB_FILE, SPECIAL_SKIES, CONDITION_TRIGGERS,
-                             RITUAL_TRIGGERS, NATURE_MULTIPLIERS,
+                             RITUAL_TRIGGERS, nature_multiplier,
                              personality_of, stat_rule_holds)
 from utils.formulas import calculate_real_stat 
 
@@ -121,20 +121,15 @@ async def evolution_context(db, instance_id, guild_id=None):
 
     stats = {}
     if bases:
-        # NATURE_MULTIPLIERS is (raised, lowered) rather than {stat: multiplier} - a
-        # neutral nature is (None, None) - so the 1.1 and 0.9 are applied by name here
-        # rather than looked up. Getting this wrong the other way round crashed on the
-        # first Cosmoem: `.get` on a tuple.
-        raised, lowered = NATURE_MULTIPLIERS.get(str(nature or '').lower(),
-                                                 (None, None))
+        # `nature_multiplier` rather than a comparison written out here. This copy was
+        # correct - it only ever asks about Attack and Defense, which are spelt the same
+        # way on both sides - but the copy in `calculate_stats` asked about the special
+        # stats too and compared `sp_atk` against `special-attack` forever. Three places
+        # applied this table by hand; one of them was wrong, and none of them could tell.
         for name, iv, ev in (('attack', iv_atk, ev_atk), ('defense', iv_def, ev_def)):
             raw = calculate_real_stat(name, bases.get(name, 0), iv or 0, ev or 0,
                                       level or 1)
-            if name == raised:
-                raw = int(raw * 1.1)
-            elif name == lowered:
-                raw = int(raw * 0.9)
-            stats[name] = int(raw)
+            stats[name] = int(raw * nature_multiplier(nature, name))
 
     biome = None
     if guild_id:

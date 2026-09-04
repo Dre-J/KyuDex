@@ -29,6 +29,8 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              HABITAT_DEGRADED_BELOW, HABITAT_PRISTINE_ABOVE,
                              HABITAT_DEGRADED_TYPES, HABITAT_PRISTINE_BONUS,
                              ball_icon, BALL_FALLBACK, trait_badges, is_alpha_size,
+                             BALL_LADDER, CAPTURE_BALLS, ball_is_stocked,
+                             ball_multiplier, ball_name, resolve_ball_word,
                              GMAX_ICON, ALPHA_ICON,
                              MAX_SOUP, MAX_SOUP_COST, MAX_MUSHROOMS,
                              MAX_SOUP_MUSHROOMS, NATURE_MINTS, NATURE_MULTIPLIERS,
@@ -65,10 +67,10 @@ from utils.tags import (all_tags, tags_for, add_tags, remove_tags, clean_tags,
                         has_table as has_tag_table, TABLE as TAG_TABLE,
                         NO_TAG_TABLE, bulk_tag_result,
                         BULK_TAG_CAP, BULK_TAG_CONFIRM_AT)
-from utils.species import pretty_species
+from utils.species import pretty_species, resolve_species
 from utils.db_manager import check_evolution_trigger, evolution_context
 from utils.activity import is_command
-from utils.prefs import trainer_skies
+from utils.prefs import ball_stock, choose_ball, trainer_skies
 from utils.regions import current_region
 from utils import guild_config as cfg
 from utils.embeds import rebind_image
@@ -201,14 +203,12 @@ def hint_seed(spawn, display_name):
 # Fleeing is likewise expedition-only, and for a plainer reason: a public spawn belongs
 # to the channel, so one person dismissing it would be taking it from everyone.
 
-BALL_BUTTONS = (
-    # key, label, whether it must be held in the pack. The emoji is looked up rather
-    # than written here, so the panel and anything else that draws a ball agree.
-    ('pokeball',   'Poké Ball',   False),
-    ('greatball',  'Great Ball',  True),
-    ('ultraball',  'Ultra Ball',  True),
-    ('masterball', 'Master Ball', True),
-)
+# key, label, whether it must be held in the pack - DERIVED, not typed again. This was
+# the fourth copy of the ball ladder and the one most likely to drift, because it is the
+# only one a reader sees rendered. `BALL_LADDER` runs most valuable first, so the panel
+# reverses it to put the free ball on the left where it has always been.
+BALL_BUTTONS = tuple((key, CAPTURE_BALLS[key]['name'], CAPTURE_BALLS[key]['stocked'])
+                     for key in reversed(BALL_LADDER))
 
 
 def button_emoji(key):
@@ -231,8 +231,9 @@ def button_emoji(key):
         return BALL_FALLBACK.get(key, '⚪')
 
 # A Poke Ball is free and unlimited everywhere else in the bot, so its button is never
-# disabled and never carries a count.
-FREE_BALL = 'pokeball'
+# disabled and never carries a count. That is `ball_is_stocked` now - the fact lives in
+# the catalogue beside the multipliers rather than as a bare key here, so a second free
+# ball would need saying once instead of twice.
 
 
 class _ButtonContext:
@@ -408,17 +409,50 @@ class EncounterButton(
             print(f"⚠️ Could not refresh the encounter panel: {e}")
 
 
+def parse_catch_request(full_input):
+    """
+    `!catch pikachu great ball` as `('pikachu', 'greatball')`. Either half may be empty.
+
+    Lifted out of the command so it can be driven directly, because the four rules in it
+    are the kind that are only ever discovered by somebody typing something reasonable
+    and being told there is no such creature:
+
+      * **the ball comes last, and it may be two words.** The old parser compared the
+        final word against four exact keys, so `great ball` - what somebody reading the
+        name off their own backpack types - parsed as a species called "pikachu great";
+      * **longest span first**, or `great ball` splits the same way all over again;
+      * **the species wins a tie.** `deoxys-normal` and `necrozma-ultra` both end in a
+        word that is also a ball, and somebody typing either of them is naming the thing
+        in the channel rather than the thing in their pack;
+      * **naming only a ball is not a parse failure.** `!catch greatball` leaves the
+        species empty on purpose, so the command can say what is missing.
+    """
+    words = str(full_input or '').strip().lower().split()
+
+    for span in (2, 1):
+        if len(words) < span:
+            continue
+        named = resolve_ball_word(" ".join(words[-span:]))
+        if not named:
+            continue
+        if resolve_species("-".join(words)):
+            break
+        return "-".join(words[:-span]), named
+
+    return "-".join(words), None
+
+
 async def ball_counts(user_id):
-    """How many of each purchasable ball this trainer holds."""
-    wanted = [key for key, _, needed in BALL_BUTTONS if needed]
-    marks = ','.join('?' * len(wanted))
+    """How many of each purchasable ball this trainer holds.
+
+    The query itself is `prefs.ball_stock`, which `!catch` also reads to honour a ball
+    preference. Two copies would be two chances to disagree about whether a Poke Ball is
+    something you can run out of - and this one draws the counts a player reads off the
+    panel before deciding what to throw.
+    """
     try:
         async with aiosqlite.connect(DB_FILE) as db:
-            async with db.execute(
-                    f"SELECT item_name, quantity FROM user_inventory "
-                    f"WHERE user_id = ? AND item_name IN ({marks})",
-                    (str(user_id), *wanted)) as cursor:
-                return {row[0]: row[1] for row in await cursor.fetchall()}
+            return await ball_stock(db, user_id)
     except Exception as e:
         # A panel with every ball greyed out is a worse panel, not a broken one.
         print(f"⚠️ Could not read ball counts: {e}")
@@ -440,9 +474,9 @@ async def build_encounter_view(owner_id, spawn_id, timeout=None):
         held = counts.get(key, 0)
         view.add_item(EncounterButton(
             owner_id, spawn_id, key,
-            count=None if key == FREE_BALL else held,
+            count=None if not ball_is_stocked(key) else held,
             disabled=bool(needed and held < 1),
-            style=(discord.ButtonStyle.primary if key == FREE_BALL
+            style=(discord.ButtonStyle.primary if not ball_is_stocked(key)
                    else discord.ButtonStyle.secondary)))
 
     view.add_item(EncounterButton(owner_id, spawn_id, 'flee',
@@ -4274,8 +4308,15 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def catch_pokemon(self, ctx, *, full_input: str = None):
-        
-        if not full_input:
+        """
+        Throw a ball at something standing in the channel. `!catch pikachu`
+
+        Name a ball to use that one - `!catch pikachu great ball` - or name none and the
+        choice is yours to make once instead of every time: `!settings ball greatball`
+        picks the same ball forever, `!settings ball auto` reaches for the best thing in
+        your pack, and `auto` is what you have if you have never said.
+        """
+        if not str(full_input or '').strip():
             return await ctx.send("🎒 You need to specify a target! Example: `!catch pikachu` or `!catch pikachu greatball`")
 
         try:
@@ -4283,17 +4324,10 @@ class Ecology(commands.Cog):
             user_id = str(ctx.author.id)
 
             # 1. THE PARSER
-            input_words = full_input.strip().lower().split()
-            ball_type = None 
-            valid_balls = ["pokeball", "greatball", "ultraball", "masterball"]
+            typed_name, ball_type = parse_catch_request(full_input)
 
-            if input_words[-1] in valid_balls:
-                ball_type = input_words.pop() 
-
-            typed_name = "-".join(input_words)
-            
             if not typed_name:
-                return await ctx.send(f"🎒 You pulled out a {ball_type.capitalize()}, but you didn't specify what to throw it at!")
+                return await ctx.send(f"🎒 You pulled out a {ball_name(ball_type)}, but you didn't specify what to throw it at!")
 
             # ==========================================
             # 4 & 5. TARGET SELECTOR & LOCALIZATION
@@ -4378,43 +4412,39 @@ class Ecology(commands.Cog):
                 # ==========================================
                 # CAPTURE LOGIC & SMART AUTO-BALL
                 # ==========================================
+                # Nobody named one, so the trainer's own preference decides - falling
+                # back to the best thing in the pack, which is what this did before
+                # `!settings ball` existed. `swap_note` is set only when they asked for
+                # something they have run out of, and is carried all the way to the
+                # reply: a preference that quietly stops being honoured is
+                # indistinguishable from one that was never saved.
+                swap_note = None
                 if not ball_type:
-                    async with db.execute("SELECT item_name, quantity FROM user_inventory WHERE user_id = ? AND item_name IN ('ultraball', 'greatball') AND quantity > 0", (user_id,)) as cursor:
-                        inv_rows = await cursor.fetchall()
-                    
-                    inv_dict = {row[0]: row[1] for row in inv_rows}
-                    if inv_dict.get('ultraball', 0) > 0:
-                        ball_type = "ultraball"
-                    elif inv_dict.get('greatball', 0) > 0:
-                        ball_type = "greatball"
-                    else:
-                        ball_type = "pokeball"
-                
-                equipment_stats = {
-                    "pokeball": {"multiplier": 1.5},
-                    "greatball": {"multiplier": 2.5},
-                    "ultraball": {"multiplier": 4.0},
-                    "masterball": {"multiplier": 255}
-                }
+                    ball_type, swap_note = await choose_ball(db, user_id)
+                # Prefixed to whatever the throw produces - a catch, a break-free or an
+                # escape - because all three are moments a trainer wants to be told that
+                # the ball they asked for was not the ball that went.
+                swap_line = f"{swap_note}\n" if swap_note else ""
 
-                if ball_type not in equipment_stats:
-                    return await ctx.send("Invalid equipment. Please use `pokeball`, `greatball`, or `ultraball`.")
+                if ball_type not in CAPTURE_BALLS:
+                    stocked = ', '.join(f"`{key}`" for key in CAPTURE_BALLS)
+                    return await ctx.send(f"Invalid equipment. Please use one of {stocked}.")
 
-                multiplier = equipment_stats[ball_type]["multiplier"]
+                multiplier = ball_multiplier(ball_type)
 
-                if ball_type != "pokeball":
+                if ball_is_stocked(ball_type):
                     async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_name = ?", (user_id, ball_type)) as cursor:
                         inv_data = await cursor.fetchone()
                     quantity = inv_data[0] if inv_data else 0
-                    
+
                     if quantity < 1:
-                        return await ctx.send(f"🎒 You don't have any {ball_type.capitalize()}s in your field pack! Buy some from the `!market`.")
-                
+                        return await ctx.send(f"🎒 You don't have any {ball_name(ball_type)}s in your field pack! Buy some from the `!market`.")
+
                 base_chance = (target['capture_rate'] + 50) / 305.0
                 final_chance = min(1.0, base_chance * multiplier)
-                roll = random.random() 
-                
-                if ball_type != "pokeball":
+                roll = random.random()
+
+                if ball_is_stocked(ball_type):
                     await db.execute("UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_name = ?", (user_id, ball_type))
                 
                 # ==========================================
@@ -4436,9 +4466,9 @@ class Ecology(commands.Cog):
                         # since the spawn-card work; an escape never did.
                         await mark_spawn_fled(self.bot, target, pokemon_name)
 
-                        return await ctx.send(f"💥 Oh no! The **{typed_name.capitalize().replace('-', ' ')}** broke free and fled into the wild! *(Catch chance was {final_chance:.1%})*")
+                        return await ctx.send(f"{swap_line}💥 Oh no! The **{typed_name.capitalize().replace('-', ' ')}** broke free and fled into the wild! *(Catch chance was {final_chance:.1%})*")
                     else:
-                        return await ctx.send(f"💨 The **{typed_name.capitalize().replace('-', ' ')}** broke free from the {ball_type.capitalize()}, but it's still watching you! Try again! *(Catch chance was {final_chance:.1%})*")
+                        return await ctx.send(f"{swap_line}💨 The **{typed_name.capitalize().replace('-', ' ')}** broke free from the {ball_name(ball_type)}, but it's still watching you! Try again! *(Catch chance was {final_chance:.1%})*")
                 
                 # --- GENETICS & RARE SPAWN DATA FETCH ---
                 async with db.execute("SELECT standard_abilities, hidden_ability, gender_rate, is_legendary, is_mythical FROM base_pokemon_species WHERE pokedex_id = ?", (target['pokedex_id'],)) as cursor:
@@ -4647,7 +4677,9 @@ class Ecology(commands.Cog):
                 
                 alpha_tag = f"{ALPHA_ICON} **ALPHA** " if is_alpha else ""
 
-                base_desc = f"**{ctx.author.name}** successfully tagged the {alpha_tag}**{gender_emoji} {typed_name.capitalize().replace('-', ' ')}** using a {ball_type.capitalize()}!\n\n"
+                base_desc = f"**{ctx.author.name}** successfully tagged the {alpha_tag}**{gender_emoji} {typed_name.capitalize().replace('-', ' ')}** using a {ball_name(ball_type)}!\n\n"
+                if swap_note:
+                    base_desc = f"{swap_note}\n\n{base_desc}"
                 
                 stat_block = f"📊 **Level:** {level}\n🧬 **Genetic Potential:** {iv_percentage}% *({appraisal})*\n"
                 base_desc += stat_block

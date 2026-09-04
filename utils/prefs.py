@@ -37,7 +37,9 @@ spawn on a schedule - this is the place to add one.
 import datetime
 import difflib
 
-from utils.constants import BIOME_ORDER
+from utils.constants import (AUTO_BALL_ORDER, BALL_LADDER, BIOME_ORDER, CAPTURE_BALLS,
+                             ball_is_stocked, ball_name, flatten_ball,
+                             resolve_ball_word)
 from utils.db_manager import ensure_column, has_column
 
 DEFAULT_TIMEZONE = 'UTC'
@@ -454,6 +456,128 @@ async def set_card_biome(db, user_id, biome):
     await db.execute("UPDATE users SET card_biome = ? WHERE user_id = ?",
                      (biome or None, str(user_id)))
     return True
+
+
+# ==========================================
+# 🔴 WHICH BALL `!catch` THROWS WHEN NOBODY NAMES ONE
+# ==========================================
+# `!catch pikachu` has always picked a ball by itself, and it has always picked the most
+# expensive one in the pack. That is the right guess for somebody chasing a legendary and
+# the wrong one for everybody else: a trainer clearing a channel full of Rattata was
+# spending a 250-token Ultra Ball on each of them, and the only way to stop it was to
+# type the ball out every single time.
+#
+# So the guess became a preference. Three states, and the empty one is not the same as a
+# stored 'pokeball':
+#
+#   BALL_AUTO      follow the pack - best available, exactly as before. The default, so
+#                  nobody who has never opened `!settings` sees any change.
+#   a ball key     throw this one, always. `pokeball` is the "never spend anything"
+#                  setting people actually want; `masterball` is allowed because
+#                  refusing somebody their own item is worse than letting them.
+#
+# **A FALLBACK ONLY EVER WALKS DOWNWARDS.** Somebody who set Great Balls and ran out did
+# not thereby ask to start spending Ultra Balls, so `BALL_LADDER` is walked from where
+# they asked towards the free end - never back up it.
+BALL_AUTO = ''
+
+# What people type meaning "go back to guessing for me".
+BALL_AUTO_WORDS = ('auto', 'automatic', 'best', 'smart', 'default', 'reset', 'clear',
+                   'none', 'off')
+
+
+def resolve_ball_choice(text):
+    """`(ball_key_or_BALL_AUTO, complaint)` from whatever they typed.
+
+    Exactly one is ever set, and `BALL_AUTO` is a real answer rather than a failure to
+    parse: it is how somebody hands the choice back to their pack after having made one.
+    """
+    word = str(text or '').strip().lower()
+    if flatten_ball(word) in {flatten_ball(w) for w in BALL_AUTO_WORDS}:
+        return BALL_AUTO, None
+    key = resolve_ball_word(word)
+    if key:
+        return key, None
+    known = ', '.join(f"`{ball_name(k)}`" for k in BALL_LADDER)
+    return None, (f"🔴 `{text}` is not a ball I stock. The four are {known} - or "
+                  f"`auto` to keep throwing the best one in your pack.")
+
+
+async def get_preferred_ball(db, user_id):
+    """This trainer's chosen ball, or `BALL_AUTO`. Never raises, never writes."""
+    try:
+        if not await _has_column(db, 'users', 'preferred_ball'):
+            return BALL_AUTO
+        async with db.execute("SELECT preferred_ball FROM users WHERE user_id = ?",
+                              (str(user_id),)) as cursor:
+            row = await cursor.fetchone()
+    except Exception:
+        return BALL_AUTO
+    stored = (row[0] if row else None) or ''
+    return stored if stored in CAPTURE_BALLS else BALL_AUTO
+
+
+async def set_preferred_ball(db, user_id, ball):
+    """Store it, or clear it with `BALL_AUTO`. Returns False if the database cannot
+    hold it. Does NOT commit."""
+    if ball and ball not in CAPTURE_BALLS:
+        return False
+    if not await _ensure_column(db, 'users', 'preferred_ball', 'TEXT'):
+        return False
+    await db.execute("UPDATE users SET preferred_ball = ? WHERE user_id = ?",
+                     (ball or None, str(user_id)))
+    return True
+
+
+async def ball_stock(db, user_id):
+    """`{ball: quantity}` for the balls that have to be held. Never raises."""
+    wanted = [key for key in BALL_LADDER if ball_is_stocked(key)]
+    marks = ','.join('?' * len(wanted))
+    try:
+        async with db.execute(
+                f"SELECT item_name, quantity FROM user_inventory "
+                f"WHERE user_id = ? AND item_name IN ({marks})",
+                (str(user_id), *wanted)) as cursor:
+            return {row[0]: row[1] for row in await cursor.fetchall()}
+    except Exception as e:
+        # A pack that reads as empty falls the trainer back to the free ball, which is
+        # a worse throw and not a lost catch.
+        print(f"⚠️ Could not read ball stock for {user_id}: {e}")
+        return {}
+
+
+def _first_available(order, held):
+    """The first ball in `order` this trainer can actually throw, or None."""
+    for key in order:
+        if not ball_is_stocked(key) or held.get(key, 0) > 0:
+            return key
+    return None
+
+
+async def choose_ball(db, user_id):
+    """
+    `(ball_key, note)` - what `!catch` throws when the trainer named nothing.
+
+    `note` is None unless the trainer asked for something they have run out of, in which
+    case it says what was thrown instead. Silently downgrading is the one thing this
+    must not do: a preference that quietly stops being honoured looks exactly like a
+    preference that was never saved.
+    """
+    held = await ball_stock(db, user_id)
+    preferred = await get_preferred_ball(db, user_id)
+
+    if preferred:
+        if not ball_is_stocked(preferred) or held.get(preferred, 0) > 0:
+            return preferred, None
+        below = BALL_LADDER[BALL_LADDER.index(preferred) + 1:]
+        thrown = _first_available(below, held)
+        if thrown:
+            return thrown, (f"🎒 You are out of **{ball_name(preferred)}s**, so a "
+                            f"**{ball_name(thrown)}** was thrown instead.")
+
+    # No preference, or one that fell all the way through: the best thing in the pack,
+    # which is what this command has always done.
+    return _first_available(AUTO_BALL_ORDER, held) or 'pokeball', None
 
 
 async def resolve_timezone(db, user_id, guild_id=None):

@@ -3,6 +3,7 @@ import os
 import random
 import hashlib as _hashlib
 import re as _re
+import unicodedata as _unicodedata
 import discord
 # ==========================================
 # THE BOTANICAL DATABASE (Consumables)
@@ -412,20 +413,98 @@ TYPE_CHART = {
     'fairy': {'fire': 0.5, 'fighting': 2.0, 'poison': 0.5, 'dragon': 2.0, 'dark': 2.0, 'steel': 0.5}
 }
 
-# A reference dictionary for Natures. 
+# A reference dictionary for Natures.
 # Format: 'nature_name': ('increased_stat', 'decreased_stat')
+#
+# **JOLLY LOWERED THE WRONG STAT.** It read ('speed', 'special-defense'), which is Naive
+# - the two rows were identical, so one of the twenty-five natures did not exist and
+# Jolly, the commonest competitive nature on a physical attacker, gave Naive's spread.
+# Wherever the table was applied correctly a Jolly specimen therefore lost 10% of the
+# Special Defence it should have kept and kept all of the Special Attack it should have
+# lost. (Wherever it was applied through `calculate_stats` it lost neither, for the
+# separate reason set out below - which is why fixing this row alone would have changed
+# nothing anybody could see.)
+#
+# The table is laid out in the games' own order below - five blocks of five, each block
+# raising one stat and lowering each of the five in turn, so the diagonal is the five
+# neutral ones - because that shape is the only thing that makes a wrong entry visible by
+# reading. In the old flowed layout the duplicate sat mid-line and looked exactly like
+# its neighbour.
 NATURE_MULTIPLIERS = {
-    'hardy': (None, None), 'lonely': ('attack', 'defense'), 'brave': ('attack', 'speed'),
-    'adamant': ('attack', 'special-attack'), 'naughty': ('attack', 'special-defense'),
-    'bold': ('defense', 'attack'), 'docile': (None, None), 'relaxed': ('defense', 'speed'),
-    'impish': ('defense', 'special-attack'), 'lax': ('defense', 'special-defense'),
-    'timid': ('speed', 'attack'), 'hasty': ('speed', 'defense'), 'serious': (None, None),
-    'jolly': ('speed', 'special-defense'), 'naive': ('speed', 'special-defense'),
-    'modest': ('special-attack', 'attack'), 'mild': ('special-attack', 'defense'), 'quiet': ('special-attack', 'speed'),
-    'bashful': (None, None), 'rash': ('special-attack', 'special-defense'),
-    'calm': ('special-defense', 'attack'), 'gentle': ('special-defense', 'defense'), 'sassy': ('special-defense', 'speed'),
-    'careful': ('special-defense', 'special-attack'), 'quirky': (None, None)
+    'hardy':   (None, None),
+    'lonely':  ('attack', 'defense'),
+    'brave':   ('attack', 'speed'),
+    'adamant': ('attack', 'special-attack'),
+    'naughty': ('attack', 'special-defense'),
+
+    'bold':    ('defense', 'attack'),
+    'docile':  (None, None),
+    'relaxed': ('defense', 'speed'),
+    'impish':  ('defense', 'special-attack'),
+    'lax':     ('defense', 'special-defense'),
+
+    'timid':   ('speed', 'attack'),
+    'hasty':   ('speed', 'defense'),
+    'serious': (None, None),
+    'jolly':   ('speed', 'special-attack'),
+    'naive':   ('speed', 'special-defense'),
+
+    'modest':  ('special-attack', 'attack'),
+    'mild':    ('special-attack', 'defense'),
+    'quiet':   ('special-attack', 'speed'),
+    'bashful': (None, None),
+    'rash':    ('special-attack', 'special-defense'),
+
+    'calm':    ('special-defense', 'attack'),
+    'gentle':  ('special-defense', 'defense'),
+    'sassy':   ('special-defense', 'speed'),
+    'careful': ('special-defense', 'special-attack'),
+    'quirky':  (None, None),
 }
+
+# ==========================================
+# APPLYING A NATURE, IN ONE PLACE
+# ==========================================
+# **THE SPECIAL STATS ARE SPELT TWO WAYS IN THIS CODEBASE, AND A NATURE IS APPLIED BY
+# COMPARING NAMES.** `base_pokemon_stats`, the evolution rulebook and the Warden roster
+# say `special-attack`; the combat dictionaries and `calculate_stats` say `sp_atk`. That
+# difference is harmless everywhere except where the two meet - and they meet here,
+# where `'sp_atk' == 'special-attack'` is simply false.
+#
+# So `calculate_stats` compared every stat against a name it could never equal and
+# quietly applied NOTHING to either special stat. Measured across all 25: fourteen
+# natures lost at least half their effect, Careful and Rash did nothing whatsoever, and
+# Modest - the standard special attacker's nature - applied its -Attack and never its
+# +Special Attack. It builds every player team in every battle, so this was live.
+#
+# One function, taking either spelling, so the fourth caller cannot get it wrong either.
+STAT_NAME_ALIASES = {
+    'sp_atk': 'special-attack', 'sp-atk': 'special-attack', 'spatk': 'special-attack',
+    'sp_def': 'special-defense', 'sp-def': 'special-defense', 'spdef': 'special-defense',
+}
+
+
+def canonical_stat(stat_name):
+    """A stat under the one spelling, whichever the caller happened to have."""
+    key = str(stat_name or '').strip().lower().replace(' ', '-')
+    return STAT_NAME_ALIASES.get(key, key)
+
+
+def nature_multiplier(nature, stat_name):
+    """`1.1`, `0.9` or `1.0` - what `nature` does to `stat_name`.
+
+    A nature nobody has heard of, and a neutral one, both return 1.0 - which has to be
+    EXACTLY 1.0 rather than a float that rounds to it, because every caller multiplies
+    a stat by this and floors the result.
+    """
+    raised, lowered = NATURE_MULTIPLIERS.get(
+        str(nature or '').strip().lower(), (None, None))
+    stat = canonical_stat(stat_name)
+    if raised and canonical_stat(raised) == stat:
+        return 1.1
+    if lowered and canonical_stat(lowered) == stat:
+        return 0.9
+    return 1.0
 
 # A quick list of natures for genetic diversity
 NATURES = ["Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish", "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful", "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky"]
@@ -936,6 +1015,92 @@ def ball_icon(key):
     """The badge for one ball, falling through to a coloured circle."""
     key = str(key or '').strip().lower()
     return BALL_ICONS.get(key) or BALL_FALLBACK.get(key) or '⚪'
+
+
+# ==========================================
+# 🔴 WHAT A BALL IS WORTH, AND WHICH ONE GETS THROWN
+# ==========================================
+# **THE LADDER WAS WRITTEN OUT FOUR TIMES.** `!catch` carried a `valid_balls` list to
+# parse what was typed and an `equipment_stats` dict to price it; the encounter panel
+# carried `BALL_BUTTONS` for its labels and a `FREE_BALL` constant of its own; and the
+# pick that runs when nobody names a ball carried the order as a pair of hard-coded
+# `if`s. Four copies of one fact, all four currently agreeing, and a fifth ball would
+# have had to be added to every one of them - including the two that are a hundred lines
+# and four thousand lines away from the command a player actually types.
+#
+# The catalogue in `EQUIPMENT_CATALOG` is not a fifth copy: it prices a ball for the
+# shop and says nothing about what happens when one is thrown.
+#
+# `stocked` is the column that matters. A Poke Ball is free and unlimited, so it is
+# never counted against the pack, never decremented on a throw, and never disabled on
+# the panel. Everything else is all three.
+CAPTURE_BALLS = {
+    'pokeball':   {'name': 'Poké Ball',   'multiplier': 1.5,   'stocked': False},
+    'greatball':  {'name': 'Great Ball',  'multiplier': 2.5,   'stocked': True},
+    'ultraball':  {'name': 'Ultra Ball',  'multiplier': 4.0,   'stocked': True},
+    'masterball': {'name': 'Master Ball', 'multiplier': 255.0, 'stocked': True},
+}
+
+# Most valuable first. This is the order a fallback walks DOWNWARDS when the ball
+# somebody asked for has run out - never upwards, because a trainer who set Great Balls
+# as their default and ran dry did not thereby ask to start spending Ultra Balls.
+BALL_LADDER = ('masterball', 'ultraball', 'greatball', 'pokeball')
+
+# What `!catch pikachu` throws when the trainer has expressed no preference: the best
+# thing in the pack, which is the behaviour those two hard-coded `if`s had.
+#
+# **THE MASTER BALL IS DELIBERATELY ABSENT.** Nothing may ever spend, on the trainer's
+# behalf, the one ball that cannot be bought - a single automatic Master Ball thrown at
+# a Rattata is a mistake there is no way to undo. It is reachable only by naming it.
+AUTO_BALL_ORDER = ('ultraball', 'greatball', 'pokeball')
+
+# The short forms people type in a hurry. The long ones need no entry: `flatten_ball`
+# below reduces 'Great Ball', 'great-ball' and 'GREATBALL' to the key itself.
+BALL_ALIASES = {
+    'poke': 'pokeball', 'pb': 'pokeball', 'basic': 'pokeball', 'normal': 'pokeball',
+    'great': 'greatball', 'gb': 'greatball',
+    'ultra': 'ultraball', 'ub': 'ultraball',
+    'master': 'masterball', 'mb': 'masterball',
+}
+
+
+def flatten_ball(text):
+    """Letters and digits only, with Latin accents folded off first.
+
+    The fold is not decoration: the item is spelt **Poké Ball** everywhere a player can
+    read it, and stripping punctuation without folding turns that into `pokball`, which
+    matches nothing. Somebody who copies the name off their own backpack should not be
+    the one person whose spelling is refused.
+    """
+    stripped = ''.join(ch for ch in _unicodedata.normalize('NFKD', str(text or ''))
+                       if not _unicodedata.combining(ch))
+    return _re.sub(r'[^a-z0-9]', '', stripped.lower())
+
+
+def resolve_ball_word(text):
+    """The ball key for whatever they typed, or None. `'Great Ball'` -> `'greatball'`."""
+    flat = flatten_ball(text)
+    if flat in CAPTURE_BALLS:
+        return flat
+    return BALL_ALIASES.get(flat)
+
+
+def ball_name(key):
+    """A ball as a player should see it, falling back to the key rather than to None."""
+    entry = CAPTURE_BALLS.get(str(key or '').strip().lower())
+    return entry['name'] if entry else str(key or '').replace('-', ' ').title()
+
+
+def ball_multiplier(key):
+    """The capture multiplier for one ball. Unknown balls are worth a bare Poke Ball."""
+    entry = CAPTURE_BALLS.get(str(key or '').strip().lower())
+    return entry['multiplier'] if entry else CAPTURE_BALLS['pokeball']['multiplier']
+
+
+def ball_is_stocked(key):
+    """Whether throwing this one costs the trainer an item from the pack."""
+    entry = CAPTURE_BALLS.get(str(key or '').strip().lower())
+    return bool(entry and entry['stocked'])
 
 
 def is_alpha_size(height_multiplier):
