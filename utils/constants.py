@@ -201,7 +201,7 @@ FIELD_MISSIONS = {
         "desc": "Assist geologists near active vents.",
         "preferred_type": "fire",
         "base_xp_hr": 200,
-        "item_pool": ["fire-stone", "nugget", "rare-candy"]
+        "item_pool": ["fire-stone", "nugget", "rare-candy", "fire-tera-shard"]
     },
     "reef": {
         "category": "exp",
@@ -209,7 +209,7 @@ FIELD_MISSIONS = {
         "desc": "Clear debris from fragile underwater ecosystems.",
         "preferred_type": "water",
         "base_xp_hr": 200,
-        "item_pool": ["water-stone", "nugget", "rare-candy"]
+        "item_pool": ["water-stone", "nugget", "rare-candy", "water-tera-shard"]
     },
     "canopy": {
         "category": "exp",
@@ -217,7 +217,7 @@ FIELD_MISSIONS = {
         "desc": "Help plant seeds in the upper rainforest levels.",
         "preferred_type": "grass",
         "base_xp_hr": 200,
-        "item_pool": ["leaf-stone", "nugget", "rare-candy"]
+        "item_pool": ["leaf-stone", "nugget", "rare-candy", "grass-tera-shard"]
     },
     "power": {
         "category": "exp",
@@ -225,7 +225,7 @@ FIELD_MISSIONS = {
         "desc": "Absorb excess energy from the local power plant.",
         "preferred_type": "electric",
         "base_xp_hr": 200,
-        "item_pool": ["thunder-stone", "nugget", "rare-candy"]
+        "item_pool": ["thunder-stone", "nugget", "rare-candy", "electric-tera-shard"]
     },
     "mountain": {
         "category": "exp",
@@ -233,7 +233,7 @@ FIELD_MISSIONS = {
         "desc": "Map out high-altitude nesting grounds.",
         "preferred_type": "flying",
         "base_xp_hr": 200,
-        "item_pool": ["sharp-beak", "nugget", "rare-candy"]
+        "item_pool": ["sharp-beak", "nugget", "rare-candy", "flying-tera-shard"]
     },
     "quarry": {
         "category": "exp",
@@ -241,7 +241,7 @@ FIELD_MISSIONS = {
         "desc": "Help excavate rare ores from the deep quarry.",
         "preferred_type": "rock",
         "base_xp_hr": 200,
-        "item_pool": ["hard-stone", "nugget", "rare-candy"]
+        "item_pool": ["hard-stone", "nugget", "rare-candy", "rock-tera-shard"]
     },
     "tundra": {
         "category": "exp",
@@ -249,7 +249,7 @@ FIELD_MISSIONS = {
         "desc": "Track the movement of ancient ice shelves.",
         "preferred_type": "ice",
         "base_xp_hr": 200,
-        "item_pool": ["never-melt-ice", "nugget", "rare-candy"]
+        "item_pool": ["never-melt-ice", "nugget", "rare-candy", "ice-tera-shard"]
     },
     "dojo": {
         "category": "exp",
@@ -257,7 +257,7 @@ FIELD_MISSIONS = {
         "desc": "Train with local martial arts experts.",
         "preferred_type": "fighting",
         "base_xp_hr": 200,
-        "item_pool": ["black-belt", "nugget", "rare-candy"]
+        "item_pool": ["black-belt", "nugget", "rare-candy", "fighting-tera-shard"]
     },
     "swamp": {
         "category": "exp",
@@ -265,7 +265,7 @@ FIELD_MISSIONS = {
         "desc": "Neutralize hazardous waste in the wetlands.",
         "preferred_type": "poison",
         "base_xp_hr": 200,
-        "item_pool": ["poison-barb", "nugget", "rare-candy"]
+        "item_pool": ["poison-barb", "nugget", "rare-candy", "poison-tera-shard"]
     },
     "agriculture": {
         "category": "exp",
@@ -273,7 +273,7 @@ FIELD_MISSIONS = {
         "desc": "Assist local farmers in plowing and harvesting fields safely.",
         "preferred_type": "normal",
         "base_xp_hr": 200,
-        "item_pool": ["silk-scarf", "nugget", "rare-candy"]
+        "item_pool": ["silk-scarf", "nugget", "rare-candy", "normal-tera-shard"]
     },
     "canyon": {
         "category": "exp",
@@ -281,7 +281,7 @@ FIELD_MISSIONS = {
         "desc": "Fortify riverbanks and stabilize shifting soils in arid regions.",
         "preferred_type": "ground",
         "base_xp_hr": 200,
-        "item_pool": ["soft-sand", "nugget", "rare-candy"]
+        "item_pool": ["soft-sand", "nugget", "rare-candy", "ground-tera-shard"]
     },
     "botanical": {
         "category": "exp",
@@ -289,7 +289,7 @@ FIELD_MISSIONS = {
         "desc": "Cross-pollinate rare flora and manage invasive pests in the gardens.",
         "preferred_type": "bug",
         "base_xp_hr": 200,
-        "item_pool": ["silver-powder", "nugget", "net-ball", "rare-candy"]
+        "item_pool": ["silver-powder", "nugget", "net-ball", "rare-candy", "bug-tera-shard"]
     },
     "ruins": {
         "category": "exp",
@@ -297,7 +297,7 @@ FIELD_MISSIONS = {
         "desc": "Clear overgrown vines and appease restless spirits in the old cemetery.",
         "preferred_type": "ghost",
         "base_xp_hr": 200,
-        "item_pool": ["spell-tag", "nugget", "rare-candy"]
+        "item_pool": ["spell-tag", "nugget", "rare-candy", "ghost-tera-shard"]
     },
     "industrial": {
         "category": "exp",
@@ -305,7 +305,7 @@ FIELD_MISSIONS = {
         "desc": "Compact and process metallic debris from abandoned industrial zones.",
         "preferred_type": "steel",
         "base_xp_hr": 200,
-        "item_pool": ["metal-coat", "nugget", "rare-candy"]
+        "item_pool": ["metal-coat", "nugget", "rare-candy", "steel-tera-shard"]
     },
     "leyline": {
         "category": "exp",
@@ -313,7 +313,7 @@ FIELD_MISSIONS = {
         "desc": "Meditate to locate and map invisible energy pathways across the region.",
         "preferred_type": "psychic",
         "base_xp_hr": 200,
-        "item_pool": ["twisted-spoon", "nugget", "rare-candy"]
+        "item_pool": ["twisted-spoon", "nugget", "rare-candy", "psychic-tera-shard"]
     },
     "shrine": {
         "category": "exp",
@@ -321,7 +321,7 @@ FIELD_MISSIONS = {
         "desc": "Protect and restore ancient shrines dedicated to legendary figures.",
         "preferred_type": "dragon",
         "base_xp_hr": 200,
-        "item_pool": ["dragon-fang", "nugget", "rare-candy"]
+        "item_pool": ["dragon-fang", "nugget", "rare-candy", "dragon-tera-shard"]
     },
     "patrol": {
         "category": "exp",
@@ -329,7 +329,7 @@ FIELD_MISSIONS = {
         "desc": "Patrol the city limits at night to deter poachers and rogue elements.",
         "preferred_type": "dark",
         "base_xp_hr": 200,
-        "item_pool": ["black-glasses", "nugget", "dusk-ball", "rare-candy"]
+        "item_pool": ["black-glasses", "nugget", "dusk-ball", "rare-candy", "dark-tera-shard"]
     },
     "glade": {
         "category": "exp",
@@ -337,7 +337,7 @@ FIELD_MISSIONS = {
         "desc": "Cleanse lingering negative energy and restore the mystical glade.",
         "preferred_type": "fairy",
         "base_xp_hr": 200,
-        "item_pool": ["moon-stone", "nugget", "rare-candy"]
+        "item_pool": ["moon-stone", "nugget", "rare-candy", "fairy-tera-shard"]
     },
     # ==========================================
     # EV TRAINING MISSIONS (0 XP, +4 EVs per hour)
@@ -545,6 +545,10 @@ EQUIPMENT_CATALOG = {
     # unpurchaseable for the same reason too: the anomaly roll IS the way to get one.
     "raw-keystone":  {"name": "Raw Keystone", "price": 0, "desc": "Exchange with `!refine` to make a Mega Bracelet.", "emoji": "🌠", "category": "keyitems", "purchasable": False},
     "sparkling-stone":  {"name": "Sparkling Stone", "price": 0, "desc": "Exchange with `!refine` to make a Z-Ring.", "emoji": "☀️", "category": "keyitems", "purchasable": False},
+    # The fourth gimmick's key item and its material, sitting beside the other three so
+    # Terastallisation costs an entry the way Mega, Dynamax and Z-Power all do.
+    "crystal-seed":  {"name": "Crystal Seed", "price": 0, "desc": "Exchange with `!refine` to make a Tera Orb.", "emoji": "💠", "category": "keyitems", "purchasable": False},
+    "tera-orb":  {"name": "Tera Orb", "price": 0, "desc": "Lets a specimen Terastallise once per battle.", "emoji": "💎", "category": "keyitems", "purchasable": False},
     "nugget":  {"name": "Nugget", "price": 0, "desc": "Exchange for Eco-Tokens", "emoji": "💵", "category": "keyitems", "purchasable": False, "sell_price": 5000},
     "memory-spore":  {"name": "Memory Spore", "price": 0, "desc": "Allows a pokemon to learn a tutor move.", "emoji": "🧬", "category": "keyitems", "purchasable": False},
     
@@ -3152,8 +3156,30 @@ def build_phase8_stock():
             "category": "formitems",
         }
 
-    assert not (set(shelf) & set(TERA_SHARD_TYPES)), (
-        "Tera Shards are inert and must stay out of the shop")
+    # **THE SHARDS ARE ON THE SHELF AND NOT FOR SALE.** They were asserted absent
+    # entirely while nothing read them; now that Terastallisation is real they need a
+    # catalogue row - so `!itemdex` can describe one, so the market can carry one, so a
+    # bag can show one - but buying them would undo the whole point. Fifty shards is meant
+    # to be earned from field missions, battles and directives; a shop price would make it
+    # a number of tokens instead, and the tokens are already easier to come by.
+    for shard, element in sorted(TERA_SHARD_TYPES.items()):
+        shelf[shard] = {
+            "name": shard.replace('-', ' ').title(),
+            "price": 0,
+            "desc": f"Fifty of these change a specimen's Tera type to "
+                    f"{element.title()}. Earned in the field, never sold.",
+            "emoji": type_icon(element),
+            # `keyitems`, the category this world already uses for earned
+            # materials that are never sold - the Raw Keystone and the Sparkling
+            # Stone sit there too. A category of its own would mean a shop menu
+            # section with nothing buyable in it.
+            "category": "keyitems",
+            "purchasable": False,
+        }
+
+    assert not any(shelf[shard].get('purchasable', True)
+                   for shard in TERA_SHARD_TYPES), (
+        "Tera Shards are earned, not bought")
     return shelf
 
 
