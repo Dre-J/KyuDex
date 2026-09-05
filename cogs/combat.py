@@ -2707,6 +2707,43 @@ class BattleCard(ui.LayoutView):
         return self
 
 
+async def dismiss_menu(interaction, notice=None):
+    """
+    Take a private menu off the screen once it has been answered.
+
+    **THE "LOCKED IN" NOTES WERE THE CLUTTER.** Five menus each edited themselves to a
+    one-line confirmation and then stayed there - so a ten-turn duel left ten of them
+    stacked up the channel, and clearing them was manual work between every turn.
+
+    Deleting is right rather than merely tidier, because the note was telling somebody
+    something they can already see: the card says whose answer the duel is waiting on,
+    and it is the newest message in the channel. A menu that has been used has nothing
+    left to say.
+
+    Falls back to the note it used to leave if the delete is refused - an interaction
+    older than fifteen minutes cannot be deleted, and a menu that will not go away is
+    better than one that raises on its way out.
+    """
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+    except Exception:
+        pass
+
+    try:
+        await interaction.delete_original_response()
+        return True
+    except Exception as delete_error:
+        print(f"↩️ Could not dismiss the menu: {delete_error!r}")
+
+    try:
+        if notice:
+            await interaction.edit_original_response(content=notice, view=None)
+    except Exception:
+        pass
+    return False
+
+
 async def post_battle_card(state, view, battle_file=None, *, interaction=None,
                            channel=None):
     """
@@ -3796,7 +3833,9 @@ class PvPForcedSwapMenu(discord.ui.View):
                     "🔒 You have already chosen your replacement.", ephemeral=True)
 
             self.state['commits'][self.player_id] = {'type': 'forced_swap', 'data': idx}
-            await interaction.response.edit_message(content=f"🔒 Locked in: Deploying **{poke['name'].capitalize()}**!", view=None)
+            await dismiss_menu(
+                interaction,
+                f"🔒 Locked in: Deploying **{poke['name'].capitalize()}**!")
             await self.cog.check_pvp_commits(self.state)
         return swap_callback
 
@@ -3848,7 +3887,9 @@ class MidTurnSwapMenu(discord.ui.View):
 
             # 1. Lock in the choice and update the Discord message so they know it worked
             self.selected_index = idx
-            await interaction.response.edit_message(content=f"🔒 Withdrawing... Deploying **{poke['name'].capitalize()}**!", view=None)
+            await dismiss_menu(
+                interaction,
+                f"🔒 Withdrawing... Deploying **{poke['name'].capitalize()}**!")
             
             # 2. TRIGGER THE EVENT! This instantly unpauses the handle_move/process_pvp_turn loop!
             self.swap_event.set()
@@ -3886,6 +3927,12 @@ class PvPDashboard(BattleCard):
         is safe precisely while the other side has not answered, because nothing has
         been resolved yet.
         """
+        # NO BUTTONS WHILE THE LEADS ARE BEING PICKED. There is no active specimen yet,
+        # so a Fight button would open a move menu for whatever happens to sit in slot
+        # one - a specimen that may not be the one about to walk out.
+        if self.state.get('phase') == 'lead_select':
+            return []
+
         waiting = [player_id for player_id in (self.state.get('p1_id'),
                                                self.state.get('p2_id'))
                    if self.state.get('commits', {}).get(player_id) is None]
@@ -4277,13 +4324,33 @@ class PvPMoveMenu(discord.ui.View):
                     )
                     btn.callback = self.create_move_callback(move)
                     self.add_item(btn)
-                        
+
+            # **A WAY BACK OUT.** Pressing Fight opened this and there was no way to
+            # leave it: a player who meant to swap had to either commit a move they did
+            # not want or wait for the turn to time out. Nothing has been committed at
+            # this point - the menu only reads state - so closing it costs nothing and
+            # puts them back at the card with Fight and Swap both still live.
+            back = discord.ui.Button(label="Back", emoji="↩️",
+                                     style=discord.ButtonStyle.secondary, row=2)
+            back.callback = self.close_without_committing
+            self.add_item(back)
+
             print("DEBUG: UI successfully built!")
 
         except Exception as e:
             print("\n🚨 CRASH IN BUILD_UI 🚨")
             import traceback
             traceback.print_exc()
+
+    async def close_without_committing(self, interaction: discord.Interaction):
+        """Shut the move menu, having chosen nothing.
+
+        Deliberately does NOT touch `commits`: this menu never wrote one, and clearing a
+        commit somebody made through a different route would be a cancel button
+        pretending to be a back button. Withdrawing an answer already given is what the
+        card's own Take it back is for.
+        """
+        await dismiss_menu(interaction, "↩️ Closed. Nothing was locked in.")
 
     def create_transform_callback(self, transform_type):
         async def transform_callback(interaction: discord.Interaction):
@@ -4371,8 +4438,7 @@ class PvPMoveMenu(discord.ui.View):
                     self.state['commits'][self.player_id] = {
                         'type': 'attack', 'data': struggle_move(), 'transform': None
                     }
-                    await interaction.response.edit_message(
-                        content="🔒 Locked in: **Struggle**!", view=None)
+                    await dismiss_menu(interaction, "🔒 Locked in: **Struggle**!")
                     return await self.cog.check_pvp_commits(self.state)
 
                 # ==========================================
@@ -4436,7 +4502,7 @@ class PvPMoveMenu(discord.ui.View):
                 
                 print(f"DEBUG: Locked payload to server memory -> {display_name}")
                 
-                await interaction.response.edit_message(content=f"🔒 Locked in: **{display_name}**!", view=None)
+                await dismiss_menu(interaction, f"🔒 Locked in: **{display_name}**!")
                 await self.cog.check_pvp_commits(self.state)
                 
             except Exception as e:
@@ -4448,6 +4514,66 @@ class PvPMoveMenu(discord.ui.View):
                     
         return move_callback
     
+class PvPLeadMenu(discord.ui.View):
+    """
+    Which specimen a duellist opens with, chosen before the first turn.
+
+    **A PARTY DUEL ALWAYS OPENED WITH SLOT ONE**, for both players, which made the lead
+    a property of how somebody happened to order their party rather than a decision
+    about the matchup - and the one decision in a duel that cannot be taken back later,
+    since switching out costs a turn.
+
+    Only offered for a PARTY match. A 1v1 has one specimen and nothing to choose, and
+    the format's own rule is that the lead is the trainer's selected partner - see the
+    1v1 notes; a picker there would be asking a question with one answer.
+
+    Commits into the same `state['commits']` gate the rest of the duel uses, so both
+    players choose simultaneously and neither can see the other's answer first. That is
+    the whole reason this is a phase rather than a prompt: a lead chosen in the open
+    would hand the second chooser the matchup.
+    """
+
+    def __init__(self, cog, state, player_id, *, timeout=BATTLE_IDLE_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.state = state
+        self.player_id = str(player_id)
+
+        is_p1 = (self.player_id == str(state['p1_id']))
+        team = state['p1_team' if is_p1 else 'p2_team']
+
+        for index, specimen in enumerate(team):
+            if specimen.get('current_hp', 0) <= 0:
+                continue
+            self.add_item(self._option(index, specimen))
+
+    def _option(self, index, specimen):
+        button = discord.ui.Button(
+            label=f"{str(specimen.get('name', '?')).capitalize()} "
+                  f"(Lv. {specimen.get('level', '?')})"[:80],
+            style=discord.ButtonStyle.success)
+
+        async def choose(interaction: discord.Interaction):
+            if str(interaction.user.id) != self.player_id:
+                return await interaction.response.send_message(
+                    "⚠️ This is not your roster.", ephemeral=True)
+            # ONE ANSWER, for the same reason every other menu in this duel takes one:
+            # a second commit overwrites the first and calls `check_pvp_commits` again,
+            # which would start the duel twice.
+            if self.state['commits'].get(self.player_id) is not None:
+                return await interaction.response.send_message(
+                    "🔒 You have already chosen your lead.", ephemeral=True)
+
+            self.state['commits'][self.player_id] = {'type': 'lead', 'data': index}
+            await dismiss_menu(
+                interaction,
+                f"🔒 Leading with **{str(specimen.get('name', '?')).capitalize()}**!")
+            await self.cog.check_pvp_commits(self.state)
+
+        button.callback = choose
+        return button
+
+
 class PvPSwapMenu(discord.ui.View):
     def __init__(self, cog, state, player_id):
         super().__init__(timeout=60)
@@ -4473,6 +4599,18 @@ class PvPSwapMenu(discord.ui.View):
             btn.callback = self.create_callback(i, poke)
             self.add_item(btn)
 
+        # The same way out the move menu has. A VOLUNTARY swap menu is a decision not
+        # yet made, so backing out of it commits nothing - unlike the FORCED one after a
+        # knockout, which deliberately has no exit because the duel is waiting on it.
+        back = discord.ui.Button(label="Back", emoji="↩️",
+                                 style=discord.ButtonStyle.secondary, row=4)
+        back.callback = self.close_without_committing
+        self.add_item(back)
+
+    async def close_without_committing(self, interaction: discord.Interaction):
+        """Shut the swap menu, having chosen nothing."""
+        await dismiss_menu(interaction, "↩️ Closed. Nothing was locked in.")
+
     def create_callback(self, idx, poke):
         async def swap_callback(interaction: discord.Interaction):
             # Reject standard swaps during the Faint Phase!
@@ -4489,7 +4627,9 @@ class PvPSwapMenu(discord.ui.View):
             self.state['commits'][self.player_id] = {'type': 'swap', 'data': idx}
             
             # 2. Destroy the private terminal
-            await interaction.response.edit_message(content=f"🔒 Locked in: Deploying **{poke['name'].capitalize()}**!", view=None)
+            await dismiss_menu(
+                interaction,
+                f"🔒 Locked in: Deploying **{poke['name'].capitalize()}**!")
             
             # 3. Ping the server
             await self.cog.check_pvp_commits(self.state)
@@ -9173,7 +9313,58 @@ class Combat(commands.Cog):
             self.active_battles[p1_id] = shared_state
             self.active_battles[p2_id] = shared_state
 
-            # 4. Trigger Initial Entry Abilities
+            # 4. WHO OPENS? A party duel asks; a 1v1 has nothing to ask about.
+            #
+            # Both sides are prompted at once and neither sees the other's answer, which
+            # is the point of routing it through `commits` rather than asking in turn -
+            # a lead chosen in the open would hand the second chooser the matchup, and
+            # the lead is the one decision in a duel that cannot be undone later without
+            # spending a turn to switch out.
+            if any(len(shared_state[f'{tag}_team']) > 1 for tag in ('p1', 'p2')):
+                shared_state['phase'] = 'lead_select'
+                shared_state['commits'] = {p1_id: None, p2_id: None}
+
+                # THE CARD IS UP FROM THE FIRST MOMENT, rather than a plain announcement
+                # that something else replaces later. Two reasons, and the second is the
+                # one that decided it: the duel reads as a duel while the leads are being
+                # picked, and `message_obj` stays written in exactly ONE place. A second
+                # `state['message_obj'] = ...` here would have been the only other writer
+                # in the file.
+                #
+                # `PvPDashboard` draws no buttons during this phase - see `action_rows` -
+                # so the card cannot be acted on before there is anything to act with.
+                waiting_card = PvPDashboard(self, shared_state)
+                waiting_card.TITLE = "⚔️ PvP Field Duel"
+                waiting_card.ACCENT = discord.Color.greyple()
+                await waiting_card.show(
+                    combat_log=(f"**{p1.display_name}** vs. "
+                                f"**{p2.display_name}**\n\n"
+                                f"Both researchers are choosing which specimen to "
+                                f"open with."),
+                    channel=channel,
+                    footer="Neither choice is shown to the other until both are in.")
+
+                for tag, member, player_id in (('p1', p1, p1_id), ('p2', p2, p2_id)):
+                    if len(shared_state[f'{tag}_team']) < 2:
+                        # Nothing to choose. Answered for them so the gate can close.
+                        shared_state['commits'][player_id] = {'type': 'lead', 'data': 0}
+                        continue
+                    delivered = await deliver_privately(
+                        shared_state, tag,
+                        "⚔️ Which specimen will you open with?",
+                        view=PvPLeadMenu(self, shared_state, player_id),
+                        prompt="Choose your lead:")
+                    if not delivered:
+                        # Unreachable by DM and unreachable in the channel. Slot one,
+                        # which is what every duel did before this existed - a duel that
+                        # cannot start is worse than one that starts with the default.
+                        shared_state['commits'][player_id] = {'type': 'lead', 'data': 0}
+
+                await self.check_pvp_commits(shared_state)
+                print("=== DEBUG: PvP awaiting lead selection ===")
+                return
+
+            # 4b. A 1v1: the lead is the only specimen there is.
             print("DEBUG: Firing Initial Entry Abilities...")
             p1_lead = shared_state['p1_team'][0]
             p2_lead = shared_state['p2_team'][0]
@@ -9213,6 +9404,69 @@ class Combat(commands.Cog):
             await channel.send("⚠️ A critical biological error occurred while initializing the PvP arena. The duel has been aborted and both researchers have been released.")
 
 
+    async def process_lead_choices(self, state):
+        """Both leads are in: set them, fire entry abilities, and start the duel."""
+        print("\n=== DEBUG: Entering process_lead_choices ===")
+        try:
+            p1_id, p2_id = state['p1_id'], state['p2_id']
+
+            for tag, player_id in (('p1', p1_id), ('p2', p2_id)):
+                commit = state['commits'].get(player_id) or {}
+                # A commit of any other shape means the player never chose - the timeout
+                # filled it in. Slot one is the answer then, which is exactly what a
+                # duel did for everybody before this existed.
+                index = commit.get('data', 0) if commit.get('type') == 'lead' else 0
+                team = state[f'{tag}_team']
+                if not (0 <= index < len(team)) or team[index].get('current_hp', 0) <= 0:
+                    index = next((i for i, m in enumerate(team)
+                                  if m.get('current_hp', 0) > 0), 0)
+                state[f'{tag}_active_index'] = index
+
+            # The duel proper starts here, so the gate is cleared before anything can
+            # commit into it again.
+            state['phase'] = 'turn'
+            state['commits'] = {p1_id: None, p2_id: None}
+
+            p1_lead = side_active(state, 'p1')
+            p2_lead = side_active(state, 'p2')
+
+            combat_log = (f"**{state['p1'].display_name}** vs. "
+                          f"**{state['p2'].display_name}**\n\n")
+            combat_log += (f"{state['p1'].display_name} sent out "
+                           f"**{p1_lead['name'].capitalize()}**!\n")
+            combat_log += (f"{state['p2'].display_name} sent out "
+                           f"**{p2_lead['name'].capitalize()}**!\n\n")
+
+            combat_log = await trigger_single_entry_ability(
+                p1_lead, p2_lead, f"{state['p1'].display_name}'s", state, combat_log)
+            combat_log = await trigger_single_entry_ability(
+                p2_lead, p1_lead, f"{state['p2'].display_name}'s", state, combat_log)
+
+            battle_file = await render_scene(state)
+            dashboard_view = PvPDashboard(self, state)
+            dashboard_view.TITLE = "⚔️ PvP Field Duel Commencing!"
+            dashboard_view.ACCENT = discord.Color.red()
+            await dashboard_view.show(
+                combat_log=combat_log, battle_file=battle_file,
+                footer="Awaiting inputs from both researchers…")
+            print("=== DEBUG: process_lead_choices COMPLETE ===")
+
+        except Exception:
+            print("\n🚨 CRITICAL CRASH IN LEAD SELECTION 🚨")
+            traceback.print_exc()
+            # Release BOTH, for the reason every teardown in this engine does: the state
+            # is shared, and half a teardown strands somebody in `active_battles`.
+            self.active_battles.pop(state.get('p1_id'), None)
+            self.active_battles.pop(state.get('p2_id'), None)
+            try:
+                channel = getattr(state.get('message_obj'), 'channel', None)
+                if channel:
+                    await channel.send(
+                        "⚠️ A critical engine failure occurred while choosing leads. "
+                        "Both researchers have been released.")
+            except Exception:
+                pass
+
     async def check_pvp_commits(self, state):
         """Verifies if both players have submitted their payloads to the shared memory block."""
         p1_ready = state['commits'][state['p1_id']] is not None
@@ -9230,7 +9484,9 @@ class Combat(commands.Cog):
                 print(f"UI Edit Error: {e}")
 
             # Route traffic based on the phase!
-            if state.get('phase') == 'faint_swap':
+            if state.get('phase') == 'lead_select':
+                await self.process_lead_choices(state)
+            elif state.get('phase') == 'faint_swap':
                 await self.process_faint_swaps(state)
             else:
                 await self.process_pvp_turn(state)
