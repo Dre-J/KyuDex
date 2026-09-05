@@ -42,6 +42,7 @@ from utils import abilities as A
 from utils import dex as D
 from utils import items as I
 from utils import moves as MV
+from utils import showdown as SD
 
 DEX_COLOUR = discord.Colour(0x41F097)
 SHINY_GOLD = discord.Colour(0xF1C40F)
@@ -448,6 +449,119 @@ class AbilityCard(TabbedCard):
         return "\n\n".join(blocks)
 
 
+class SpreadCard(TabbedCard):
+    """
+    What Showdown's players run with this species - minus what this world cannot field.
+
+    **THE PERCENTAGES ARE SMOGON'S AND THE LEGALITY IS OURS**, so the card says how much
+    it had to drop. Once anything is removed the figures no longer sum to what Smogon
+    published, and a card that hid the removal would be presenting an approximation as
+    though it were the real number. See `utils/showdown.py`.
+    """
+
+    TABS = {
+        'spreads': ("Spreads", "📊"),
+        'moves':   ("Moves", "💥"),
+        'kit':     ("Item & ability", "🎒"),
+        'team':    ("Teammates", "🤝"),
+    }
+    ACCENT = DEX_COLOUR
+    NOT_YOURS = "📊 That is somebody else's read-out. Run `!spread` for your own."
+
+    # How many of each to list. A move list runs to fifteen and the tail is noise.
+    LIMIT = 8
+
+    def __init__(self, owner_id, payload, **kwargs):
+        super().__init__(owner_id, **kwargs)
+        self.payload = payload
+
+    def kinds(self, kind):
+        return self.payload['kinds'].get(kind) or []
+
+    def dropped(self, kind):
+        return self.payload['dropped'].get(kind) or []
+
+    def top(self, kind):
+        entries = self.kinds(kind)
+        return entries[0] if entries else None
+
+    def header(self):
+        payload = self.payload
+        title = pretty_species(payload['species'])
+
+        # THE SET MOST PEOPLE RUN, on the face of the card. Everything else is a tab.
+        best_spread = self.top('spread')
+        best_item = self.top('item')
+        best_ability = self.top('ability')
+        moves = [entry['value'] for entry in self.kinds('move')[:4]]
+
+        lines = [f"### 📊 {title}", ""]
+        if best_spread:
+            lines.append(f"**{SD.describe_spread(best_spread['value'])}**"
+                         f"  ·  {best_spread['usage']:.1f}%")
+        if best_ability:
+            lines.append(f"🧬 {best_ability['value']}  ·  {best_ability['usage']:.1f}%")
+        if best_item:
+            lines.append(f"🎒 {best_item['value']}  ·  {best_item['usage']:.1f}%")
+        if moves:
+            lines.append(f"💥 {' · '.join(moves)}")
+
+        lines.append(
+            f"-# {payload['format']} · {payload['month']} · "
+            f"{payload['raw_count']:,} sets seen"
+            + (f" · viability {payload['viability']}" if payload['viability'] else ""))
+
+        note = self.drop_note()
+        if note:
+            lines.append(f"-# {note}")
+        return [text("\n".join(lines))]
+
+    def drop_note(self):
+        """What was removed, said out loud, or "" when nothing was."""
+        counts = [(kind, len(self.dropped(kind))) for kind in SD.SHOWN_KINDS]
+        removed = [(kind, count) for kind, count in counts if count]
+        if not removed:
+            return ""
+        parts = ", ".join(f"{count} {kind}{'s' if count != 1 else ''}"
+                          for kind, count in removed)
+        return (f"⚠️ {parts} dropped — not available here, so these percentages are "
+                f"Smogon's rather than a total.")
+
+    def listing(self, kind, heading, describe=None):
+        """One panel: the entries this world can field, and what was dropped."""
+        entries = self.kinds(kind)
+        if not entries:
+            body = "*Nothing here that this world can field.*"
+        else:
+            body = "\n".join(
+                f"`{entry['usage']:>5.1f}%`  "
+                f"{describe(entry['value']) if describe else entry['value']}"
+                for entry in entries[:self.LIMIT])
+
+        gone = self.dropped(kind)
+        if gone:
+            # NAMED, not merely counted. "Three moves dropped" invites the reader to
+            # wonder which; naming them answers it and occasionally reveals that the
+            # movepool here is simply missing something.
+            body += ("\n\n-# Dropped as unavailable here: "
+                     + ", ".join(f"`{value}`" for value in gone[:6])
+                     + (f" and {len(gone) - 6} more" if len(gone) > 6 else ""))
+        return [text(f"{heading}\n{body}")]
+
+    def panel(self, tab):
+        if tab == 'spreads':
+            return self.listing('spread', "### 📊 EV spreads", SD.describe_spread)
+        if tab == 'moves':
+            return self.listing('move', "### 💥 Moves")
+        if tab == 'kit':
+            items = self.listing('item', "### 🎒 Items")
+            abilities = self.listing('ability', "### 🧬 Abilities")
+            return [items[0], divider(), abilities[0]]
+        if tab == 'team':
+            return self.listing('teammate', "### 🤝 Teammates")
+        return []
+
+
 class MoveCard(TabbedCard):
     """
     One move: its numbers, what it does, and the fine print.
@@ -801,6 +915,27 @@ class Dex(commands.Cog):
 
     # NOT `gear`: `!backpack` in cogs/economy.py already answers to it, and discord.py
     # refuses the whole extension rather than the one clash - the cog stops loading.
+    # NOT `usage`: cogs/usage.py already answers to it, and discord.py refuses the WHOLE
+    # extension on an alias clash rather than the one command - so that cog would simply
+    # stop loading. The same trap `gear` set for `!itemdex`.
+    @commands.command(name="spread", aliases=["spreads", "sd", "smogon"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def spread(self, ctx, *, request: str = None):
+        """
+        What Showdown's players run. `!spread great-tusk`, or `!spread kingambit gen9uu`.
+
+        Filtered to what this world can actually field - and the card says how much it
+        dropped, because once anything is removed the percentages are no longer the ones
+        Smogon published.
+        """
+        species, fmt = SD.split_request(request)
+        payload, complaint = await SD.lookup(species, fmt)
+        if complaint:
+            return await ctx.send(complaint)
+
+        await ctx.send(view=SpreadCard(ctx.author.id, payload, tab='spreads').rebuild())
+
     @commands.command(name="movedex", aliases=["move", "attackinfo", "technique"])
     @checks.has_started()
     @checks.is_authorized()
