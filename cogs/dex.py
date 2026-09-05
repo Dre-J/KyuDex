@@ -25,6 +25,7 @@ has not had migrate_dex_data.py applied, the flavour text, egg groups, hatch cou
 genus simply do not appear and everything else still works.
 """
 import discord
+from discord import ui
 from discord.ext import commands
 
 import aiosqlite
@@ -37,7 +38,9 @@ from utils.species import MAX_CHOICES, pretty_species, resolve_species, suggest_
 from utils.sprites import HOME, resolve_sprite, sprite_attachment_name
 from utils.translations import LANGUAGES, names_for_species
 from utils import checks
+from utils import abilities as A
 from utils import dex as D
+from utils import items as I
 
 DEX_COLOUR = discord.Colour(0x41F097)
 SHINY_GOLD = discord.Colour(0xF1C40F)
@@ -365,6 +368,143 @@ class DexCard(TabbedCard):
         await self.redraw(interaction)
 
 
+class AbilityCard(TabbedCard):
+    """
+    One trait: what it does, and every specimen that can have it.
+
+    **NO CACHED DATA**, the same rule `DexCard` follows: every press re-reads, so a card
+    left open while `migrate_ability_dex.py` runs starts showing the descriptions rather
+    than a snapshot from before them.
+
+    The roster half comes from `base_pokemon_species`, which has always had it. The
+    description comes from `base_abilities`, which the migration writes - and if that
+    table is not there, the card says so and still lists the bearers.
+    """
+
+    TABS = {
+        'effect':  ("Full rules", "📜"),
+        'bearers': ("Who has it", "🧬"),
+    }
+    ACCENT = DEX_COLOUR
+
+    def __init__(self, owner_id, name, **kwargs):
+        super().__init__(owner_id, **kwargs)
+        self.name = name
+        self.described = None
+        self.standard = []
+        self.hidden = []
+
+    async def load(self):
+        async with aiosqlite.connect(f"file:{DB_FILE}?mode=ro", uri=True) as db:
+            self.described = await A.describe(db, self.name)
+            self.standard, self.hidden = await A.bearers(db, self.name)
+        return self
+
+    def display(self):
+        return (self.described or {}).get('display') or A.pretty_ability(self.name)
+
+    def header(self):
+        title = f"### 🧬 {self.display()}"
+        generation = (self.described or {}).get('generation')
+        if generation:
+            title += f"  ·  *Gen {generation}*"
+
+        lines = [title]
+        short = (self.described or {}).get('short_effect')
+        if short:
+            lines.append(short)
+        else:
+            # NOT AN ERROR, and not a reason to refuse the lookup. The species table
+            # knows this trait exists; only the description is missing.
+            lines.append("*No description on file — run `migrate_ability_dex.py`.*")
+
+        lines.append(f"-# {len(self.standard)} species carry it, "
+                     f"{len(self.hidden)} as a hidden trait.")
+        return [text("\n".join(lines))]
+
+    def panel(self, tab):
+        if tab == 'effect':
+            full = (self.described or {}).get('effect')
+            if not full:
+                return [text("### 📜 Full rules\n*Nothing on file for this trait.*")]
+            return [text(f"### 📜 Full rules\n{full}")]
+
+        if tab == 'bearers':
+            return [text(self.bearer_list())]
+        return []
+
+    def bearer_list(self):
+        """Both rosters, or a line saying there is nothing to show."""
+        blocks = ["### 🧬 Who has it"]
+        for label, names in (("Standard", self.standard), ("Hidden", self.hidden)):
+            if not names:
+                continue
+            blocks.append(f"**{label}** ({len(names)})\n"
+                          + ", ".join(pretty_species(n) for n in names))
+        if len(blocks) == 1:
+            # Reachable: an ability described by PokeAPI that nothing in this world has.
+            blocks.append("*Nothing in this world carries it.*")
+        return "\n\n".join(blocks)
+
+
+class ItemCard(TabbedCard):
+    """
+    One item: what it does, what it costs, and what else sits on its shelf.
+
+    **NO MIGRATION BEHIND THIS ONE.** Every one of the 460 catalogue entries already
+    carries a description, and 311 already have a sprite on disk - so the PokeAPI table
+    the trait dex needed would have bought nothing here but a second, competing
+    description of the games rather than of this world. See `utils/items.py`.
+    """
+
+    TABS = {
+        'shop':  ("Availability", "🪙"),
+        'shelf': ("Same kind", "🗂️"),
+    }
+    ACCENT = DEX_COLOUR
+    NOT_YOURS = "🎒 That is somebody else's catalogue. Run `!itemdex` for your own."
+
+    def __init__(self, owner_id, key, **kwargs):
+        super().__init__(owner_id, **kwargs)
+        self.key = key
+        self.entry = I.entry(key)
+        self.picture = I.sprite_path(key)
+
+    def attachment(self):
+        """The item's picture, or None - 149 of them are this world's own inventions."""
+        if not self.picture:
+            return None
+        return discord.File(self.picture, filename=self.sprite_name())
+
+    def sprite_name(self):
+        return f"item_{self.key.replace('-', '_')}.png"
+
+    def header(self):
+        label, emoji = I.category_of(self.key)
+        items = []
+        if self.picture:
+            items.append(ui.MediaGallery(discord.MediaGalleryItem(
+                f"attachment://{self.sprite_name()}",
+                description=f"{I.pretty_item(self.key)}.")))
+        items.append(text(
+            f"### {self.entry.get('emoji') or emoji} {I.pretty_item(self.key)}\n"
+            f"{self.entry.get('desc') or '*Nothing on file.*'}\n"
+            f"-# {emoji} {label} · `{self.key}`"))
+        return items
+
+    def panel(self, tab):
+        if tab == 'shop':
+            return [text("### 🪙 Availability\n" + "\n".join(I.availability(self.key)))]
+        if tab == 'shelf':
+            neighbours = I.shelf(self.key)
+            if not neighbours:
+                return [text("### 🗂️ Same kind\n*Nothing else on this shelf.*")]
+            label, _emoji = I.category_of(self.key)
+            return [text(f"### 🗂️ Same kind\n**{label}** ({len(neighbours)} shown)\n"
+                         + ", ".join(f"`{k}`" for k in neighbours))]
+        return []
+
+
 class Dex(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -499,6 +639,44 @@ class Dex(commands.Cog):
         if card.data is None:
             return await ctx.send("🔬 That specimen has no record in the archive.")
 
+        await ctx.send(view=card.rebuild(),
+                       file=attachment if attachment else discord.utils.MISSING)
+
+    @commands.command(name="abilitydex", aliases=["ability", "abilities", "trait"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def abilitydex(self, ctx, *, ability: str = None):
+        """
+        Look a trait up. `!abilitydex levitate`.
+
+        The buttons open its full rules and the list of every specimen that can have it -
+        which the database has always known and nothing could ask until now.
+        """
+        name, complaint = await A.lookup(ability)
+        if complaint:
+            return await ctx.send(complaint)
+
+        card = await AbilityCard(ctx.author.id, name).load()
+        await ctx.send(view=card.rebuild())
+
+    # NOT `gear`: `!backpack` in cogs/economy.py already answers to it, and discord.py
+    # refuses the whole extension rather than the one clash - the cog stops loading.
+    @commands.command(name="itemdex", aliases=["iteminfo"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def itemdex(self, ctx, *, item: str = None):
+        """
+        Look an item up. `!itemdex leftovers`.
+
+        The buttons say how it is come by - bought, or earned from a directive - and what
+        else sits on the same shelf, which is the only sane way to browse four hundred.
+        """
+        key, complaint = I.resolve(item)
+        if complaint:
+            return await ctx.send(complaint)
+
+        card = ItemCard(ctx.author.id, key)
+        attachment = card.attachment()
         await ctx.send(view=card.rebuild(),
                        file=attachment if attachment else discord.utils.MISSING)
 
