@@ -331,6 +331,9 @@ class Combatant:
     # One flag per specimen on this side, True while it is still standing. Empty for a
     # wild encounter, which has no team behind it and so gets no ball row at all.
     roster: Tuple[bool, ...] = ()
+    # The element it Terastallised into. Only meaningful while `aura` is "tera"; the
+    # panel draws the crystal in place of the TERA word when both are set.
+    tera_type: Optional[str] = None
 
 
 # ---------------------------------------------------------------- the name on the panel
@@ -400,6 +403,41 @@ def _fit_label(draw, label, max_width):
 
 
 # ---------------------------------------------------------------- the roster balls
+
+# ---------------------------------------------------------------- the Tera crystal
+
+TERA_ICON_DIR = os.path.join("KyuSprites", "sprites", "types", "tera")
+TERA_ICON_SIZE = 17          # output-space pixels, to sit in the pill row
+
+# **THE ICONS ARE NUMBERED, NOT NAMED** - `1.png` … `18.png` - in the type order the games
+# and PokeAPI use. Verified rather than assumed: every icon's average colour matches its
+# element, so 10 is the red one, 11 the blue, 13 the yellow and 18 the pink.
+TERA_ICON_IDS = {
+    'normal': 1, 'fighting': 2, 'flying': 3, 'poison': 4, 'ground': 5, 'rock': 6,
+    'bug': 7, 'ghost': 8, 'steel': 9, 'fire': 10, 'water': 11, 'grass': 12,
+    'electric': 13, 'psychic': 14, 'ice': 15, 'dragon': 16, 'dark': 17, 'fairy': 18,
+}
+
+
+@lru_cache(maxsize=32)
+def load_tera_icon(element, size=TERA_ICON_SIZE):
+    """
+    The Tera crystal for one element at the size it is drawn, or None.
+
+    Cached on both keys: eighteen icons at one size is the whole set, and this is read on
+    every frame of a battle where somebody has Terastallised.
+    """
+    icon_id = TERA_ICON_IDS.get(str(element or '').strip().lower())
+    if not icon_id:
+        return None
+    path = os.path.join(TERA_ICON_DIR, f"{icon_id}.png")
+    try:
+        icon = Image.open(path).convert("RGBA")
+    except Exception as e:
+        print(f"battle_render: failed to load {path}: {e}")
+        return None
+    return icon.resize((size * SS, size * SS), Image.LANCZOS)
+
 
 BALL_SPRITE = os.path.join("KyuSprites", "sprites", "items", "dream-world",
                            "poke-ball.png")
@@ -682,7 +720,16 @@ def draw_hp_panel(img, mon, box, show_numbers):
     if mon.status:
         cur = pill(cur, mon.status, STATUS_COLORS.get(mon.status, (140, 148, 168)))
     if mon.aura in AURA_STYLE:
-        cur = pill(cur, AURA_STYLE[mon.aura]["tag"], AURA_STYLE[mon.aura]["color"])
+        # **THE CRYSTAL REPLACES THE WORD.** A Terastallised specimen shows the element's
+        # own icon rather than a pill reading TERA, because which type it became is the
+        # entire decision - "TERA" alone says a thing happened and not what.
+        crystal = (load_tera_icon(mon.tera_type)
+                   if mon.aura == "tera" and mon.tera_type else None)
+        if crystal is not None:
+            layer.alpha_composite(crystal, (int(cur), int(row_y - 1 * SS)))
+            cur += (TERA_ICON_SIZE + 6) * SS
+        else:
+            cur = pill(cur, AURA_STYLE[mon.aura]["tag"], AURA_STYLE[mon.aura]["color"])
 
     # Numeric HP on the player side only, mirroring the mainline games.
     if show_numbers:

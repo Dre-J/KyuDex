@@ -11,8 +11,8 @@ import uuid
 from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIONS,
                              EV_LOWERING_BERRIES, MAX_HAPPINESS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
-                             STARTER_CAN_BE_SHINY, type_badges,
-                             super_effective_against,
+                             STARTER_CAN_BE_SHINY, type_badges, type_icon,
+                             super_effective_against, TERA_SHARD_TYPES,
                              scaled_rarity, roll_shiny, ecosystem_multiplier,
                              SHINY_SCORE_CEILING, RARITY_SCORE_CEILING,
                              shiny_chance, ECOSYSTEM_BASELINE,
@@ -48,6 +48,7 @@ from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
 from utils import directives as D
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs, pretty_item
 import re
+from utils.tera import SHARDS_PER_CHANGE, shard_for, tera_type_of
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
@@ -3088,6 +3089,122 @@ class Ecology(commands.Cog):
         
         await ctx.send(f"🏷️ Specimen `{actual_id[:8]}` has been successfully re-designated as **{name}**.")
 
+    @commands.command(name="tera", aliases=["terastal", "teratype"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def tera_type_command(self, ctx, box_number: str = None, element: str = None):
+        """
+        A specimen's Tera type, and what it costs to change one.
+
+        `!tera` — the shards you are holding.
+        `!tera 4` — what Box 4 would Terastallise into.
+        `!tera 4 water` — spend fifty Water Shards to make it Water.
+
+        A specimen with no chosen type crystallises into its PRIMARY type for free, which
+        is the games' rule: shards buy a DIFFERENT type rather than buying the mechanic.
+        """
+        user_id = str(ctx.author.id)
+
+        # --- `!tera` on its own: what is in the bag -------------------------------
+        if box_number is None:
+            async with aiosqlite.connect(f"file:{DB_FILE}?mode=ro", uri=True) as db:
+                async with db.execute(
+                        "SELECT item_name, quantity FROM user_inventory "
+                        "WHERE user_id = ? AND item_name LIKE '%-tera-shard' "
+                        "AND quantity > 0 ORDER BY quantity DESC", (user_id,)) as cursor:
+                    held = await cursor.fetchall()
+            if not held:
+                return await ctx.send(
+                    "💎 No Tera Shards yet. They come from field missions — `!deploy` a "
+                    "specimen to a habitat and it brings back that habitat's element.")
+            lines = "\n".join(
+                f"{type_icon(TERA_SHARD_TYPES[item])} **{TERA_SHARD_TYPES[item].title()}** "
+                f"— {qty}/{SHARDS_PER_CHANGE}"
+                + ("  ✅" if qty >= SHARDS_PER_CHANGE else "")
+                for item, qty in held if item in TERA_SHARD_TYPES)
+            return await ctx.send(f"### 💎 Tera Shards\n{lines}\n"
+                                  f"-# {SHARDS_PER_CHANGE} of one element changes a "
+                                  f"specimen's Tera type. `!tera 4 water`")
+
+        if not str(box_number).isdigit():
+            return await ctx.send("⚠️ Use the specimen's Box Number — `!tera 4 water`.")
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute("""
+                WITH Roster AS (
+                    SELECT cp.instance_id, cp.pokedex_id, cp.tera_type, cp.nickname,
+                           ROW_NUMBER() OVER(ORDER BY cp.rowid ASC) as box_number
+                    FROM caught_pokemon cp
+                    WHERE cp.user_id = ?
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM active_deployments)
+                    AND cp.instance_id NOT IN (SELECT instance_id FROM gts_deposits)
+                ) SELECT instance_id, pokedex_id, tera_type, nickname FROM Roster
+                  WHERE box_number = ?
+            """, (user_id, int(box_number))) as cursor:
+                target = await cursor.fetchone()
+
+            if not target:
+                return await ctx.send(f"❌ No specimen in Box `#{box_number}`.")
+            instance_id, pokedex_id, stored, nickname = target
+
+            async with db.execute(
+                    "SELECT s.name, (SELECT GROUP_CONCAT(type_name) FROM "
+                    "base_pokemon_types WHERE pokedex_id = s.pokedex_id) "
+                    "FROM base_pokemon_species s WHERE s.pokedex_id = ?",
+                    (pokedex_id,)) as cursor:
+                row = await cursor.fetchone()
+            species = (row[0] if row else 'specimen')
+            types = [t for t in str(row[1] or '').split(',') if t]
+            label = nickname or species.replace('-', ' ').title()
+
+            current = tera_type_of({'tera_type': stored, 'types': types})
+
+            # --- `!tera 4`: what it would become --------------------------------
+            if element is None:
+                chosen = "chosen" if stored else "its primary type, unchanged"
+                return await ctx.send(
+                    f"💎 **{label}** would Terastallise into "
+                    f"{type_icon(current)} **{str(current).title()}** — {chosen}.\n"
+                    f"-# `!tera {box_number} <element>` to change it, for "
+                    f"{SHARDS_PER_CHANGE} shards.")
+
+            # --- `!tera 4 water`: spend the shards -------------------------------
+            wanted = element.strip().lower()
+            shard = shard_for(wanted)
+            if not shard:
+                return await ctx.send(f"⚠️ `{element}` is not an element.")
+            if wanted == current:
+                return await ctx.send(
+                    f"💎 **{label}** already crystallises into "
+                    f"{type_icon(wanted)} **{wanted.title()}**. No shards spent.")
+
+            async with db.execute(
+                    "SELECT quantity FROM user_inventory "
+                    "WHERE user_id = ? AND item_name = ?", (user_id, shard)) as cursor:
+                bag = await cursor.fetchone()
+            held = int(bag[0]) if bag else 0
+
+            if held < SHARDS_PER_CHANGE:
+                return await ctx.send(
+                    f"💎 {SHARDS_PER_CHANGE} {type_icon(wanted)} **{wanted.title()} "
+                    f"Tera Shards** are needed and you hold **{held}**.\n"
+                    f"-# `!deploy` a specimen to a habitat of that element to find more.")
+
+            # SPENT, THEN WRITTEN. The other order can leave a specimen re-typed for free
+            # if the update fails, which is the half worth not failing on.
+            await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - ? "
+                "WHERE user_id = ? AND item_name = ?",
+                (SHARDS_PER_CHANGE, user_id, shard))
+            await db.execute("UPDATE caught_pokemon SET tera_type = ? "
+                             "WHERE instance_id = ?", (wanted, instance_id))
+            await db.commit()
+
+        await ctx.send(
+            f"💎 **{label}** will now Terastallise into {type_icon(wanted)} "
+            f"**{wanted.title()}**.\n"
+            f"-# {SHARDS_PER_CHANGE} shards spent · {held - SHARDS_PER_CHANGE} left.")
+
     @commands.command(name="release", aliases=["reintroduce", "free"])
     @checks.has_started()
     @checks.is_not_in_trade()
@@ -6072,6 +6189,16 @@ class Ecology(commands.Cog):
                 'material': 'sparkling-stone',
                 'material_qty': 2,
                 'display': '🌟 Z-Ring'
+            },
+            # --- THE FOURTH GIMMICK ---
+            # Priced between the Mega Bracelet and the Dynamax Band. Terastallisation is
+            # available to every specimen rather than only to those holding a stone or
+            # carrying the G-Max factor, so the entry cost is the only thing rationing it.
+            'tera-orb': {
+                'cost': 2000,
+                'material': 'crystal-seed',
+                'material_qty': 2,
+                'display': '💎 Tera Orb'
             },
             # --- ITEM PHASE 11: MAX SOUP ---
             # The one recipe here whose output is not a key item. The other three

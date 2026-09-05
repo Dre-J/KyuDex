@@ -30,7 +30,7 @@ PVP_ROSTER_COLUMNS = (
     "cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, "
     "cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, "
     "cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender, cp.happiness, "
-    "cp.nickname")
+    "cp.nickname, cp.tera_type")
 
 # The NPC and Warden engines share one shape, which has no slot and puts gender and
 # happiness where PvP puts slot.
@@ -40,7 +40,7 @@ NPC_ROSTER_COLUMNS = (
     "cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, "
     "cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, "
     "cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness, "
-    "cp.nickname")
+    "cp.nickname, cp.tera_type")
 from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
                              BATTLE_IDLE_TIMEOUT,
                              TM_CATALOG, type_badges, type_icon,
@@ -53,6 +53,8 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
                              z_status_effect_for, expand_z_stats,
                              move_pierces_immunity)
+from utils.tera import (may_terastallise, terastallise, tera_type_of,
+                        active_tera_type, shard_for, TERA_MARKER, TERA_ORB)
 from utils.directives import credit_cull, credit_evolution
 from utils.roster import party_filter
 from utils.prefs import trainer_skies
@@ -1541,6 +1543,43 @@ def end_of_turn_items(state, *sides):
     return log
 
 
+# **CRYSTALLINE RESIDUE.** A shard of the DEFEATED specimen's own element, some of the
+# time. Self-steering by design: a trainer who needs Water Shards goes and fights Water
+# types, which is the only way a random drop across eighteen elements is any use at all -
+# fifty of one named type from an even spread would take eighteen times as long.
+#
+# The uncapped source, deliberately. Field missions are the fast steerable one and the
+# directive board is capped at four a day; this is the floor that never dries up, and
+# therefore the rate to watch when tuning.
+RESIDUE_CHANCE = 0.18
+
+
+async def collect_crystal_residue(executor, fallen, user_id, rng=random):
+    """
+    Shards left behind by what was defeated. Returns a log fragment, or "".
+
+    `fallen` is every specimen the trainer knocked out this battle. A dual type leaves
+    one shard of ONE of its elements, chosen at random - not one of each, which would
+    double the rate for half the roster for no reason anybody could name.
+    """
+    log = ""
+    for specimen in fallen or []:
+        elements = [t for t in (specimen or {}).get('types') or [] if t]
+        if not elements or rng.random() >= RESIDUE_CHANCE:
+            continue
+        shard = shard_for(rng.choice(elements))
+        if not shard:
+            continue
+        await executor.execute("""
+            INSERT INTO user_inventory (user_id, item_name, quantity)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + 1
+        """, (user_id, shard))
+        log += (f"\n💎 **{specimen['name'].capitalize()}** left behind a "
+                f"**{shard.replace('-', ' ').title()}**.")
+    return log
+
+
 async def collect_field_spoils(executor, team, user_id):
     """
     Pickup and Honey Gather, paid once the battle is over.
@@ -2414,7 +2453,8 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
                                 p_gender=None, n_gender=None,
                                 p_aura=None, n_aura=None, biome=None,
                                 p_nickname=None, n_nickname=None,
-                                p_roster=(), n_roster=()):
+                                p_roster=(), n_roster=(),
+                                p_tera=None, n_tera=None):
     """
     Maps battle state onto the scene renderer in cogs/battle_render.py and
     returns the result as a Discord attachment.
@@ -2439,6 +2479,7 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
             hazards=p_hazards or {},
             nickname=p_nickname,
             roster=tuple(p_roster or ()),
+            tera_type=p_tera,
         )
         opponent = battle_render.Combatant(
             name=n_name or f"#{npc_id}",
@@ -2451,6 +2492,7 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
             hazards=n_hazards or {},
             nickname=n_nickname,
             roster=tuple(n_roster or ()),
+            tera_type=n_tera,
         )
         return battle_render.render_png(
             player, opponent,
@@ -2543,7 +2585,10 @@ async def render_scene(state):
         # What their trainers call them, and how much is left behind each of them.
         p_nickname=left.get('nickname'), n_nickname=right.get('nickname'),
         p_roster=standing_marks(side_team(state, left_key)),
-        n_roster=standing_marks(side_team(state, right_key)))
+        n_roster=standing_marks(side_team(state, right_key)),
+        # Only meaningful once the crystal is out; `active_tera_type` answers None
+        # until then, so an untransformed specimen carries nothing.
+        p_tera=active_tera_type(left), n_tera=active_tera_type(right))
 
 
 # ==========================================
@@ -4362,6 +4407,24 @@ class PvPMoveMenu(discord.ui.View):
                         z_btn.callback = self.z_toggle_callback
                         self.add_item(z_btn)
 
+                    # 4. TERASTALLISE (Requires a Tera Orb)
+                    #
+                    # Offered ALONGSIDE the others rather than instead of them: a
+                    # specimen holding a Mega Stone sees both and chooses, and the
+                    # adaptation slot is spent by whichever is pressed. The label names
+                    # the type it would become, because that is the whole decision.
+                    if key_items.get('tera_orb') and may_terastallise(
+                            self.active_poke, key_items, adp_state):
+                        tera_element = tera_type_of(self.active_poke)
+                        tera_style = (discord.ButtonStyle.success
+                                      if self.pending_transformation == 'tera'
+                                      else discord.ButtonStyle.danger)
+                        tera_btn = discord.ui.Button(
+                            label=f"Tera: {tera_element.title()}",
+                            style=tera_style, emoji="💎", row=0)
+                        tera_btn.callback = self.create_transform_callback('tera')
+                        self.add_item(tera_btn)
+
             # ==========================================
             # ROW 1: ATTACK COMMANDS
             # ==========================================
@@ -5767,7 +5830,21 @@ class BattleDashboard(BattleCard):
                 state['adaptation'].update({'used': True, 'active': True, 'type': 'dynamax', 'turns': 3,
                                             'holder': battle_render.adaptation_holder(p_active)})
                 log_msg = f"🔴 **{old_name.capitalize()}** absorbed Galar particles and Dynamaxed!"
-                
+
+            elif form_name == 'tera':
+                # NO FORM CHANGE AND NO STAT REBUILD. The typing is computed rather than
+                # stored - `utils.tera.battle_types` is the door - so the marker IS the
+                # transformation, and this branch does not touch the database at all.
+                element = terastallise(p_active)
+                if not element:
+                    return await interaction.followup.send(
+                        "💎 This specimen has no typing to crystallise.", ephemeral=True)
+                state['adaptation'].update({
+                    'used': True, 'active': True, 'type': 'tera', 'turns': -1,
+                    'holder': battle_render.adaptation_holder(p_active)})
+                log_msg = (f"💎 **{old_name.capitalize()}** Terastallised into the "
+                           f"**{element.title()}** type!")
+
             else:
                 print("DEBUG: Applying Mega/G-Max logic. Connecting to DB...")
                 async with aiosqlite.connect(DB_FILE) as db:
@@ -6140,6 +6217,22 @@ class BattleDashboard(BattleCard):
                 # is ready; Primal species are locked out)
                 if not gimmick_found and key_items.get('dynamax_band') and can_dynamax(p_active):
                     btn = discord.ui.Button(label="🔴 Dynamax", style=discord.ButtonStyle.danger, custom_id="transform_0_dynamax")
+                    btn.callback = self.handle_transformation
+                    gimmicks.append(btn)
+
+                # 4. TERASTALLISE (Requires a Tera Orb)
+                #
+                # OFFERED ALONGSIDE THE OTHERS RATHER THAN INSTEAD OF THEM. A specimen
+                # holding a Mega Stone can be shown both buttons and choose; the
+                # adaptation slot is spent by whichever is pressed, so the choice is the
+                # cost. `gimmick_found` is deliberately not consulted.
+                if key_items.get('tera_orb') and may_terastallise(
+                        p_active, key_items, state.get('adaptation')):
+                    element = tera_type_of(p_active)
+                    btn = discord.ui.Button(
+                        label=f"💎 Terastallise ({element.title()})",
+                        style=discord.ButtonStyle.danger,
+                        custom_id="transform_0_tera")
                     btn.callback = self.handle_transformation
                     gimmicks.append(btn)
 
@@ -8765,6 +8858,11 @@ class BattleDashboard(BattleCard):
                         rewards_log += await collect_field_spoils(
                             db, state['player_team'], self.user_id)
 
+                        # ...and a shard of whatever was beaten, some of the time.
+                        rewards_log += await collect_crystal_residue(
+                            db, [m for m in state.get('npc_team') or []
+                                 if m.get('current_hp', 0) <= 0], self.user_id)
+
                         # The culling tracker used to sit here. It now runs at the
                         # knockout itself, a few hundred lines up, so that a battle with
                         # more than one opponent credits more than one of them.
@@ -9473,8 +9571,9 @@ class Combat(commands.Cog):
                                 'gender': normalize_gender(row[27]),
                                 # Appended at the END of the SELECT, so they are read
                                 # off the tail rather than renumbering every index above.
-                                'happiness': row[-2],
-                                'nickname': row[-1]
+                                'happiness': row[-3],
+                                'nickname': row[-2],
+                                'tera_type': row[-1]
                             })
                             
                         teams[uid] = player_team
@@ -9483,7 +9582,7 @@ class Combat(commands.Cog):
                         # Key Item Scanner
                         async with db.execute("""
                             SELECT item_name FROM user_inventory 
-                            WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
+                            WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet', 'tera-orb') AND quantity > 0
                         """, (uid,)) as cursor:
                             owned_key_items = [r[0] for r in await cursor.fetchall()]
                         
@@ -9491,7 +9590,8 @@ class Combat(commands.Cog):
                         key_items[uid] = {
                             'dynamax_band': 'dynamax-band' in owned_key_items,
                             'z_ring': 'z-ring' in owned_key_items,
-                            'mega_bracelet': 'mega-bracelet' in owned_key_items
+                            'mega_bracelet': 'mega-bracelet' in owned_key_items,
+                            'tera_orb': 'tera-orb' in owned_key_items
                         }
             print("DEBUG: Database extraction complete. Building Shared State...")
 
@@ -9916,6 +10016,21 @@ class Combat(commands.Cog):
                                 adp_state.update({'used': True, 'active': True, 'type': 'zmove', 'turns': 1,
                                                   'holder': battle_render.adaptation_holder(active_poke)})
                                 combat_log += f"💎 **{owner_name}'s** {active_poke['name'].capitalize()} surrounded itself with its Z-Power!\n"
+
+                            # 5. TERASTALLISE. No form change and no stat rebuild - the
+                            # typing is COMPUTED rather than stored, so the marker IS the
+                            # transformation. `turns: -1` because it lasts the battle.
+                            elif form == 'tera':
+                                element = terastallise(active_poke)
+                                if element:
+                                    adp_state.update({'used': True, 'active': True,
+                                                      'type': 'tera', 'turns': -1,
+                                                      'holder': battle_render.adaptation_holder(active_poke)})
+                                    combat_log += (
+                                        f"💎 **{owner_name}'s** "
+                                        f"{active_poke['name'].capitalize()} "
+                                        f"Terastallised into the **{element.title()}** "
+                                        f"type!\n")
 
             # ==========================================
             # PHASE 1: TURN ORDER & SPEED RESOLUTION
@@ -11948,8 +12063,9 @@ class Combat(commands.Cog):
                             'gender': normalize_gender(row[26]),
                             # Appended at the END of the SELECT, so they are read
                             # off the tail rather than renumbering every index above.
-                            'happiness': row[-2],
-                            'nickname': row[-1]
+                            'happiness': row[-3],
+                            'nickname': row[-2],
+                            'tera_type': row[-1]
                         })
 
                     # ==========================================
@@ -11975,13 +12091,14 @@ class Combat(commands.Cog):
                     # 4. Key Item Scanner
                     async with db.execute("""
                     SELECT item_name FROM user_inventory 
-                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
+                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet', 'tera-orb') AND quantity > 0
                 """, (user_id,)) as cursor:
                         owned_key_items = [row[0] for row in await cursor.fetchall()]
                 access_ledger = {
                     'dynamax_band': 'dynamax-band' in owned_key_items,
                     'z_ring': 'z-ring' in owned_key_items,
-                    'mega_bracelet': 'mega-bracelet' in owned_key_items
+                    'mega_bracelet': 'mega-bracelet' in owned_key_items,
+                    'tera_orb': 'tera-orb' in owned_key_items
                     }
 
             
@@ -12733,8 +12850,9 @@ class Combat(commands.Cog):
                             'gender': normalize_gender(row[26]),
                             # Appended at the END of the SELECT, so they are read
                             # off the tail rather than renumbering every index above.
-                            'happiness': row[-2],
-                            'nickname': row[-1]
+                            'happiness': row[-3],
+                            'nickname': row[-2],
+                            'tera_type': row[-1]
                         })
                 
                     # ==========================================
@@ -12742,7 +12860,7 @@ class Combat(commands.Cog):
                     # ==========================================
                         async with db.execute("""
                     SELECT item_name FROM user_inventory 
-                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet') AND quantity > 0
+                    WHERE user_id = ? AND item_name IN ('dynamax-band', 'z-ring', 'mega-bracelet', 'tera-orb') AND quantity > 0
                 """, (user_id,)) as cursor:
                             owned_key_items = [row[0] for row in await cursor.fetchall()]
                         
@@ -12750,7 +12868,8 @@ class Combat(commands.Cog):
                         access_ledger = {
                             'dynamax_band': 'dynamax-band' in owned_key_items,
                             'z_ring': 'z-ring' in owned_key_items,
-                            'mega_bracelet': 'mega-bracelet' in owned_key_items
+                            'mega_bracelet': 'mega-bracelet' in owned_key_items,
+                            'tera_orb': 'tera-orb' in owned_key_items
                         }
             # ==========================================
         except Exception as e:
