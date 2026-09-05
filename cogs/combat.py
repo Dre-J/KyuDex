@@ -2707,6 +2707,93 @@ class BattleCard(ui.LayoutView):
         return self
 
 
+class NoticeCard(BattleCard):
+    """The duel's card with something to say and nothing to press.
+
+    A pause, a forfeit, or a finished battle. Carries no actions of its own because
+    every one of those states either has no decision to make or has moved the decision
+    onto a message of its own - see `settle_battle_card`.
+    """
+
+    def __init__(self, state, *, title=None, accent=None):
+        super().__init__(timeout=None)
+        self._state = state or {}
+        if title:
+            self.TITLE = title
+        if accent is not None:
+            self.ACCENT = accent
+
+    def battle_state(self):
+        return self._state
+
+    def side_names(self):
+        # A PvP state names its duellists; a PvE one keeps the default.
+        if 'p1' in self._state and 'p2' in self._state:
+            return (f"{self._state['p1'].display_name}'s",
+                    f"{self._state['p2'].display_name}'s")
+        return self.SIDE_NAMES
+
+    def action_rows(self):
+        return []
+
+
+async def settle_battle_card(state, log, *, title=None, accent=None, footer=None,
+                             interaction=None, follow_up=None, follow_text=None):
+    """
+    Finish or pause the duel's card, and hand any further choice its own message.
+
+    **A COMPONENTS V2 MESSAGE TAKES NEITHER AN EMBED NOR CONTENT.** Once a message
+    carries a LayoutView, Discord refuses `embed=` with
+    `50035: The 'embeds' field cannot be used when using MessageFlags.IS_COMPONENTS_V2`,
+    refuses `content=` the same way, and refuses `view=None` with
+    `50006: Cannot send an empty message` - because stripping the components from a V2
+    message leaves nothing behind at all.
+
+    Eleven places used to annotate a duel by editing its embed, its content, or both:
+    the forfeit, the waiting notice, the two mid-turn substitutions, the two forced-swap
+    prompts, and every way a battle can end. They all redraw the card instead.
+
+    **AND THE CARD NEVER CARRIES A FOREIGN VIEW.** Several of those sites attached an
+    ordinary `discord.ui.View` - a swap menu, an evolution offer - which cannot sit on a
+    V2 message either. Anything that still needs a decision is sent as its own message
+    through `follow_up`, which is also the clearer place for it: the duel's card is a
+    record of what happened, not a prompt.
+    """
+    state = state if isinstance(state, dict) else {}
+    card = NoticeCard(state, title=title, accent=accent)
+    card.log = log
+    card.footer = footer
+    # NOT re-uploaded. This is an edit in place, so the picture that is already on the
+    # message stays only if the attachments are left alone - and they are cleared here,
+    # matching what these paths did as embeds. A gallery pointing at a cleared
+    # attachment would render as a broken image.
+    card.scene_name = None
+    card.rebuild()
+
+    message = state.get('message_obj')
+    try:
+        if message is not None:
+            await message.edit(view=card, attachments=[])
+        elif interaction is not None:
+            await interaction.edit_original_response(view=card, attachments=[])
+    except Exception as edit_error:
+        print(f"⚠️ Could not settle the battle card: {edit_error!r}")
+
+    if follow_up is None:
+        return card
+
+    channel = (getattr(message, 'channel', None)
+               or getattr(interaction, 'channel', None))
+    try:
+        if channel is not None:
+            await channel.send(follow_text or "", view=follow_up)
+        elif interaction is not None:
+            await interaction.followup.send(follow_text or "", view=follow_up)
+    except Exception as send_error:
+        print(f"⚠️ Could not send the follow-up view: {send_error!r}")
+    return card
+
+
 async def dismiss_menu(interaction, notice=None):
     """
     Take a private menu off the screen once it has been answered.
@@ -5407,9 +5494,11 @@ class ForfeitConfirm(discord.ui.View):
         # Leave the battle message on screen but visibly finished
         try:
             if state and state.get('message_obj'):
-                await state['message_obj'].edit(
-                    content="🏳️ **Expedition abandoned.** No research funding was recovered.",
-                    view=self.dashboard, attachments=[])
+                await settle_battle_card(
+                    state,
+                    "🏳️ **Expedition abandoned.** No research funding was recovered.",
+                    title="🏳️ Expedition Abandoned",
+                    accent=discord.Colour.dark_grey())
         except Exception as e:
             print(f"DEBUG: Could not tidy up the forfeited battle message: {e}")
 
@@ -7147,12 +7236,18 @@ class BattleDashboard(BattleCard):
                                 # 🚨 PAUSE THE ENGINE: WAIT FOR USER INPUT
                                 # ==========================================
                                 if is_player:
-                                    # Send the special menu to the user using the existing interaction!
-                                    embed = discord.Embed(title="⚠️ Mid-Turn Substitution!", description=f"{combat_log}\nChoose your replacement quickly!", color=discord.Color.orange())
+                                    # The card says the duel is paused; the menu is its
+                                    # own message, because a V2 card cannot hold an
+                                    # ordinary View.
                                     swap_view = MidTurnSwapMenu(self.cog, state, self.user_id)
-                                    
-                                    # Use edit_original_response instead of searching the state dict!
-                                    await interaction.edit_original_response(embed=embed, attachments=[], view=swap_view)
+                                    await settle_battle_card(
+                                        state,
+                                        f"{combat_log}\nChoose your replacement quickly!",
+                                        title="⚠️ Mid-Turn Substitution!",
+                                        accent=discord.Color.orange(),
+                                        interaction=interaction,
+                                        follow_up=swap_view,
+                                        follow_text="Who comes in?")
                                     
                                     # 🛑 FREEZE THE THREAD UNTIL THEY CLICK A BUTTON -
                                     # BUT NOT FOREVER. Same unbounded wait the PvP pivot
@@ -8376,8 +8471,10 @@ class BattleDashboard(BattleCard):
                         # battle that no longer exists. That is the KeyError.
                         del self.cog.active_battles[self.user_id]
                         self.stop()
-                        embed = discord.Embed(title="🛡️ Sector Secured!", description=battle_log_description(combat_log + rewards_log), color=discord.Color.purple())
-                        return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                        return await settle_battle_card(
+                            state, combat_log + rewards_log,
+                            title="🛡️ Sector Secured!",
+                            accent=discord.Color.purple(), interaction=interaction)
                     
                     # ==========================================
                     # THE ECOLOGICAL REWARDS ENGINE
@@ -8625,9 +8722,14 @@ class BattleDashboard(BattleCard):
                     del self.cog.active_battles[self.user_id]
                     self.stop()
                     
-                    embed = discord.Embed(title="🏆 Field Duel Victorious!", description=battle_log_description(combat_log + rewards_log), color=discord.Color.gold())
                     print(f"[DEBUG EVO PvE] 5. Final UI Dispatch. Passing view: {post_battle_view}")
-                    return await interaction.edit_original_response(embed=embed, view=post_battle_view, attachments=[])
+                    return await settle_battle_card(
+                        state, combat_log + rewards_log,
+                        title="🏆 Field Duel Victorious!",
+                        accent=discord.Color.gold(), interaction=interaction,
+                        follow_up=post_battle_view,
+                        follow_text=("🧬 A specimen is ready to evolve."
+                                     if post_battle_view else None))
 
             # --- PLAYER SURVIVAL CHECK ---
             p_needs_swap = p_active['current_hp'] <= 0 or state.get('player_must_pivot')
@@ -8671,14 +8773,20 @@ class BattleDashboard(BattleCard):
                     # We pass `forced=True` to hide the cancel button!
                     swap_view = SwapMenu(self.cog, self.user_id, self.ctx, self, forced=True)
 
-                    embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=battle_log_description(combat_log), color=discord.Color.orange())
-                    return await interaction.edit_original_response(embed=embed, view=swap_view, attachments=[])
+                    return await settle_battle_card(
+                        state, combat_log,
+                        title="⚠️ Tactical Swap Required!",
+                        accent=discord.Color.orange(), interaction=interaction,
+                        follow_up=swap_view, follow_text="Who comes in?")
                 else:
                     if p_active['current_hp'] <= 0:
                         del self.cog.active_battles[self.user_id]
                         self.stop()
-                        embed = discord.Embed(title="💥 Field Duel Lost", description=battle_log_description(combat_log), color=discord.Color.dark_red())
-                        return await interaction.edit_original_response(embed=embed, view=None, attachments=[])
+                        return await settle_battle_card(
+                            state, combat_log,
+                            title="💥 Field Duel Lost",
+                            accent=discord.Color.dark_red(),
+                            interaction=interaction)
                     else:
                         combat_log += "\n*...But there were no healthy specimens left to deploy!*"
 
@@ -9478,10 +9586,13 @@ class Combat(commands.Cog):
             # `content=None` clears the waiting notice below. Without it the line
             # "Awaiting telemetry from: X" survives above the resolved turn, naming
             # somebody who answered several seconds ago.
-            try:
-                await state['message_obj'].edit(content=None, view=None)
-            except Exception as e:
-                print(f"UI Edit Error: {e}")
+            # Nothing to clear: the notice lives ON the card now, and the card is
+            # about to be replaced wholesale by the resolved turn. Stripping the buttons
+            # off a V2 message with `view=None` is what Discord answers with
+            # `50006: Cannot send an empty message` - a container IS the message.
+            #
+            # A stale click in the gap is already refused by `interaction_check`, which
+            # stamps every dashboard with the turn it was drawn for.
 
             # Route traffic based on the phase!
             if state.get('phase') == 'lead_select':
@@ -9517,9 +9628,16 @@ class Combat(commands.Cog):
             if not p1_ready: waiting_for.append(state['p1'].display_name)
             if not p2_ready: waiting_for.append(state['p2'].display_name)
 
+            # ON THE CARD, not as message content: a V2 message refuses `content=`
+            # outright, and the footer is where the card already says what it is
+            # waiting for.
             try:
-                await state['message_obj'].edit(
-                    content=f"⏳ Awaiting telemetry from: {', '.join(waiting_for)}...")
+                board = PvPDashboard(self, state)
+                board.log = state.get('last_log') or ''
+                board.footer = (f"⏳ Awaiting telemetry from: "
+                                f"{', '.join(waiting_for)}…")
+                board.rebuild()
+                await state['message_obj'].edit(view=board)
             except Exception as e:
                 print(f"DEBUG: Waiting notice failed: {e}")
 
@@ -10460,8 +10578,12 @@ class Combat(commands.Cog):
                             # 🚨 PAUSE THE ENGINE: WAIT FOR USER INPUT
                             # ==========================================
                             # 1. Update the main channel so both players know the engine is waiting
-                            embed = discord.Embed(title="⚠️ Mid-Turn Substitution!", description=f"{combat_log}\nWaiting for {owner_name} to deploy a replacement...", color=discord.Color.orange())
-                            await state['message_obj'].edit(embed=embed, attachments=[], view=None)
+                            await settle_battle_card(
+                                state,
+                                f"{combat_log}\nWaiting for {owner_name} to deploy "
+                                f"a replacement...",
+                                title="⚠️ Mid-Turn Substitution!",
+                                accent=discord.Color.orange())
                             
                             # 2. Spawn the menu and get it to them - DM if they will take
                             #    one, a button in this channel if they will not.
@@ -11274,14 +11396,19 @@ class Combat(commands.Cog):
 
                         await db.commit()
 
-                embed = discord.Embed(title="🏁 Ecological Duel Concluded!", description=f"{combat_log}\n{result_str}{rewards_log}", color=discord.Color.gold())
+                # The duel is over and both trainers are released. The pops were written
+                # out twice here, with an identical embed built either side of them.
                 self.active_battles.pop(p1_id, None)
                 self.active_battles.pop(p2_id, None)
-                
-                embed = discord.Embed(title="🏁 Ecological Duel Concluded!", description=f"{combat_log}\n{result_str}{rewards_log}", color=discord.Color.gold())
-                self.active_battles.pop(p1_id, None)
-                self.active_battles.pop(p2_id, None)
-                return await state['message_obj'].edit(embed=embed, attachments=[], view=post_battle_view)
+                # An evolution offer is its own message: it carries an ordinary View,
+                # and a V2 card cannot hold one.
+                return await settle_battle_card(
+                    state, f"{combat_log}\n{result_str}{rewards_log}",
+                    title="🏁 Ecological Duel Concluded!",
+                    accent=discord.Color.gold(),
+                    follow_up=post_battle_view,
+                    follow_text="🧬 A specimen is ready to evolve." if post_battle_view
+                                else None)
 
             # ==========================================
             # PHASE 4: FAINT & PIVOT CHECKS
@@ -11366,8 +11493,11 @@ class Combat(commands.Cog):
                 state['phase'] = 'faint_swap' # Piggyback on your existing recovery engine!
                 state['commits'] = {p1_id: None, p2_id: None}
                 
-                embed = discord.Embed(title="⚠️ Tactical Swap Required!", description=f"{combat_log}\nWaiting for researchers to deploy replacements...", color=discord.Color.orange())
-                await state['message_obj'].edit(embed=embed, attachments=[], view=None)
+                await settle_battle_card(
+                    state,
+                    f"{combat_log}\nWaiting for researchers to deploy replacements...",
+                    title="⚠️ Tactical Swap Required!",
+                    accent=discord.Color.orange())
 
                 # ==========================================
                 # ITEM PHASE 3: A RED CARD IS NOT A FREE SWITCH
