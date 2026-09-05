@@ -15,7 +15,7 @@ from utils.db_manager import (check_evolution_trigger, check_condition_evolution
 from utils.growth import MAX_FRIENDSHIP, boosted_xp, raise_friendship
 from utils.machines import owns_tm, owned_tms, price_of
 from utils import learnsets
-from utils.cards import row
+from utils.cards import card_button, row
 from utils.regions import current_region
 from utils.duels import (can_field_a_side, describe_format, duel_roster,
                          parse_duel_format)
@@ -2708,7 +2708,7 @@ class BattleCard(ui.LayoutView):
 
 
 async def post_battle_card(state, view, battle_file=None, *, interaction=None,
-                           channel=None, embed=None):
+                           channel=None):
     """
     Send the card as a new message and take the previous one down.
 
@@ -2738,13 +2738,6 @@ async def post_battle_card(state, view, battle_file=None, *, interaction=None,
     payload = {'view': view}
     if battle_file is not None:
         payload['file'] = battle_file
-    # **TEMPORARY, AND IT SHOULD LEAVE WITH THE PvP CONVERSION.** The PvP dashboard is
-    # still an embed-and-View pair, and Discord refuses an embed beside a LayoutView -
-    # so it hands its embed through here rather than keeping a second copy of the
-    # send-and-delete dance. `message_obj` is written in exactly ONE place, and that is
-    # worth more than the tidiness of not having this parameter for a while.
-    if embed is not None:
-        payload['embed'] = embed
 
     try:
         message = await channel.send(**payload)
@@ -2753,8 +2746,13 @@ async def post_battle_card(state, view, battle_file=None, *, interaction=None,
         print(f"🚨 Could not post the battle card: {send_error!r}")
         return previous
 
-    state['message_obj'] = message
-    if previous is not None and getattr(previous, 'id', None) != message.id:
+    # `getattr` on BOTH sides. A real `channel.send` always returns a Message, but this
+    # sits on the path every turn takes and the whole area is built on "a render problem
+    # must not end a duel" - so an unexpected None costs the card its repost, not the
+    # battle. The old message is then left up, which is the safe half to fail on.
+    if message is not None:
+        state['message_obj'] = message
+    if previous is not None and getattr(previous, 'id', None) != getattr(message, 'id', None):
         try:
             await previous.delete()
         except Exception:
@@ -3857,7 +3855,9 @@ class MidTurnSwapMenu(discord.ui.View):
             
         return swap_callback
 
-class PvPDashboard(discord.ui.View):
+class PvPDashboard(BattleCard):
+    TITLE = "⚔️ PvP Field Duel"
+
     def __init__(self, cog, state):
         # Was timeout=None, which meant a duel NEVER expired - and because both players
         # are mapped to the same state dictionary, one person closing Discord locked out
@@ -3866,6 +3866,64 @@ class PvPDashboard(discord.ui.View):
         self.cog = cog
         self.state = state
         self.turn_created = state['turn_number'] # 🛡️ Stamp the menu with the current turn!
+
+    def battle_state(self):
+        return self.state
+
+    def side_names(self):
+        """Both duellists by name. "Your" and "Rival" are meaningless on a card two
+        people are reading - each of them is somebody's rival."""
+        return (f"{self.state['p1'].display_name}'s",
+                f"{self.state['p2'].display_name}'s")
+
+    def action_rows(self):
+        """Fight, Swap, and - new - a way back out of a decision already made.
+
+        **THE CANCEL BUTTON IS THE POINT OF THIS ROW.** A commit was final the instant
+        it was made, and a duel waits for BOTH players: somebody who locked in a move
+        and then watched their opponent take thirty seconds to answer had no way to
+        change their mind, and no way to tell whether they had mis-clicked. Withdrawing
+        is safe precisely while the other side has not answered, because nothing has
+        been resolved yet.
+        """
+        waiting = [player_id for player_id in (self.state.get('p1_id'),
+                                               self.state.get('p2_id'))
+                   if self.state.get('commits', {}).get(player_id) is None]
+
+        return [row(
+            card_button("Fight", emoji="⚔️", style=discord.ButtonStyle.primary,
+                        callback=self.fight_btn),
+            card_button("Swap", emoji="🔄", callback=self.swap_btn),
+            # Offered only while somebody still has a decision outstanding. Once both
+            # have answered the turn is resolving and there is nothing left to take
+            # back - a live button there would be a lie.
+            card_button("Take it back", emoji="↩️",
+                        style=discord.ButtonStyle.secondary,
+                        disabled=not waiting, callback=self.cancel_btn),
+        )]
+
+    async def cancel_btn(self, interaction: discord.Interaction):
+        """Un-commit, while the turn is still waiting on somebody."""
+        user_id = str(interaction.user.id)
+        if self.state.get('commits', {}).get(user_id) is None:
+            return await interaction.response.send_message(
+                "↩️ You have not locked anything in yet.", ephemeral=True)
+
+        # **BOTH ANSWERED MEANS THE TURN IS ALREADY GOING.** `check_pvp_commits` fires
+        # the moment the second commit lands, so by the time a click could arrive here
+        # the resolver may be part-way through reading the very dictionary this would
+        # edit. Refused rather than raced.
+        if all(self.state.get('commits', {}).get(player_id) is not None
+               for player_id in (self.state.get('p1_id'), self.state.get('p2_id'))):
+            return await interaction.response.send_message(
+                "⏳ Too late - both of you have answered and the turn is resolving.",
+                ephemeral=True)
+
+        self.state['commits'][user_id] = None
+        self.rebuild()
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(
+            "↩️ Withdrawn. Choose again whenever you are ready.", ephemeral=True)
 
     async def on_timeout(self):
         """Release BOTH duellists. The state is shared, so half a teardown strands one."""
@@ -3888,8 +3946,7 @@ class PvPDashboard(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Fight ⚔️", style=discord.ButtonStyle.primary)
-    async def fight_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def fight_btn(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         
         # Prevent players from overwriting their choice
@@ -3905,8 +3962,7 @@ class PvPDashboard(discord.ui.View):
         view = await PvPMoveMenu.create(self.cog, self.state, user_id, active_poke)
         await interaction.response.send_message(f"Commanding {active_poke['name'].capitalize()}...", view=view, ephemeral=True)
 
-    @discord.ui.button(label="Swap 🔄", style=discord.ButtonStyle.secondary)
-    async def swap_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def swap_btn(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         
         if self.state['commits'][user_id] is not None:
@@ -9135,25 +9191,14 @@ class Combat(commands.Cog):
 
             # 6. Render the UI
             print("DEBUG: Constructing UI Elements...")
-            embed = discord.Embed(title="⚔️ PvP Field Duel Commencing!", description=battle_log_description(combat_log), color=discord.Color.red())
-            
-            p1_roster = "".join(["🔴" for _ in shared_state['p1_team']])
-            p2_roster = "".join(["🔴" for _ in shared_state['p2_team']])
-            
-            embed.add_field(name=f"🟢 {p1.display_name}'s {p1_lead['name'].capitalize()}", value=f"Team: {p1_roster}", inline=True)
-            embed.add_field(name=f"🔴 {p2.display_name}'s {p2_lead['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
-            add_field_conditions(embed, shared_state)
-            # Dynamically grab the new randomized filename!
-            # Dynamically attach the first image!
-            scene = scene_attachment(embed, battle_file)
-            embed.set_footer(text="Awaiting inputs from both researchers...")
-
             dashboard_view = PvPDashboard(self, shared_state)
+            dashboard_view.TITLE = "⚔️ PvP Field Duel Commencing!"
+            dashboard_view.ACCENT = discord.Color.red()
 
             print("DEBUG: Sending final payload to Discord...")
-            await post_battle_card(shared_state, dashboard_view,
-                                   scene[0] if scene else None,
-                                   channel=channel, embed=embed)
+            await dashboard_view.show(
+                combat_log=combat_log, battle_file=battle_file, channel=channel,
+                footer="Awaiting inputs from both researchers…")
             print("=== DEBUG: PvP Initialization COMPLETE ===")
 
         except Exception as e:
@@ -11130,32 +11175,19 @@ class Combat(commands.Cog):
                 await self.check_pvp_commits(state)
                 return
 
-            embed = discord.Embed(title="⚔️ PvP Field Duel", description=battle_log_description(combat_log), color=discord.Color.blue())
-            
-            p1_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p1_team']])
-            p2_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p2_team']])
-            
-            embed.add_field(name=f"🟢 {state['p1'].display_name}'s {new_p1_active['name'].capitalize()}", value=f"Team: {p1_roster}", inline=True)
-            embed.add_field(name=f"🔴 {state['p2'].display_name}'s {new_p2_active['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
-            add_field_conditions(embed, state)
-            embed.set_footer(text="Awaiting inputs from both researchers...")
-
             try:
                 battle_file = await render_scene(state)
-                
-                scene = scene_attachment(embed, battle_file)
-
             except Exception as img_err:
                 print(f"DEBUG: Failed to generate image: {img_err}")
-                scene = []
+                battle_file = None
 
             dashboard_view = PvPDashboard(self, state)
-
-            # `content=None` clears any leftover "awaiting telemetry" notice. The turn
-            # has resolved, so a line naming who we were waiting for is now a lie - and
-            # a redraw that did not mention content would leave it sitting there.
-            await state['message_obj'].edit(content=None, embed=embed,
-                                            attachments=scene, view=dashboard_view)
+            # The card replaces the old one outright, so there is no leftover "awaiting
+            # telemetry" notice to clear - that used to need an explicit `content=None`,
+            # because an edit that does not mention content leaves it sitting there.
+            await dashboard_view.show(
+                combat_log=combat_log, battle_file=battle_file,
+                footer="Awaiting inputs from both researchers…")
 
             print("=== DEBUG: process_pvp_turn COMPLETE ===")
 
@@ -11240,34 +11272,19 @@ class Combat(commands.Cog):
             p1_active = state['p1_team'][state['p1_active_index']]
             p2_active = state['p2_team'][state['p2_active_index']]
             
-            embed = discord.Embed(title="⚔️ PvP Field Duel", description=battle_log_description(combat_log), color=discord.Color.blue())
-            
-            p1_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p1_team']])
-            p2_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['p2_team']])
-            
-            # Draw the fresh names to the Embed!
-            embed.add_field(name=f"🟢 {state['p1'].display_name}'s {p1_active['name'].capitalize()}", value=f"Team: {p1_roster}", inline=True)
-            embed.add_field(name=f"🔴 {state['p2'].display_name}'s {p2_active['name'].capitalize()}", value=f"Team: {p2_roster}", inline=True)
-            add_field_conditions(embed, state)
-            embed.set_footer(text="Awaiting inputs from both researchers...")
-
             # Safely generate the image
             try:
                 battle_file = await render_scene(state)
-                scene = scene_attachment(embed, battle_file)
             except Exception as img_err:
                 print(f"DEBUG: Image generation failed in Faint Phase: {img_err}")
-                scene = []
+                battle_file = None
 
             dashboard_view = PvPDashboard(self, state)
-
-            # An empty list clears the old attachments, so a failed render leaves no
-            # ghost Pokemon behind from the previous frame.
-            # `content=None` clears any leftover "awaiting telemetry" notice. The turn
-            # has resolved, so a line naming who we were waiting for is now a lie - and
-            # a redraw that did not mention content would leave it sitting there.
-            await state['message_obj'].edit(content=None, embed=embed,
-                                            attachments=scene, view=dashboard_view)
+            # A fresh card, so a failed render leaves no ghost specimen behind from the
+            # previous frame - the new one simply has no gallery.
+            await dashboard_view.show(
+                combat_log=combat_log, battle_file=battle_file,
+                footer="Awaiting inputs from both researchers…")
                 
             print("=== DEBUG: process_faint_swaps COMPLETE ===")
 
