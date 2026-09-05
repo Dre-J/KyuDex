@@ -49,7 +49,8 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              mega_stone_binds_to, is_mega_stone,
                              MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY,
                              ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
-                             z_status_effect_for, expand_z_stats)
+                             z_status_effect_for, expand_z_stats,
+                             move_pierces_immunity)
 from utils.directives import credit_cull, credit_evolution
 from utils.roster import party_filter
 from utils.prefs import trainer_skies
@@ -1783,7 +1784,13 @@ async def pick_npc_move(db, available_moves, npc, foe, state, context='ATTACK'):
         if m_class != 'status' and m_power > 0:
             multiplier = 1.0
             for foe_type in foe_types:
-                multiplier *= TYPE_CHART.get(m_type, {}).get(foe_type, 1.0)
+                step = TYPE_CHART.get(m_type, {}).get(foe_type, 1.0)
+                # A move that walks through an immunity has to be scored as one, or the
+                # AI reads Nihil Light against a Fairy as zero damage and never fires
+                # the one move in the game that answers it.
+                if step == 0 and move_pierces_immunity(m['name'], m_type, foe_type):
+                    step = 1.0
+                multiplier *= step
 
             # STAB (Same Type Attack Bonus) calculation
             if m_type in npc_types:
@@ -3093,6 +3100,46 @@ async def reshape_move_slot(combatant, old_name, new_name, max_pp=None):
             slot['pp'] = min(slot.get('pp', max_pp), max_pp)
         reshaped = True
     return reshaped
+
+
+# ==========================================
+# 🟩 WHAT A TRANSFORMATION RESHAPES
+# ==========================================
+# A form that arrives carrying a move of its own. Mega Zygarde's Nihil Light is not
+# learned - it IS Core Enforcer, remade by the transformation, the same relationship
+# Behemoth Blade has with Iron Head - so the slot keeps its position and whatever PP is
+# already spent on it rather than being handed a fresh move.
+#
+# KEYED BY THE FORM IT ARRIVES AS, not by the species it came from. Zygarde reaches
+# `zygarde-mega` from any of its shapes, and a rule written against "Zygarde Complete"
+# would have to name the four other spellings it is also true of.
+#
+# Nihil Light's 5 PP is a LOWER ceiling than Core Enforcer's 10, and lowering it is the
+# point: without it the transformation would hand out the bypass and five more uses of
+# it. What is already spent stays spent - `reshape_move_slot` clamps rather than refills.
+FORM_MOVE_RESHAPES = {
+    'zygarde-mega': ('core-enforcer', 'nihil-light', 5),
+}
+
+
+async def reshape_for_form(combatant, form_name):
+    """
+    Swap the move a form brings with it. Returns a line for the log, or "".
+
+    Called from BOTH transformation handlers. PvE and PvP each build a Mega Evolution
+    from scratch - stats, types, ability, the log line - and the two have drifted before
+    (the ability fetch had to be added to PvP as a parity fix long after PvE had it).
+    This is one call in each rather than a species check in each.
+    """
+    rule = FORM_MOVE_RESHAPES.get((form_name or '').lower().strip())
+    if not rule:
+        return ""
+    old_move, new_move, max_pp = rule
+    if not await reshape_move_slot(combatant, old_move, new_move, max_pp):
+        # It never knew the old move. Nothing to remake, and nothing to say about it.
+        return ""
+    return (f"🟩 Its **{old_move.replace('-', ' ').title()}** reshaped into "
+            f"**{new_move.replace('-', ' ').title()}**!\n")
 
 
 # ==========================================
@@ -5768,7 +5815,11 @@ class BattleDashboard(BattleCard):
                 
                 transform_type = "Gigantamaxed" if is_gmax else "Mega Evolved"
                 log_msg = f"✨ **{old_name.capitalize()}** achieved Hyper-Adaptation and {transform_type} into **{form_name.replace('-', ' ').title()}**!\n"
-                
+
+                # A form that arrives carrying a move of its own - Mega Zygarde's Nihil
+                # Light in place of Core Enforcer.
+                log_msg += await reshape_for_form(p_active, form_name)
+
                 # Trigger the biological entry hook so Snow Warning/Drought activates instantly!
                 try:
                     log_msg = await trigger_single_entry_ability(p_active, n_active, "Your", state, log_msg)
@@ -9824,6 +9875,10 @@ class Combat(commands.Cog):
                                     # 🚨 Dynamic Log Message
                                     transform_type = "Z-Mega Evolved" if held_item.endswith('-z') else "Mega Evolved"
                                     combat_log += f"✨ **{owner_name}'s** specimen achieved Hyper-Adaptation and {transform_type} into **{form_name.replace('-', ' ').title()}**!\n"
+
+                                    # The same reshape PvE does, through the same door.
+                                    combat_log += await reshape_for_form(
+                                        active_poke, form_name)
                                 else:
                                     combat_log += f"⚠️ **{owner_name}'s** {active_poke['name'].capitalize()} tried to Mega Evolve, but its genetic data was missing from the database!\n"
 

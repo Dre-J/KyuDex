@@ -978,6 +978,27 @@ def type_badges(types, separator=" / "):
     return separator.join(labels) if labels else "❔ Unknown"
 
 
+def super_effective_against(move_types):
+    """
+    Every defending type at least one of these elements hits for double or better.
+
+    **COVERAGE IS WHAT THE MOVES BEAT, NOT WHAT THEY ARE.** `!view` printed the elements
+    of a specimen's moves under the heading "Coverage", directly beneath a table that
+    already prints the element of every move - the same words twice, the second time
+    under a heading promising something else. What a trainer wants there is the answer to
+    a chart lookup they would otherwise do in their head, four moves at a time.
+
+    Returned in the chart's own order rather than the order the moves happen to sit in,
+    so two specimens with the same coverage show the same line. Empty is a real answer:
+    a specimen whose only damaging move is Normal beats nothing at all.
+    """
+    elements = {str(t).strip().lower()
+                for t in (move_types or []) if t and str(t).strip()}
+    return [defending for defending in TYPE_CHART
+            if any(TYPE_CHART.get(element, {}).get(defending, 1.0) > 1.0
+                   for element in elements)]
+
+
 # ==========================================
 # 🏅 THE TRAIT BADGES
 # ==========================================
@@ -3287,6 +3308,37 @@ IMMUNITY_PIERCING_ITEMS = {
     'ring-target': None,
     IRON_BALL:     ('ground',),
 }
+
+
+# ...and the third way a zero on the chart is let through: the MOVE itself.
+#
+# Nihil Light is Mega Zygarde's signature, an upgrade to Core Enforcer, and it strikes
+# the Fairy types the chart says a Dragon move cannot touch. One move opening one
+# immunity - so the table names BOTH ends of the rule rather than just the move. A Nihil
+# Light repainted by Normalize, a Plate or a Tera type is an ordinary attack of that
+# element again, with no bypass, because the element no longer matches.
+#
+# THE OTHER HALF OF A DUAL TYPE IS UNTOUCHED. Only the Fairy step is rewritten, so a
+# Fairy/Steel still halves it and a Fairy/Ground still takes it neutrally - which is
+# what "the calculation takes into account its other type" means.
+IMMUNITY_PIERCING_MOVES = {
+    'nihil-light': ('dragon', ('fairy',)),
+}
+
+
+def move_pierces_immunity(move_name, move_type, def_type):
+    """
+    Whether the MOVE refuses to be refused by that defending type.
+
+    Asked at the one place the type chart produces a zero, beside the two item rules, so
+    the three cannot come to disagree about what an immunity is.
+    """
+    rule = IMMUNITY_PIERCING_MOVES.get(
+        (move_name or '').lower().replace(' ', '-'))
+    if not rule:
+        return False
+    element, opens = rule
+    return move_type == element and def_type in opens
 
 
 def pierces_own_immunity(held_item, move_type):

@@ -1,1 +1,74 @@
-{}
+{
+  "zygarde-10": {
+    "add": [
+      {
+        "move": "nihil-light",
+        "method": "level-up",
+        "level": 1
+      }
+    ],
+    "remove": [],
+    "source": "nihil-light",
+    "note": "Mega Zygarde's signature move, and an upgrade to Core Enforcer. Given to every Zygarde form the movepool already lets learn Core Enforcer, at the same level, so the Mega's move is reachable by the specimen that becomes it."
+  },
+  "zygarde-10-power-construct": {
+    "add": [
+      {
+        "move": "nihil-light",
+        "method": "level-up",
+        "level": 1
+      }
+    ],
+    "remove": [],
+    "source": "nihil-light",
+    "note": "Mega Zygarde's signature move, and an upgrade to Core Enforcer. Given to every Zygarde form the movepool already lets learn Core Enforcer, at the same level, so the Mega's move is reachable by the specimen that becomes it."
+  },
+  "zygarde-50": {
+    "add": [
+      {
+        "move": "nihil-light",
+        "method": "level-up",
+        "level": 1
+      }
+    ],
+    "remove": [],
+    "source": "nihil-light",
+    "note": "Mega Zygarde's signature move, and an upgrade to Core Enforcer. Given to every Zygarde form the movepool already lets learn Core Enforcer, at the same level, so the Mega's move is reachable by the specimen that becomes it."
+  },
+  "zygarde-50-power-construct": {
+    "add": [
+      {
+        "move": "nihil-light",
+        "method": "level-up",
+        "level": 1
+      }
+    ],
+    "remove": [],
+    "source": "nihil-light",
+    "note": "Mega Zygarde's signature move, and an upgrade to Core Enforcer. Given to every Zygarde form the movepool already lets learn Core Enforcer, at the same level, so the Mega's move is reachable by the specimen that becomes it."
+  },
+  "zygarde-complete": {
+    "add": [
+      {
+        "move": "nihil-light",
+        "method": "level-up",
+        "level": 1
+      }
+    ],
+    "remove": [],
+    "source": "nihil-light",
+    "note": "Mega Zygarde's signature move, and an upgrade to Core Enforcer. Given to every Zygarde form the movepool already lets learn Core Enforcer, at the same level, so the Mega's move is reachable by the specimen that becomes it."
+  },
+  "zygarde-mega": {
+    "add": [
+      {
+        "move": "nihil-light",
+        "method": "level-up",
+        "level": 1
+      }
+    ],
+    "remove": [],
+    "source": "nihil-light",
+    "note": "Mega Zygarde's signature move, and an upgrade to Core Enforcer. Given to every Zygarde form the movepool already lets learn Core Enforcer, at the same level, so the Mega's move is reachable by the specimen that becomes it."
+  }
+}
