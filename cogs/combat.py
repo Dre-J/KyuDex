@@ -2,6 +2,7 @@ import discord
 import os
 import time
 import traceback
+from discord import ui
 from discord.ext import commands
 import aiosqlite
 import random
@@ -14,6 +15,7 @@ from utils.db_manager import (check_evolution_trigger, check_condition_evolution
 from utils.growth import MAX_FRIENDSHIP, boosted_xp, raise_friendship
 from utils.machines import owns_tm, owned_tms, price_of
 from utils import learnsets
+from utils.cards import row
 from utils.regions import current_region
 from utils.duels import (can_field_a_side, describe_format, duel_roster,
                          parse_duel_format)
@@ -2514,6 +2516,268 @@ async def render_scene(state):
         biome=state.get('warden_biome'))
 
 
+# ==========================================
+# ⚔️ THE BATTLE CARD
+# ==========================================
+# **AN EMBED IS THE WRONG SHAPE FOR A BATTLE, AND THE BUTTONS ARE THE REASON.** An embed
+# and its View are two objects that Discord happens to render next to each other: the
+# log, the rosters and the field line live in the embed, the actions live underneath,
+# and nothing ties them together. A duel is one thing on screen, and it is now one
+# object - the same `LayoutView` machinery `!dex` and `!view` were rebuilt on.
+#
+# What that actually buys, beyond looking of a piece with the rest of the bot:
+#
+#   * the picture sits INSIDE the card rather than under it, so a turn is one block a
+#     player reads top to bottom instead of a caption and a photograph;
+#   * the card can be reposted whole. An embed-plus-view has to be re-sent as two
+#     arguments that can disagree, which is how the scene kept vanishing - see
+#     `scene_attachment`, which exists because five call sites got that wrong.
+#
+# **THE CARD IS REBUILT, NEVER PATCHED**, exactly as `utils/cards.py` says: one code
+# path decides what is on screen and it runs every time anything changes. A battle has
+# more reasons to redraw than a dex entry does - a faint, a swap, a transformation, a
+# forced pivot - and editing components in place is how a dashboard ends up offering a
+# move belonging to a specimen that left the field two turns ago.
+
+# A container's whole text budget is 4000 characters and the log is the only part that
+# grows without limit. The rest of the card - two roster lines, a field line, a footer -
+# runs to a few hundred, so the log is capped well inside it rather than at the edge.
+BATTLE_LOG_LIMIT = 2600
+
+
+def roster_bar(team):
+    """`🔴🔴⚫` - one mark per specimen, filled while it is still standing."""
+    return "".join("🔴" if member.get('current_hp', 0) > 0 else "⚫"
+                   for member in team or []) or "—"
+
+
+def status_tag(specimen):
+    """` [BRN]`, or nothing at all. The picture carries this too; the text is for
+    anybody reading on a screen reader, and for the moment the render fails."""
+    status = (specimen or {}).get('status_condition') or {}
+    name = status.get('name') if isinstance(status, dict) else None
+    return f" `{str(name).upper()}`" if name else ""
+
+
+def battle_container(state, combat_log, *, title, accent, footer=None,
+                     scene_name=None, side_names=None):
+    """
+    One turn as a container: what happened, the field, who is standing, and the picture.
+
+    `scene_name` is the attachment filename when there is a rendered scene to show. It
+    is NOT a URL - the file travels with the message and the gallery points at it by
+    name, which is what keeps the picture and the card a single edit rather than two.
+    """
+    left_key, right_key = battle_sides(state)
+    left, right = side_active(state, left_key), side_active(state, right_key)
+    labels = side_names or ("Your", "Rival")
+
+    container = ui.Container(accent_colour=accent)
+    container.add_item(ui.TextDisplay(f"### {title}"))
+
+    if scene_name:
+        container.add_item(ui.MediaGallery(discord.MediaGalleryItem(
+            f"attachment://{scene_name}",
+            description="The battlefield, with both specimens and their health.")))
+
+    # WHO IS STANDING, on one line each. Two embed fields became this, and the roster
+    # marks moved onto the same line as the name they belong to - a `Team: 🔴🔴⚫`
+    # underneath a heading was two lines saying one thing.
+    standing = []
+    for label, specimen, key in ((labels[0], left, left_key),
+                                 (labels[1], right, right_key)):
+        if not specimen:
+            continue
+        standing.append(
+            f"{'🟢' if key == left_key else '🔴'} **{label} "
+            f"{str(specimen.get('name', '?')).capitalize()}**{status_tag(specimen)}  "
+            f"{roster_bar(side_team(state, key))}")
+    if standing:
+        container.add_item(ui.TextDisplay("\n".join(standing)))
+
+    field_line = describe_field(state)
+    if field_line:
+        container.add_item(ui.TextDisplay(f"🌍 {field_line}"))
+
+    log = str(combat_log or '').strip()
+    if log:
+        container.add_item(ui.Separator(visible=True,
+                                        spacing=discord.SeparatorSpacing.small))
+        container.add_item(ui.TextDisplay(trim_log(log)))
+
+    if footer:
+        container.add_item(ui.TextDisplay(f"-# {footer}"))
+
+    return container
+
+
+class BattleCard(ui.LayoutView):
+    """
+    A duel on screen: one container, the actions underneath, redrawn from the state.
+
+    Subclasses supply `battle_state()` and `action_rows()`; everything above the buttons
+    is `battle_container`, so the PvE dashboard and the PvP one cannot come to disagree
+    about how a battle looks - which they had, down to whether the roster marks carried
+    a "Team:" label and whether the field line appeared at all.
+    """
+
+    TITLE = "⚔️ Ecological Field Duel"
+    ACCENT = discord.Colour.blue()
+    SIDE_NAMES = ("Your", "Rival")
+
+    def __init__(self, *, timeout=BATTLE_IDLE_TIMEOUT):
+        super().__init__(timeout=timeout)
+        # What the card is currently saying. Held on the view rather than passed to
+        # every redraw, because a redraw triggered by a button press - a tab, a cancel -
+        # has no log of its own and must not blank the one on screen.
+        self.log = ""
+        self.footer = None
+        self.scene_name = None
+
+    # --- what a subclass fills in ------------------------------------
+    def battle_state(self):
+        raise NotImplementedError
+
+    def action_rows(self):
+        return []
+
+    def title(self):
+        return self.TITLE
+
+    def accent(self):
+        return self.ACCENT
+
+    def side_names(self):
+        return self.SIDE_NAMES
+
+    # --- assembly ----------------------------------------------------
+    def rebuild(self):
+        """Draw the whole card again from the state. Returns self, to chain."""
+        self.clear_items()
+        state = self.battle_state() or {}
+
+        container = battle_container(
+            state, self.log,
+            title=self.title(), accent=self.accent(), footer=self.footer,
+            scene_name=self.scene_name, side_names=self.side_names())
+
+        # The actions go INSIDE the container, so the card is one block rather than a
+        # panel with a detached strip of buttons under it.
+        rows = [line for line in self.action_rows() if line is not None]
+        if rows:
+            container.add_item(ui.Separator(
+                visible=True, spacing=discord.SeparatorSpacing.small))
+            for line in rows:
+                container.add_item(line)
+
+        self.add_item(container)
+        return self
+
+    async def show(self, interaction=None, combat_log=None, battle_file=None,
+                   *, footer=None, channel=None):
+        """
+        Put the card back on screen as the NEWEST message in the channel.
+
+        `combat_log=None` means "say what you were already saying" - a redraw triggered
+        by a button that changes no state, like backing out of a swap menu, must not
+        blank the log of the turn that is on screen.
+        """
+        if combat_log is not None:
+            self.log = combat_log
+        self.footer = footer
+        # A failed render leaves the card WITHOUT a gallery rather than with one
+        # pointing at an attachment that was never sent, which renders as a broken
+        # image. `render_scene` returns None rather than raising, so this is the
+        # ordinary case on a slow host, not an exception.
+        self.scene_name = getattr(battle_file, 'filename', None)
+        self.rebuild()
+        return await post_battle_card(self.battle_state(), self, battle_file,
+                                      interaction=interaction, channel=channel)
+
+    def retire(self, notice=None):
+        """Take the card out of service: no buttons, and say why on the card itself."""
+        self.footer = notice or self.footer
+        self.clear_items()
+        state = self.battle_state() or {}
+        self.add_item(battle_container(
+            state, self.log, title=self.title(), accent=discord.Colour.dark_grey(),
+            footer=self.footer, scene_name=self.scene_name,
+            side_names=self.side_names()))
+        self.stop()
+        return self
+
+
+async def post_battle_card(state, view, battle_file=None, *, interaction=None,
+                           channel=None, embed=None):
+    """
+    Send the card as a new message and take the previous one down.
+
+    **THE CARD IS REPOSTED, NOT EDITED.** A duel was one message edited in place, which
+    is tidy until anybody says anything: three lines of conversation and the battle has
+    scrolled off, so every turn began with hunting for it. Reposting puts the card back
+    at the bottom where the player is already looking.
+
+    **SEND FIRST, THEN DELETE**, and never the other way round. Deleting first leaves a
+    window with no battle on screen at all, and if the send then fails the duel is
+    invisible with no way back to it. A delete that fails leaves a duplicate card, which
+    is untidy and recoverable; a send that fails after a delete is a lost battle.
+
+    The old card is deleted rather than left behind because the log is CUMULATIVE - the
+    newest card carries everything the old one said - so keeping them would be keeping
+    the same text fifteen times over.
+    """
+    state = state if isinstance(state, dict) else {}
+    previous = state.get('message_obj')
+    channel = (channel
+               or getattr(previous, 'channel', None)
+               or getattr(interaction, 'channel', None))
+    if channel is None:                                        # pragma: no cover
+        print("⚠️ No channel to post the battle card to.")
+        return previous
+
+    payload = {'view': view}
+    if battle_file is not None:
+        payload['file'] = battle_file
+    # **TEMPORARY, AND IT SHOULD LEAVE WITH THE PvP CONVERSION.** The PvP dashboard is
+    # still an embed-and-View pair, and Discord refuses an embed beside a LayoutView -
+    # so it hands its embed through here rather than keeping a second copy of the
+    # send-and-delete dance. `message_obj` is written in exactly ONE place, and that is
+    # worth more than the tidiness of not having this parameter for a while.
+    if embed is not None:
+        payload['embed'] = embed
+
+    try:
+        message = await channel.send(**payload)
+    except Exception as send_error:
+        # The old card is still up, because nothing has been deleted yet.
+        print(f"🚨 Could not post the battle card: {send_error!r}")
+        return previous
+
+    state['message_obj'] = message
+    if previous is not None and getattr(previous, 'id', None) != message.id:
+        try:
+            await previous.delete()
+        except Exception:
+            # Already gone, or no permission to tidy up. The duel carries on from the
+            # new card either way.
+            pass
+    return message
+
+
+def trim_log(text, limit=BATTLE_LOG_LIMIT):
+    """A battle log a container will accept, trimmed from the FRONT if it must be.
+
+    The tail is what is kept, for the same reason `battle_log_description` keeps it: the
+    end of a log is the knockout, the rewards and the level-ups - the part somebody is
+    actually reading for.
+    """
+    text = str(text or '')
+    if len(text) <= limit:
+        return text
+    notice = "*…earlier events trimmed.*\n\n"
+    return notice + text[-(limit - len(notice)):]
+
+
 def scene_attachment(embed, battle_file):
     """
     Bind a rendered scene to `embed`, tolerating the render having failed.
@@ -4962,7 +5226,7 @@ class ForfeitConfirm(discord.ui.View):
             content="💪 You stayed in the field.", view=None)
 
 
-class BattleDashboard(discord.ui.View):
+class BattleDashboard(BattleCard):
     def __init__(self, cog, user_id, ctx):
         super().__init__(timeout=BATTLE_IDLE_TIMEOUT)
         self.cog = cog
@@ -4972,6 +5236,16 @@ class BattleDashboard(discord.ui.View):
         # cannot both fight one. Declared here rather than left to `getattr` so the
         # attribute is visible on the class that owns it.
         self._resolving = False
+        # Built by `refresh_buttons`, which is async because the mega/gigantamax check
+        # is a database read. `action_rows` only hands them over - a card redrawn by a
+        # button press must not have to go back to the database to know what it says.
+        self._rows = []
+
+    def battle_state(self):
+        return self.cog.active_battles.get(self.user_id) or {}
+
+    def action_rows(self):
+        return self._rows
 
     async def on_timeout(self):
         """Nobody came back. Release the trainer rather than stranding them."""
@@ -4995,36 +5269,14 @@ class BattleDashboard(discord.ui.View):
         return view
 
     async def render_dashboard(self, interaction, combat_log):
-        """Helper function to redraw the UI after a Forced Swap without advancing the turn."""
+        """Redraw the card after a forced swap, without advancing the turn."""
         state = await battle_or_farewell(self, interaction)
         if state is None:
             return
-        p_active = state['player_team'][state['active_player_index']]
-        n_active = state['npc_team'][state['active_npc_index']]
-        
-        embed = discord.Embed(title=f"⚔️ Ecological Field Duel", color=discord.Color.blue())
-        embed.description = combat_log
-        
-        p_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['player_team']])
-        n_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['npc_team']])
-        p_status_icon = f" [{p_active['status_condition']['name'].upper()}]" if p_active.get('status_condition') else ""
-        n_status_icon = f" [{n_active['status_condition']['name'].upper()}]" if n_active.get('status_condition') else ""
-        
-        embed.add_field(name=f"🟢 Your {p_active['name'].capitalize()}{p_status_icon}", value=f"Team: {p_roster}", inline=True)
-        embed.add_field(name=f"🔴 Rival {n_active['name'].capitalize()}{n_status_icon}", value=f"Team: {n_roster}", inline=True)
-        add_field_conditions(embed, state)
 
-        # ==========================================
-        # FETCH AND PASS HUD OVERLAYS TO VISUAL ENGINE
-        # ==========================================
-        current_weather = state.get('weather', {'type': 'none'})['type']
-        
         battle_file = await render_scene(state)
-        # ==========================================
         await self.refresh_buttons()
-        # Dynamically grab the new randomized filename!
-        await interaction.edit_original_response(
-            embed=embed, view=self, attachments=scene_attachment(embed, battle_file))
+        await self.show(interaction, combat_log, battle_file)
 
     async def check_for_evolution(self, db, user_id, specimen, combat_log, guild_id=None):
         """Thin wrapper so existing PvE call sites keep working. See the module-level
@@ -5204,32 +5456,10 @@ class BattleDashboard(discord.ui.View):
             # 3. RE-RENDER THE BATTLEFIELD
             print("DEBUG: Preparing UI and fetching artwork...")
             combat_log = f"**Turn {state['turn_number']}**\n\n{log_msg}\n\nWhat will you do next?"
-            
-            embed = discord.Embed(title=f"⚔️ Ecological Field Duel", color=discord.Color.purple())
-            embed.description = combat_log
-            
-            p_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['player_team']])
-            n_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['npc_team']])
-            
-            p_status_icon = f" [{p_active['status_condition']['name'].upper()}]" if p_active.get('status_condition') else ""
-            n_status_icon = f" [{n_active['status_condition']['name'].upper()}]" if n_active.get('status_condition') else ""
-            
-            embed.add_field(name=f"🟢 Your {p_active['name'].capitalize()}{p_status_icon}", value=f"Team: {p_roster}\n*See visual biometrics below*", inline=True)
-            embed.add_field(name=f"🔴 Rival {n_active['name'].capitalize()}{n_status_icon}", value=f"Team: {n_roster}\n*See visual biometrics below*", inline=True)
-            add_field_conditions(embed, state)
-            
-            # ==========================================
-            # FETCH AND PASS HUD OVERLAYS TO VISUAL ENGINE
-            # ==========================================
-            current_weather = state.get('weather', {'type': 'none'})['type']
-            
-            battle_file = await render_scene(state)
-            
-            # Dynamically grab the new randomized filename!
-            scene = scene_attachment(embed, battle_file)
-            await self.refresh_buttons()
 
-            await interaction.edit_original_response(embed=embed, view=self, attachments=scene)
+            battle_file = await render_scene(state)
+            await self.refresh_buttons()
+            await self.show(interaction, combat_log, battle_file)
             print("=== DEBUG: handle_transformation COMPLETE ===")
 
         except Exception as e:
@@ -5239,8 +5469,15 @@ class BattleDashboard(discord.ui.View):
 
 
     async def refresh_buttons(self):
-        """Dynamically builds the UI buttons so they can be easily redrawn after a faint."""
-        self.clear_items()
+        """Rebuild the action rows so they can be redrawn after a faint or a swap.
+
+        Async because the mega and gigantamax check is a database read. The rows are
+        stored rather than added straight to the view: the card is a container now, and
+        `rebuild` decides where they go.
+        """
+        self._rows = []
+        moves, actions, gimmicks = [], [], []
+
         # NO INTERACTION HERE, so there is nobody to apologise to - but a redraw
         # requested for a duel that has ended must leave the dashboard empty and
         # stopped rather than raising inside whatever was rendering it.
@@ -5289,7 +5526,7 @@ class BattleDashboard(discord.ui.View):
                 custom_id="move_recharge_dummy" 
             )
             recharge_btn.callback = self.handle_move
-            self.add_item(recharge_btn)
+            moves.append(recharge_btn)
             
         elif total_pp <= 0 or not usable_moves(p_active, n_active):
             # Exhausted, or every move locked away by Disable / Taunt / Torment /
@@ -5301,7 +5538,7 @@ class BattleDashboard(discord.ui.View):
                 custom_id="move_struggle_struggle" 
             )
             struggle_btn.callback = self.handle_move
-            self.add_item(struggle_btn)
+            moves.append(struggle_btn)
         else:
             for i, move_dict in enumerate(p_active['moves']):
                 move_name = move_dict['name']
@@ -5394,20 +5631,20 @@ class BattleDashboard(discord.ui.View):
                     btn_label = f"⏳ Execute {move_name.replace('-', ' ').title()}" if not disabled_flag else move_name.capitalize()
                 # ==========================================
 
-                btn = discord.ui.Button(label=btn_label, style=btn_style, custom_id=custom_id, row=0, disabled=disabled_flag)
+                btn = discord.ui.Button(label=btn_label, style=btn_style, custom_id=custom_id, disabled=disabled_flag)
                 
                 # Only wire the callback if it's an actual, clickable attack
                 if not disabled_flag and not custom_id.startswith('locked'):
                     btn.callback = self.handle_move
                     
-                self.add_item(btn)
+                moves.append(btn)
 
         if not is_charging and not is_recharging:
 
             # 2. Draw Medical Supplies (Row 1)
-            bag_btn = discord.ui.Button(label="🎒 Open Bag", style=discord.ButtonStyle.success, custom_id="action_bag", row=1)
+            bag_btn = discord.ui.Button(label="🎒 Open Bag", style=discord.ButtonStyle.success, custom_id="action_bag")
             bag_btn.callback = self.open_bag
-            self.add_item(bag_btn)
+            actions.append(bag_btn)
 
             # --- The Swap Button ---
             # We disable it if there are no other healthy specimens on the team!
@@ -5418,19 +5655,19 @@ class BattleDashboard(discord.ui.View):
             volatiles = p_active.get('volatile_statuses', {})
 
             is_trapped = specimen_is_trapped(p_active, n_active)
-            swap_btn = discord.ui.Button(label="🔄 Swap Specimen", style=discord.ButtonStyle.secondary, custom_id="action_swap", row=1)
+            swap_btn = discord.ui.Button(label="🔄 Swap Specimen", style=discord.ButtonStyle.secondary, custom_id="action_swap")
             swap_btn.disabled = len(healthy_bench) == 0 or is_trapped
             swap_btn.callback = self.handle_swap
-            self.add_item(swap_btn)
+            actions.append(swap_btn)
 
             # --- The Forfeit Button ---
             # Wild and NPC expeditions can be walked away from; the confirmation step
             # lives in ForfeitConfirm so a stray click cannot end the battle.
             forfeit_btn = discord.ui.Button(label="🏳️ Forfeit",
                                             style=discord.ButtonStyle.danger,
-                                            custom_id="action_forfeit", row=1)
+                                            custom_id="action_forfeit")
             forfeit_btn.callback = self.handle_forfeit
-            self.add_item(forfeit_btn)
+            actions.append(forfeit_btn)
 
             # ==========================================
             # 3. THE HYPER-ADAPTATION SCANNER (Row 2)
@@ -5449,11 +5686,11 @@ class BattleDashboard(discord.ui.View):
                 # A. Z-MOVE CHECK (Requires Z-Ring and Z-crystal)
                 if holding_crystal and key_items.get('z_ring'):
                     if state['adaptation'].get('z_toggled', False):
-                        btn = discord.ui.Button(label="🔄 Cancel Z-Power", style=discord.ButtonStyle.secondary, custom_id="transform_0_zmove", row=2)
+                        btn = discord.ui.Button(label="🔄 Cancel Z-Power", style=discord.ButtonStyle.secondary, custom_id="transform_0_zmove")
                     else:
-                        btn = discord.ui.Button(label="🌟 Unleash Z-Move", style=discord.ButtonStyle.primary, custom_id="transform_0_zmove", row=2)
+                        btn = discord.ui.Button(label="🌟 Unleash Z-Move", style=discord.ButtonStyle.primary, custom_id="transform_0_zmove")
                     btn.callback = self.handle_transformation
-                    self.add_item(btn)
+                    gimmicks.append(btn)
                     gimmick_found = True
 
                 # B. MEGA & G-MAX DATABASE CHECK
@@ -5485,26 +5722,32 @@ class BattleDashboard(discord.ui.View):
                     # Dynamic button styling based on whether it's a Z-Mega or Standard Mega
                     btn_label = "⚡ Z-Mega Evolve" if held_item.endswith('-z') else "🧬 Mega Evolve"
                     
-                    btn = discord.ui.Button(label=btn_label, style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
+                    btn = discord.ui.Button(label=btn_label, style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}")
                     
                     btn.callback = self.handle_transformation
-                    self.add_item(btn)
+                    gimmicks.append(btn)
                     gimmick_found = True
                 
                 # 2. GIGANTAMAX (Requires Dynamax Band; Primal species are locked out)
                 if gmax_form and gmax_factor and key_items.get('dynamax_band') and can_dynamax(p_active):
                     form_id, form_name = gmax_form
-                    btn = discord.ui.Button(label=f"🌪️ Gigantamax", style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}", row=2)
+                    btn = discord.ui.Button(label=f"🌪️ Gigantamax", style=discord.ButtonStyle.danger, custom_id=f"transform_{form_id}_{form_name}")
                     btn.callback = self.handle_transformation
-                    self.add_item(btn)
+                    gimmicks.append(btn)
                     gimmick_found = True
                     
                 # 3. GENERIC DYNAMAX (Requires Dynamax Band, only spawns if no other gimmick
                 # is ready; Primal species are locked out)
                 if not gimmick_found and key_items.get('dynamax_band') and can_dynamax(p_active):
-                    btn = discord.ui.Button(label="🔴 Dynamax", style=discord.ButtonStyle.danger, custom_id="transform_0_dynamax", row=2)
+                    btn = discord.ui.Button(label="🔴 Dynamax", style=discord.ButtonStyle.danger, custom_id="transform_0_dynamax")
                     btn.callback = self.handle_transformation
-                    self.add_item(btn)
+                    gimmicks.append(btn)
+
+        # The three rows the buttons used to declare with `row=`, built from the lists
+        # they were sorted into. Empty rows are dropped rather than added blank: a
+        # container with a row holding nothing is a gap on the card, and a specimen that
+        # is recharging has neither actions nor gimmicks to offer.
+        self._rows = [row(*group) for group in (moves, actions, gimmicks) if group]
 
     async def handle_swap(self, interaction: discord.Interaction):
         if str(interaction.user.id) != self.user_id:
@@ -8247,35 +8490,14 @@ class BattleDashboard(discord.ui.View):
 
             # --- PHASE 5: UI RENDER ---
             state['turn_number'] += 1
-            
-            embed = discord.Embed(title=f"⚔️ Ecological Field Duel", color=discord.Color.blue())
-            embed.description = combat_log
-            
-            # --- Generate Roster Indicators ---
-            p_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['player_team']])
-            n_roster = "".join(["🔴" if p['current_hp'] > 0 else "⚫" for p in state['npc_team']])
-            
-            p_status_icon = f" [{p_active['status_condition']['name'].upper()}]" if p_active.get('status_condition') else ""
-            n_status_icon = f" [{n_active['status_condition']['name'].upper()}]" if n_active.get('status_condition') else ""
-            
-            embed.add_field(name=f"🟢 Your {p_active['name'].capitalize()}{p_status_icon}", value=f"Team: {p_roster}\n*See visual biometrics below*", inline=True)
-            embed.add_field(name=f"🔴 Rival {n_active['name'].capitalize()}{n_status_icon}", value=f"Team: {n_roster}\n*See visual biometrics below*", inline=True)
-            add_field_conditions(embed, state)
 
             print("DEBUG 10: Generating Battle Scene and dispatching to Discord")
 
-            # ==========================================
-            # PASS HUD OVERLAYS TO VISUAL ENGINE
-            # ==========================================
-            current_weather = state.get('weather', {'type': 'none'})['type']
-            
             battle_file = await render_scene(state)
-            # ==========================================
             await self.refresh_buttons()
-            # Dynamically grab the new randomized filename!
-            # If the image generated successfully, overwrite the old attachments with the new one!
-            await interaction.edit_original_response(
-                embed=embed, view=self, attachments=scene_attachment(embed, battle_file))
+            # Reposted rather than edited, so the card is at the bottom of the channel
+            # where the player is already looking. See `post_battle_card`.
+            await self.show(interaction, combat_log, battle_file)
             print("=== DEBUG: process_turn_end COMPLETE ===")
         
         except Exception as e:
@@ -8929,7 +9151,9 @@ class Combat(commands.Cog):
             dashboard_view = PvPDashboard(self, shared_state)
 
             print("DEBUG: Sending final payload to Discord...")
-            shared_state['message_obj'] = await channel.send(embed=embed, files=scene, view=dashboard_view)
+            await post_battle_card(shared_state, dashboard_view,
+                                   scene[0] if scene else None,
+                                   channel=channel, embed=embed)
             print("=== DEBUG: PvP Initialization COMPLETE ===")
 
         except Exception as e:
@@ -11295,25 +11519,22 @@ class Combat(commands.Cog):
             combat_log = await trigger_single_entry_ability(p_lead, n_lead, "Your", state, combat_log)
             combat_log = await trigger_single_entry_ability(n_lead, p_lead, "The Warden's", state, combat_log)
 
-            embed = discord.Embed(title=f"🛡️ Warden Skirmish: {biome.title()} Sector", color=discord.Color.dark_purple())
-            embed.description = combat_log
-            
-            embed.add_field(name=f"🟢 Your {p_lead['name'].capitalize()}", value=f"Team: {p_roster}", inline=True)
-            embed.add_field(name=f"🔴 {warden_data['title']}'s {n_lead['name'].capitalize()}", value=f"Team: {n_roster}", inline=True)
-            add_field_conditions(embed, state)
-            embed.set_footer(text="Defeat the Warden to secure clearance for the next biome.")
-            
-            # Since we just fired entry abilities, grab the latest weather from the state!
-            current_weather = state.get('weather', {'type': 'none'})['type']
-
             # Generate the Battle Image
             battle_file = await render_scene(state)
 
-            # Dynamically grab the new randomized filename!
-            scene = scene_attachment(embed, battle_file)
-
             dashboard_view = await BattleDashboard.create(self, user_id, ctx)
-            await ctx.send(embed=embed, files=scene, view=dashboard_view)
+            # A Warden card names the Warden rather than "Rival", and is dressed in the
+            # sector's own colour. Everything else about it is the shared card.
+            dashboard_view.TITLE = f"🛡️ Warden Skirmish: {biome.title()} Sector"
+            dashboard_view.ACCENT = discord.Color.dark_purple()
+            dashboard_view.SIDE_NAMES = ("Your", f"{warden_data['title']}'s")
+            dashboard_view.log = combat_log
+            dashboard_view.footer = ("Defeat the Warden to secure clearance for the "
+                                     "next biome.")
+            dashboard_view.scene_name = getattr(battle_file, 'filename', None)
+            dashboard_view.rebuild()
+            await post_battle_card(state, dashboard_view, battle_file,
+                                   channel=ctx.channel)
 
         except Exception as e:
             print("\n🚨 CRITICAL CRASH IN WARDEN INITIALIZATION 🚨")
@@ -12161,19 +12382,19 @@ class Combat(commands.Cog):
 
             battle_file = await render_scene(state)
 
-            # Attach the file to the embed
-            # Dynamically grab the new randomized filename!
-            scene = scene_attachment(embed, battle_file)
-            print("DEBUG: Battle scene generated and attached.")
-
-            print("file generated and attached")
-            
             print("DEBUG: Sending final payload to Discord...")
             dashboard_view = await BattleDashboard.create(self, user_id, ctx)
+            # The FIRST card of the duel, and the one every later repost replaces. It is
+            # remembered on the state because that is how `post_battle_card` finds the
+            # message to take down - PvE had no `message_obj` at all before, which is
+            # why its dashboard could only ever be edited through the interaction.
+            dashboard_view.log = combat_log
+            dashboard_view.footer = "Use the buttons to command your specimen."
+            dashboard_view.scene_name = getattr(battle_file, 'filename', None)
+            dashboard_view.rebuild()
+            await post_battle_card(state, dashboard_view, battle_file,
+                                   channel=ctx.channel)
             print("=== DEBUG: npcduel execution COMPLETE ===")
-            # Send the embed WITH the file and the view
-            print("View attached")
-            await ctx.send(embed=embed, files=scene, view=dashboard_view)
         except Exception as e:
             print("\n🚨 CRITICAL CRASH IN NPCDUEL INITIALIZATION 🚨")
             traceback.print_exc()
