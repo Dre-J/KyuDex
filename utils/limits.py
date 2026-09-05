@@ -87,6 +87,57 @@ def describe_yield(multiplier):
 
 
 # ==========================================
+# DIRECTIVE GRANTS
+# ==========================================
+# **CULLING WAS THE MONEY SUPPLY.** An Invasive Species Management directive paid
+# `required_amount * 250`, and required_amount is 5-12, so one directive was worth
+# 1,250-3,000 Eco Tokens. The other two paid a Great Ball. At a 10:1 gap nobody ran
+# anything but culling, which made it both the inflation source AND the reason the other
+# two looked pointless - and a notebook holds twenty, so they were hoarded and dumped in
+# one `!claim`.
+#
+# The per-kill rate is cut in `utils/directives.py`. This is the other half: the fifth
+# claim of a day is worth less than the first, so twenty banked directives cannot be
+# cashed at full price in one go. Hoarding still works; hoarding for a *bonus* does not.
+#
+# THE SAME SHAPE AS THE EXPEDITION CAP, deliberately - a soft cap, a half-life and a
+# floor rather than a refusal. "Come back tomorrow" is the blunt answer that lands on
+# whoever is playing most, and this repo has taken it out twice already.
+DIRECTIVE_CLAIM = 'directive-claim'
+
+# Four at full value. The brief said three to five; four is the middle of it and leaves
+# a player who finishes a directive or two an evening entirely untouched by this.
+DIRECTIVE_SOFT_CAP = 4
+DIRECTIVE_DIMINISH_HALF_LIFE = 3
+DIRECTIVE_DIMINISH_FLOOR = 0.15
+
+
+def directive_yield(claimed_today):
+    """
+    The multiplier on a directive's grant, given how many were claimed today already.
+
+    1.0 through the soft cap, then halving every DIRECTIVE_DIMINISH_HALF_LIFE claims,
+    never below DIRECTIVE_DIMINISH_FLOOR.
+
+    `claimed_today` is the count BEFORE this claim, so the fifth claim of the day is the
+    first that decays - which is what "the first four at full value" says.
+    """
+    excess = (claimed_today or 0) - DIRECTIVE_SOFT_CAP
+    if excess < 0:
+        return 1.0
+    factor = 0.5 ** (excess / float(DIRECTIVE_DIMINISH_HALF_LIFE))
+    return max(DIRECTIVE_DIMINISH_FLOOR, factor)
+
+
+def describe_directive_yield(multiplier):
+    """A short phrase for the claim summary, or None while nothing is being withheld."""
+    if multiplier >= 0.999:
+        return None
+    return (f"diminishing returns · {int(round(multiplier * 100))}% grant · "
+            f"resets in {describe_reset()}")
+
+
+# ==========================================
 # FIELD ENERGY
 # ==========================================
 # The npcduel stamina meter. The numbers live here rather than in cogs/combat.py because

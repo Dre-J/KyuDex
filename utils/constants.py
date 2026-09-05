@@ -4089,6 +4089,76 @@ def build_mint_stock():
 
 EQUIPMENT_CATALOG.update(build_mint_stock())
 
+
+# ==========================================
+# 🔒 WHAT THE SHOP DOES NOT SELL
+# ==========================================
+# **THE SHOP SOLD ALMOST EVERYTHING, WHICH LEFT NOTHING FOR A DROP TO BE ABOUT.** A
+# directive that pays a Great Ball pays 100 tokens of something the player can buy in the
+# same breath, so the reward is worth less than reading the directive - and that teaches
+# people not to read them. Any economy needs a class of goods that only comes from doing
+# the activity, and this is it.
+#
+# **NAMED SETS, NOT CATEGORY SWEEPS**, because the categories do not carve where the
+# design does. Three things a sweep would have got wrong:
+#
+#   * `rare-candy` sits in `evoitems`, so pulling "evolution items" as a shelf would
+#     have made the single most-wanted consumable in the bot unbuyable;
+#   * `metal-coat` and the seven incenses sit in `typeboost`, and `razor-claw`,
+#     `razor-fang` and `destiny-knot` in `battleitems`. They are evolution and breeding
+#     items in the source material and TYPE BOOSTERS here - things a player equips for a
+#     battle today. Pulling them would quietly remove ten working battle items from sale
+#     to reserve them for a breeding feature that has not shipped;
+#   * the mints are a clean shelf of 21 and can go as one.
+#
+# So what leaves the shop is what has no second job: the evolution ingredients proper,
+# the two pure breeding items, the mints, and the two Ability items. Everything with a
+# battle role stays on sale.
+BREEDING_ITEMS = frozenset({'destiny-knot', 'everstone'})
+
+# The Ability items and the mints - pure grind-reduction. They change no ceiling, they
+# only spare somebody the re-roll, which is exactly what makes them a good drop and a
+# bad thing to be able to buy twenty of.
+GRIND_ITEMS = frozenset({'ability-capsule', 'ability-patch'}) | frozenset(NATURE_MINTS)
+
+# **THE TEN ELEMENTAL STONES STAY ON SALE**, and this is the one place the brief was
+# followed by halves rather than to the letter. Pulling all 32 evolution items was
+# measured before it was kept: it puts any ONE stone at a 1.6% roll per directive, which
+# is not an exciting drop, it is a Vulpix that cannot evolve. The same document that
+# asks for a reserved pool also names the exception - "access shouldn't be a barrier;
+# cheap and always available" - and a 500-token Fire Stone is squarely that.
+#
+# What is reserved instead is the scarce half of the shelf: the trade ingredients, the
+# armours, the apples and the scrolls. Those gate ONE evolution each, nobody needs a
+# second, and there is no routine demand for them to block.
+ELEMENTAL_STONES = frozenset({
+    'fire-stone', 'water-stone', 'thunder-stone', 'leaf-stone', 'moon-stone',
+    'sun-stone', 'shiny-stone', 'dusk-stone', 'dawn-stone', 'ice-stone',
+})
+
+# Everything on the `evoitems` shelf whose only purpose is to fire an evolution, less
+# the three exclusions above: a Rare Candy is a progression consumable that happens to
+# be filed here, an Everstone is listed under breeding, and the stones stay buyable.
+EVOLUTION_ITEMS = frozenset(
+    key for key, meta in EQUIPMENT_CATALOG.items()
+    if meta.get('category') == 'evoitems'
+    and key not in {'rare-candy'} | BREEDING_ITEMS | ELEMENTAL_STONES)
+
+# The whole reserved pool, and the ONLY thing that decides what the market shows: the
+# catalogue literal above is left exactly as it was written, and this one statement
+# flips the flag. A category re-shelved upstream therefore cannot silently put a
+# reserved item back on the shelf.
+DIRECTIVE_EXCLUSIVE_ITEMS = EVOLUTION_ITEMS | BREEDING_ITEMS | GRIND_ITEMS
+
+for _reserved in DIRECTIVE_EXCLUSIVE_ITEMS:
+    if _reserved in EQUIPMENT_CATALOG:
+        EQUIPMENT_CATALOG[_reserved]['purchasable'] = False
+
+
+def is_directive_exclusive(item_key):
+    """Whether this item is reserved to fieldwork rather than sold."""
+    return str(item_key or '').strip().lower() in DIRECTIVE_EXCLUSIVE_ITEMS
+
 # A known new moon, and the mean synodic month. Good to a few hours over a century, which
 # is far better than this needs to be.
 _NEW_MOON_EPOCH = 1136073600    # 2006-01-01 00:00 UTC, near a new moon

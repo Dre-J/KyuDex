@@ -41,7 +41,10 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              nectar_for, drinks_nectar,
                              iv_percentage as iv_percentage_of)
 from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
-                          record_use, used_today, expedition_yield, describe_yield)
+                          record_use, used_today, expedition_yield, describe_yield,
+                          DIRECTIVE_CLAIM, directive_yield,
+                          describe_directive_yield, describe_reset)
+from utils import directives as D
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs, pretty_item
 import re
 from utils import checks
@@ -1445,11 +1448,8 @@ def analysis_embed(issued, *, wanted, held, room, open_after):
     lines = []
     for entry in issued:
         emoji, heading, _ = describe_directive(entry['objective_type'], entry['target'])
-        reward = (f"💰 {entry['reward_payload']} Eco Tokens"
-                  if entry['reward_type'] == 'eco_tokens'
-                  else f"📦 1x {entry['reward_payload'].replace('-', ' ').title()}")
         lines.append(f"{emoji} `#{entry['directive_id']}` **{heading}** "
-                     f"×{entry['required']} — {reward}")
+                     f"×{entry['required']} — {D.reward_line(entry)}")
 
     # 20 directives at ~90 characters each is comfortably inside the 1024-character
     # field limit, but the limit is real and silent, so it is enforced rather than
@@ -1504,17 +1504,18 @@ class DirectiveSelect(discord.ui.Select):
     def __init__(self, paginator):
         self.paginator = paginator
         options = []
-        for index, row in enumerate(paginator.directives):
-            d_id, obj_type, target, req_amt, curr_prog = row[0], row[1], row[2], row[3], row[4]
-            emoji, heading, _ = describe_directive(obj_type, target)
+        for index, entry in enumerate(paginator.directives):
+            emoji, heading, _ = describe_directive(entry['objective_type'],
+                                                   entry['target_variable'])
             options.append(discord.SelectOption(
                 # The ID is on the label because it is what `!abandon` and
                 # `!survey <id>` take, and a menu that hides it makes those two
                 # commands guesswork.
-                label=f"#{d_id} · {heading}"[:100],
+                label=f"#{entry['directive_id']} · {heading}"[:100],
                 value=str(index),
                 emoji=emoji,
-                description=f"{curr_prog}/{req_amt} complete"[:100]))
+                description=f"{entry['current_progress']}/{entry['required_amount']}"
+                            f" complete"[:100]))
         super().__init__(placeholder="Jump to a directive…", options=options, row=0)
 
     async def callback(self, interaction):
@@ -1570,13 +1571,17 @@ class AbandonSelect(discord.ui.Select):
     def __init__(self, panel):
         self.panel = panel
         options = []
-        for d_id, obj_type, target, req_amt, curr_prog in panel.directives:
-            emoji, heading, _ = describe_directive(obj_type, target)
+        for entry in panel.directives:
+            emoji, heading, _ = describe_directive(entry['objective_type'],
+                                                   entry['target_variable'])
             options.append(discord.SelectOption(
-                label=f"#{d_id} \u00b7 {heading}"[:100],
-                value=str(d_id),
+                label=f"#{entry['directive_id']} \u00b7 {heading}"[:100],
+                value=str(entry['directive_id']),
                 emoji=emoji,
-                description=f"{curr_prog}/{req_amt} complete"[:100]))
+                # What is being thrown away, so a half-finished directive is not
+                # abandoned by somebody who could not see how far in they were.
+                description=f"{entry['current_progress']}/{entry['required_amount']}"
+                            f" complete \u00b7 {D.reward_line(entry)}"[:100]))
         super().__init__(
             placeholder="Choose the directives to abandon\u2026",
             options=options, min_values=1, max_values=len(options), row=0)
@@ -1618,11 +1623,14 @@ class AbandonPanel(discord.ui.View):
                         "Progress on them is lost.",
             colour=discord.Colour.dark_gray())
         if self.chosen:
-            picked = [d for d in self.directives if d[0] in self.chosen]
+            picked = [d for d in self.directives
+                      if d['directive_id'] in self.chosen]
             embed.add_field(
                 name=f"Selected ({len(picked)})",
                 value="\n".join(
-                    f"`#{d[0]}` {describe_directive(d[1], d[2])[1]}" for d in picked)[:1000],
+                    f"`#{d['directive_id']}` "
+                    f"{describe_directive(d['objective_type'], d['target_variable'])[1]}"
+                    for d in picked)[:1000],
                 inline=False)
         else:
             embed.add_field(name="Selected", value="*nothing yet*", inline=False)
@@ -1692,9 +1700,13 @@ class SurveyPaginator(discord.ui.View):
         self.next_button.disabled = self.current_index >= self.total_pages - 1
 
     async def generate_embed(self):
-        # Grab the specific directive for the current page
-        directive = self.directives[self.current_index]
-        d_id, obj_type, target, req_amt, curr_prog, rev_type, rev_payload = directive
+        # Grab the specific directive for the current page. Read by NAME - this was a
+        # seven-column positional unpack, and the two new reward columns would have
+        # widened the row underneath it.
+        entry = self.directives[self.current_index]
+        d_id = entry['directive_id']
+        obj_type, target = entry['objective_type'], entry['target_variable']
+        req_amt, curr_prog = entry['required_amount'], entry['current_progress']
 
         embed = discord.Embed(
             title="📋 Ecological Field Directives",
@@ -1717,13 +1729,11 @@ class SurveyPaginator(discord.ui.View):
         progress_text = f"`{bar}` **{curr_prog}/{req_amt}**"
         
         # --- FORMAT THE REWARD PAYLOAD ---
-        if rev_type == 'eco_tokens':
-            reward_text = f"💰 **{rev_payload}** Eco Tokens"
-        elif rev_type == 'item':
-            reward_text = f"📦 **1x** {rev_payload.replace('-', ' ').title()}"
-        else:
-            reward_text = "Standard Equipment"
-        
+        # Was written out here, and again in `!analyze`'s summary, and again in
+        # `!claim`'s receipt - all three hard-coding `1x`, so six vitamins would have
+        # read as one in every place a player could look.
+        reward_text = D.reward_line(entry)
+
         # Assemble the block
         field_value = f"{desc}\n\n{progress_text}\n**Grant:** {reward_text}"
         embed.add_field(name=task_title, value=field_value, inline=False)
@@ -4078,14 +4088,8 @@ class Ecology(commands.Cog):
 
         async with aiosqlite.connect(DB_FILE) as db:
             try:
-                async with db.execute("""
-                    SELECT directive_id, objective_type, target_variable,
-                           required_amount, current_progress
-                    FROM field_directives
-                    WHERE user_id = ? AND is_completed = 0
-                    ORDER BY directive_id ASC
-                """, (user_id,)) as cursor:
-                    directives = await cursor.fetchall()
+                directives = await D.directive_rows(
+                    db, "user_id = ? AND is_completed = 0", (user_id,))
             except Exception as e:
                 print(f"Abandon error: {e}")
                 return await ctx.send("\u274c A critical database error occurred while trying to drop the directive.")
@@ -4093,7 +4097,7 @@ class Ecology(commands.Cog):
         if not directives:
             return await ctx.send("\U0001f4cb Your field notebook is empty \u2014 there is nothing to abandon.")
 
-        held = [row[0] for row in directives]
+        held = [entry['directive_id'] for entry in directives]
         wanted, problem = parse_abandon_request(request, held)
         if problem:
             return await ctx.send(problem)
@@ -4120,14 +4124,11 @@ class Ecology(commands.Cog):
             try:
                 # Ordered, so the menu, the page numbers and `!analyze`'s summary all
                 # count the same way. Without it SQLite is free to change its mind.
-                async with db.execute("""
-                    SELECT directive_id, objective_type, target_variable, required_amount,
-                        current_progress, reward_type, reward_payload
-                    FROM field_directives
-                    WHERE user_id = ? AND is_completed = 0
-                    ORDER BY directive_id ASC
-                """, (user_id,)) as cursor:
-                    directives = await cursor.fetchall()
+                # `directive_rows` also fills in the reward quantity and tier on a
+                # database that has not had a directive issued since they were added -
+                # a READ must not migrate, so it asks rather than altering.
+                directives = await D.directive_rows(
+                    db, "user_id = ? AND is_completed = 0", (user_id,))
 
                 if not directives:
                     return await ctx.send("📋 **Field Notebook Empty:** You have no active ecological directives at this time. Explore the ecosystem to find encrypted data!")
@@ -4137,7 +4138,7 @@ class Ecology(commands.Cog):
                 # abandons the wrong directive.
                 start = 0
                 if directive_id is not None:
-                    ids = [row[0] for row in directives]
+                    ids = [entry['directive_id'] for entry in directives]
                     if directive_id not in ids:
                         listed = ", ".join(f"`{i}`" for i in ids[:20])
                         return await ctx.send(
@@ -4759,56 +4760,91 @@ class Ecology(commands.Cog):
     @checks.has_started()
     @checks.is_authorized()
     async def claim_rewards(self, ctx):
-        """Claims funding and equipment for completed field directives."""
+        """
+        Claim the grants for every finished directive. `!claim`
+
+        The first few each day pay in full and the rest taper - a notebook holds twenty,
+        and banking them all for one payday was the whole hoard-and-dump pattern.
+        """
         user_id = str(ctx.author.id)
-        
+
         async with aiosqlite.connect(DB_FILE) as db:
-        
+
             try:
                 # 1. Find all completed but unclaimed directives
-                async with db.execute("""
-                    SELECT directive_id, reward_type, reward_payload, objective_type 
-                    FROM field_directives 
-                    WHERE user_id = ? AND current_progress >= required_amount AND is_completed = 0
-                """, (user_id,)) as cursor:
-                    completed_tasks = await cursor.fetchall()
-                
+                completed_tasks = await D.directive_rows(
+                    db,
+                    "user_id = ? AND current_progress >= required_amount "
+                    "AND is_completed = 0", (user_id,))
+
                 if not completed_tasks:
                     return await ctx.send("⚠️ You have no completed directives awaiting grant disbursement.")
-                    
+
                 claim_log = "🎉 **Grants Disbursed!** The environmental council has approved your fieldwork:\n\n"
-                
+
+                # How many were already claimed today, BEFORE this batch. Read once and
+                # advanced per directive, so a batch of ten tapers across itself exactly
+                # as ten separate claims would - otherwise banking them all and claiming
+                # in one go would be the cheapest way to dodge the taper.
+                claimed_today = await used_today(db, user_id, DIRECTIVE_CLAIM)
+                thinned = False
+
                 # 2. Process each reward
-                for d_id, r_type, r_payload, obj_type in completed_tasks:
+                for entry in completed_tasks:
+                    multiplier = directive_yield(claimed_today)
+                    thinned = thinned or multiplier < 0.999
+                    claimed_today += 1
+
+                    r_type = entry['reward_type']
+                    r_payload = entry['reward_payload']
+                    obj_type = entry['objective_type']
+
                     if r_type == 'eco_tokens':
-                        amount = int(r_payload)
                         # `cursor` here was the SELECT's cursor, already closed by its
                         # own `async with`, and the call was never awaited - so this
                         # built a coroutine, threw it away, and marked the directive
                         # claimed anyway. Every Eco Token grant a culling directive ever
                         # paid out went nowhere, and the player could not claim it twice.
+                        amount = max(1, int(int(r_payload or 0) * multiplier))
                         await db.execute(
                             "UPDATE users SET eco_tokens = eco_tokens + ? "
                             "WHERE user_id = ?", (amount, user_id))
-                        claim_log += f"💰 Received **{amount}** Eco Tokens for completing a {obj_type.replace('_', ' ').title()} directive.\n"
-                        
+                        claim_log += (
+                            f"{D.describe_reward('eco_tokens', amount, 1, entry['reward_tier'])}"
+                            f" — {obj_type.replace('_', ' ').title()}\n")
+
                     elif r_type == 'item':
+                        # NEVER ROUNDS TO NOTHING. A taper that can reach zero items is
+                        # a wall wearing a different hat, and the whole point of a soft
+                        # cap is that it never becomes one.
+                        count = max(1, int(int(entry['reward_amount'] or 1) * multiplier))
                         await db.execute("""
-                            INSERT INTO user_inventory (user_id, item_name, quantity) 
-                            VALUES (?, ?, 1) 
-                            ON CONFLICT(user_id, item_name) 
-                            DO UPDATE SET quantity = quantity + 1
-                        """, (user_id, r_payload))
-                        claim_log += f"📦 Received **1x {r_payload.replace('-', ' ').title()}** from laboratory supply.\n"
-                    
+                            INSERT INTO user_inventory (user_id, item_name, quantity)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(user_id, item_name)
+                            DO UPDATE SET quantity = quantity + ?
+                        """, (user_id, r_payload, count, count))
+                        claim_log += (
+                            f"{D.describe_reward('item', r_payload, count, entry['reward_tier'])}"
+                            f" — {obj_type.replace('_', ' ').title()}\n")
+
                     # 3. Mark the directive as claimed/archived
-                    await db.execute("UPDATE field_directives SET is_completed = 1 WHERE directive_id = ?", (d_id,))
-                    
+                    await db.execute("UPDATE field_directives SET is_completed = 1 WHERE directive_id = ?",
+                                     (entry['directive_id'],))
+
+                # One counter entry for the whole batch, added after the loop so a claim
+                # that raises partway through has spent no allowance.
+                await record_use(db, user_id, DIRECTIVE_CLAIM, len(completed_tasks))
                 await db.commit()
-                
+
                 embed = discord.Embed(description=claim_log, color=discord.Color.gold())
+                note = describe_directive_yield(directive_yield(claimed_today))
+                if thinned or note:
+                    embed.set_footer(
+                        text=note or f"{claimed_today} claimed today · "
+                                     f"resets in {describe_reset()}")
                 await ctx.send(embed=embed)
-                
+
             except Exception as e:
                 if db.in_transaction:
                     await db.rollback()
@@ -4893,19 +4929,25 @@ class Ecology(commands.Cog):
 
         Does not commit; the caller owns the transaction, so a batch that fails halfway
         leaves neither the directives nor the spent notes behind.
-        """
-        chosen_obj = random.choice(['cull_type', 'survey_species', 'trigger_mutation'])
 
-        if chosen_obj == 'cull_type':
+        **THE REWARD IS NOT DECIDED HERE ANY MORE.** It was three hard-coded lines - a
+        token figure, a coin-flip between two balls, and a pick from three key items -
+        which is how culling came to pay ten times what the other two did. The tiers and
+        the pools live in `utils/directives.py`; this decides the TASK and asks what it
+        is worth.
+        """
+        await D.ensure_reward_columns(db)
+
+        chosen_obj = random.choice(list(D.OBJECTIVES))
+
+        if chosen_obj == D.CULL_OBJECTIVE:
             elements = ['normal', 'fire', 'water', 'grass', 'electric', 'ice',
                         'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug',
                         'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy']
             target_var = random.choice(elements)
-            req_amt = random.randint(5, 12)
-            rev_type = 'eco_tokens'
-            rev_payload = str(req_amt * 250)  # Scale payout with the random difficulty
+            req_amt = random.randint(*D.OBJECTIVE_RANGE[D.CULL_OBJECTIVE])
 
-        elif chosen_obj == 'survey_species':
+        elif chosen_obj == D.SURVEY_OBJECTIVE:
             # A survey names ONE species and asks the player to go and tag it, so the
             # target has to be something the world can actually put in front of them.
             # Drawn from the same pool the spawner draws from - the unfiltered roll this
@@ -4928,29 +4970,28 @@ class Ecology(commands.Cog):
             """) as cursor:
                 db_species = await cursor.fetchone()
             target_var = db_species[0] if db_species else 'pidgey'
-
-            req_amt = random.randint(1, 3)
-            rev_type = 'item'
-            rev_payload = random.choice(['greatball', 'ultraball'])
+            req_amt = random.randint(*D.OBJECTIVE_RANGE[D.SURVEY_OBJECTIVE])
 
         else:  # trigger_mutation
             target_var = 'any'
-            req_amt = 1
-            rev_type = 'item'
-            rev_payload = random.choice(['rare-candy', 'raw-keystone', 'wishing-fragment'])
+            req_amt = random.randint(*D.OBJECTIVE_RANGE[D.EVOLUTION_OBJECTIVE])
+
+        rev_type, rev_payload, rev_amount, tier = D.roll_reward(chosen_obj, req_amt)
 
         cursor = await db.execute("""
             INSERT INTO field_directives
                 (user_id, objective_type, target_variable, required_amount,
-                 reward_type, reward_payload)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, chosen_obj, target_var, req_amt, rev_type, rev_payload))
+                 reward_type, reward_payload, reward_amount, reward_tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, chosen_obj, target_var, req_amt, rev_type, rev_payload,
+              rev_amount, tier))
 
         # The id is handed back so the summary can print the number `!survey` and
         # `!abandon` both take, rather than telling somebody to go and look it up.
         return {'directive_id': cursor.lastrowid, 'objective_type': chosen_obj,
                 'target': target_var, 'required': req_amt,
-                'reward_type': rev_type, 'reward_payload': rev_payload}
+                'reward_type': rev_type, 'reward_payload': rev_payload,
+                'reward_amount': rev_amount, 'reward_tier': tier}
 
 
     @commands.command(name="view", aliases=["inspect", "i", "I", "info"])
