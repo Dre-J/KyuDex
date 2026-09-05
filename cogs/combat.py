@@ -2348,6 +2348,172 @@ def has_replacement(team, active_index):
                for i, member in enumerate(team or []))
 
 
+# ==========================================
+# 🎬 READING A BATTLE STATE WITHOUT KNOWING WHICH ENGINE WROTE IT
+# ==========================================
+# **THE TWO ENGINES NAME THE SAME THINGS DIFFERENTLY.** A duel against an NPC keeps
+# `player_team` / `npc_team` and `active_player_index`; a duel between trainers keeps
+# `p1_team` / `p2_team` and `p1_active_index`. Nothing is wrong with either, but every
+# piece of code that wants "the specimen on the field" has had to know which kind of
+# battle it is in - and the scene renderer is called from TEN places across both.
+#
+# One mapping, so a reader asks for a side and gets it.
+PVE_SIDES = ('player', 'npc')
+PVP_SIDES = ('p1', 'p2')
+
+INDEX_KEY = {'player': 'active_player_index', 'npc': 'active_npc_index',
+             'p1': 'p1_active_index', 'p2': 'p2_active_index'}
+HAZARD_KEY = {'player': 'player_hazards', 'npc': 'npc_hazards',
+              'p1': 'p1_hazards', 'p2': 'p2_hazards'}
+# PvE keeps ONE adaptation dictionary, and it is the player's - an NPC never megas.
+ADAPTATION_KEY = {'player': 'adaptation', 'npc': None,
+                  'p1': 'p1_adaptation', 'p2': 'p2_adaptation'}
+
+
+def battle_sides(state):
+    """`('p1', 'p2')` for a duel between trainers, `('player', 'npc')` otherwise."""
+    return PVP_SIDES if 'p1_id' in (state or {}) else PVE_SIDES
+
+
+def side_team(state, side):
+    return (state or {}).get(f"{side}_team") or []
+
+
+def side_active(state, side):
+    """The specimen standing on the field for one side, or None."""
+    team = side_team(state, side)
+    index = (state or {}).get(INDEX_KEY[side], 0) or 0
+    return team[index] if 0 <= index < len(team) else None
+
+
+def side_hazards(state, side):
+    return (state or {}).get(HAZARD_KEY[side])
+
+
+def side_adaptation(state, side):
+    key = ADAPTATION_KEY[side]
+    return (state or {}).get(key) if key else None
+
+
+async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_hp,
+                                player_shiny=False, npc_shiny=False,
+                                weather='none', p_status=None, n_status=None,
+                                p_hazards=None, n_hazards=None,
+                                p_name=None, p_level=None, n_name=None, n_level=None,
+                                p_gender=None, n_gender=None,
+                                p_aura=None, n_aura=None, biome=None):
+    """
+    Maps battle state onto the scene renderer in cogs/battle_render.py and
+    returns the result as a Discord attachment.
+
+    Sprite loading and compositing cost ~200ms of pure CPU, which is long
+    enough to stall the gateway heartbeat, so the whole job is handed to a
+    worker thread. Returns None if rendering fails; every call site already
+    guards for that.
+    """
+
+    def _render():
+        player = battle_render.Combatant(
+            name=p_name or f"#{player_id}",
+            level=p_level,
+            hp=p_hp, max_hp=p_max_hp,
+            status=battle_render.normalize_status(p_status),
+            gender=p_gender,
+            # The gender reaches the sprite loader as well as the HP panel now, so
+            # the hundred-odd species with a distinct female image show it.
+            sprite=battle_render.load_sprite(player_id, player_shiny, p_gender),
+            aura=p_aura,
+            hazards=p_hazards or {},
+        )
+        opponent = battle_render.Combatant(
+            name=n_name or f"#{npc_id}",
+            level=n_level,
+            hp=n_hp, max_hp=n_max_hp,
+            status=battle_render.normalize_status(n_status),
+            gender=n_gender,
+            sprite=battle_render.load_sprite(npc_id, npc_shiny, n_gender),
+            aura=n_aura,
+            hazards=n_hazards or {},
+        )
+        return battle_render.render_png(
+            player, opponent,
+            biome=battle_render.normalize_biome(biome),
+            weather=battle_render.normalize_weather(weather),
+        )
+
+    started = time.perf_counter()
+    try:
+        buffer = await asyncio.to_thread(_render)
+    except Exception as e:
+        print(f"⚠️ Battle scene render failed: {e}")
+        traceback.print_exc()
+        return None
+
+    # Set KYU_TRACE_RENDER=1 to print what each frame actually cost. Off by default
+    # so it costs a perf_counter call and nothing else.
+    #
+    # Read this alongside the wall-clock time of the send that follows: if a frame
+    # renders in 130ms but the turn still takes two seconds, the time is going to the
+    # upload rather than to us, and the next thing worth cutting is how MANY frames a
+    # turn sends - not how fast each one is built.
+    if os.getenv("KYU_TRACE_RENDER"):
+        elapsed = (time.perf_counter() - started) * 1000
+        size_kb = buffer.getbuffer().nbytes / 1024
+        print(f"⏱️ frame: {elapsed:.0f}ms  {size_kb:.1f}KB")
+
+    # Randomize the filename to bust Discord's aggressive image cache!
+    # Extension follows the renderer, so switching format does not silently ship a
+    # WebP wearing a .png name.
+    new_filename = f"battle_{random.randint(10000, 99999)}.{battle_render.IMAGE_EXTENSION}"
+    return discord.File(fp=buffer, filename=new_filename)
+
+
+async def render_scene(state):
+    """
+    The battlefield picture for the state as it stands. None if the renderer gave up.
+
+    **THIS CALL WAS WRITTEN OUT TEN TIMES**, twenty arguments each, every one of them
+    reaching into the state for the same twenty things. They had already drifted: three
+    of the ten passed `n_aura` and seven did not, and the same three were the only ones
+    that omitted `biome`. Nobody would find that by reading, because each copy is
+    correct on its own - the same shape of fault `credit_directive` and
+    `has_replacement` were written to end.
+
+    **Neither drift was a live bug**, and it is worth saying so rather than claiming a
+    scalp: PvE keeps one adaptation dictionary and it is the player's, so `aura_for`
+    was being handed None for the NPC either way; and PvP has no `warden_biome` to pass.
+    What it was, was two facts about the same picture kept in ten places - and the day
+    an NPC can Mega Evolve, seven of them would have been wrong at once.
+
+    Reads the state through `battle_sides`, so it does not care which engine it is in.
+    """
+    left_key, right_key = battle_sides(state)
+    left, right = side_active(state, left_key), side_active(state, right_key)
+    if not left or not right:
+        return None
+
+    return await generate_battle_scene(
+        left['pokedex_id'], right['pokedex_id'],
+        left['current_hp'], left['max_hp'],
+        right['current_hp'], right['max_hp'],
+        player_shiny=left.get('is_shiny', False),
+        npc_shiny=right.get('is_shiny', False),
+        weather=(state.get('weather') or {'type': 'none'})['type'],
+        p_status=left.get('status_condition'), n_status=right.get('status_condition'),
+        p_hazards=side_hazards(state, left_key),
+        n_hazards=side_hazards(state, right_key),
+        p_name=left.get('name'), p_level=left.get('level'),
+        p_gender=left.get('gender'), n_gender=right.get('gender'),
+        n_name=right.get('name'), n_level=right.get('level'),
+        p_aura=battle_render.aura_for(side_adaptation(state, left_key), left),
+        # Asked of the opponent too. In PvE that resolves to None, because an NPC has no
+        # adaptation to spend; in PvP it is the rival's Mega glow, which only the three
+        # PvP call sites used to pass.
+        n_aura=battle_render.aura_for(side_adaptation(state, right_key), right),
+        # Only a Warden fight sets one; everything else renders the default ground.
+        biome=state.get('warden_biome'))
+
+
 def scene_attachment(embed, battle_file):
     """
     Bind a rendered scene to `embed`, tolerating the render having failed.
@@ -4556,24 +4722,9 @@ class SwapMenu(discord.ui.View):
                 # GENERATE THE NEW IMAGE!
                 # ==========================================
                 print("DEBUG: Generating new battlefield image for FORCED swap...")
-                battle_file = await BattleDashboard.generate_battle_scene(
-                    self,
-                    new_active['pokedex_id'], n_active['pokedex_id'], 
-                    new_active['current_hp'], new_active['max_hp'], 
-                    n_active['current_hp'], n_active['max_hp'],
-                    player_shiny=new_active.get('is_shiny', False),
-                    npc_shiny=n_active.get('is_shiny', False),
-                    weather=state.get('weather', {'type': 'none'})['type'],
-                    p_status=new_active.get('status_condition'),
-                    n_status=n_active.get('status_condition'),
-                    p_hazards=state.get('player_hazards'),
-                    n_hazards=state.get('npc_hazards'),
-                    p_name=new_active.get('name'), p_level=new_active.get('level'),
-                    p_gender=new_active.get('gender'), n_gender=n_active.get('gender'),
-                    n_name=n_active.get('name'), n_level=n_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('adaptation'), new_active),
-                    biome=state.get('warden_biome')
-                )
+                # The index was written into the state above, so the shared renderer is
+                # already looking at the specimen that just came in.
+                battle_file = await render_scene(state)
                 # Attach the newly generated image to the state so render_dashboard can use it!
                 self.main_battle_view.current_battle_file = battle_file
                 print("DEBUG: Handoff to main_battle_view.render_dashboard (Forced Swap)")
@@ -4588,24 +4739,7 @@ class SwapMenu(discord.ui.View):
                 # GENERATE THE NEW IMAGE!
                 # ==========================================
                 print("DEBUG: Generating new battlefield image for VOLUNTARY swap...")
-                battle_file = await BattleDashboard.generate_battle_scene(
-                    self,
-                    new_active['pokedex_id'], n_active['pokedex_id'], 
-                    new_active['current_hp'], new_active['max_hp'], 
-                    n_active['current_hp'], n_active['max_hp'],
-                    player_shiny=new_active.get('is_shiny', False),
-                    npc_shiny=n_active.get('is_shiny', False),
-                    weather=state.get('weather', {'type': 'none'})['type'],
-                    p_status=new_active.get('status_condition'),
-                    n_status=n_active.get('status_condition'),
-                    p_hazards=state.get('player_hazards'),
-                    n_hazards=state.get('npc_hazards'),
-                    p_name=new_active.get('name'), p_level=new_active.get('level'),
-                    p_gender=new_active.get('gender'), n_gender=n_active.get('gender'),
-                    n_name=n_active.get('name'), n_level=n_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('adaptation'), new_active),
-                    biome=state.get('warden_biome')
-                )
+                battle_file = await render_scene(state)
                 # Because process_turn_end generates its OWN image later in Phase 5, we actually 
                 # don't need to assign this to self.main_battle_view.current_battle_file right here.
                 # However, generating it prevents the pointer corruption bug before the handoff!
@@ -4885,25 +5019,7 @@ class BattleDashboard(discord.ui.View):
         # ==========================================
         current_weather = state.get('weather', {'type': 'none'})['type']
         
-        battle_file = await self.generate_battle_scene(
-            p_active['pokedex_id'], n_active['pokedex_id'], 
-            p_active['current_hp'], p_active['max_hp'], 
-            n_active['current_hp'], n_active['max_hp'],
-            player_shiny=p_active.get('is_shiny', False), 
-            npc_shiny=n_active.get('is_shiny', False),
-            
-            # --- HUD OVERLAYS ---
-            weather=current_weather,
-            p_status=p_active.get('status_condition'),
-            n_status=n_active.get('status_condition'),
-            p_hazards=state.get('player_hazards'),
-            n_hazards=state.get('npc_hazards'),
-            p_name=p_active.get('name'), p_level=p_active.get('level'),
-            p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
-            n_name=n_active.get('name'), n_level=n_active.get('level'),
-            p_aura=battle_render.aura_for(state.get('adaptation'), p_active),
-            biome=state.get('warden_biome')
-        )
+        battle_file = await render_scene(state)
         # ==========================================
         await self.refresh_buttons()
         # Dynamically grab the new randomized filename!
@@ -5107,25 +5223,7 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             current_weather = state.get('weather', {'type': 'none'})['type']
             
-            battle_file = await self.generate_battle_scene(
-                p_active['pokedex_id'], n_active['pokedex_id'], 
-                p_active['current_hp'], p_active['max_hp'], 
-                n_active['current_hp'], n_active['max_hp'],
-                player_shiny=p_active.get('is_shiny', False),
-                npc_shiny=n_active.get('is_shiny', False),
-                
-                # --- HUD OVERLAYS ---
-                weather=current_weather,
-                p_status=p_active.get('status_condition'),
-                n_status=n_active.get('status_condition'),
-                p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards'),
-                p_name=p_active.get('name'), p_level=p_active.get('level'),
-                p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
-                n_name=n_active.get('name'), n_level=n_active.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation'), p_active),
-                biome=state.get('warden_biome')
-            )
+            battle_file = await render_scene(state)
             
             # Dynamically grab the new randomized filename!
             scene = scene_attachment(embed, battle_file)
@@ -5418,77 +5516,6 @@ class BattleDashboard(discord.ui.View):
         # Edit the message to show the dropdown menu instead of the attack buttons!
         await interaction.response.edit_message(view=swap_view)
 
-    async def generate_battle_scene(self, player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_hp,
-                                    player_shiny=False, npc_shiny=False,
-                                    weather='none', p_status=None, n_status=None,
-                                    p_hazards=None, n_hazards=None,
-                                    p_name=None, p_level=None, n_name=None, n_level=None,
-                                    p_gender=None, n_gender=None,
-                                    p_aura=None, n_aura=None, biome=None):
-        """
-        Maps battle state onto the scene renderer in cogs/battle_render.py and
-        returns the result as a Discord attachment.
-
-        Sprite loading and compositing cost ~200ms of pure CPU, which is long
-        enough to stall the gateway heartbeat, so the whole job is handed to a
-        worker thread. Returns None if rendering fails; every call site already
-        guards for that.
-        """
-
-        def _render():
-            player = battle_render.Combatant(
-                name=p_name or f"#{player_id}",
-                level=p_level,
-                hp=p_hp, max_hp=p_max_hp,
-                status=battle_render.normalize_status(p_status),
-                gender=p_gender,
-                # The gender reaches the sprite loader as well as the HP panel now, so
-                # the hundred-odd species with a distinct female image show it.
-                sprite=battle_render.load_sprite(player_id, player_shiny, p_gender),
-                aura=p_aura,
-                hazards=p_hazards or {},
-            )
-            opponent = battle_render.Combatant(
-                name=n_name or f"#{npc_id}",
-                level=n_level,
-                hp=n_hp, max_hp=n_max_hp,
-                status=battle_render.normalize_status(n_status),
-                gender=n_gender,
-                sprite=battle_render.load_sprite(npc_id, npc_shiny, n_gender),
-                aura=n_aura,
-                hazards=n_hazards or {},
-            )
-            return battle_render.render_png(
-                player, opponent,
-                biome=battle_render.normalize_biome(biome),
-                weather=battle_render.normalize_weather(weather),
-            )
-
-        started = time.perf_counter()
-        try:
-            buffer = await asyncio.to_thread(_render)
-        except Exception as e:
-            print(f"⚠️ Battle scene render failed: {e}")
-            traceback.print_exc()
-            return None
-
-        # Set KYU_TRACE_RENDER=1 to print what each frame actually cost. Off by default
-        # so it costs a perf_counter call and nothing else.
-        #
-        # Read this alongside the wall-clock time of the send that follows: if a frame
-        # renders in 130ms but the turn still takes two seconds, the time is going to the
-        # upload rather than to us, and the next thing worth cutting is how MANY frames a
-        # turn sends - not how fast each one is built.
-        if os.getenv("KYU_TRACE_RENDER"):
-            elapsed = (time.perf_counter() - started) * 1000
-            size_kb = buffer.getbuffer().nbytes / 1024
-            print(f"⏱️ frame: {elapsed:.0f}ms  {size_kb:.1f}KB")
-
-        # Randomize the filename to bust Discord's aggressive image cache!
-        # Extension follows the renderer, so switching format does not silently ship a
-        # WebP wearing a .png name.
-        new_filename = f"battle_{random.randint(10000, 99999)}.{battle_render.IMAGE_EXTENSION}"
-        return discord.File(fp=buffer, filename=new_filename)
 
     async def handle_forfeit(self, interaction: discord.Interaction):
         """Offer to abandon the expedition. The teardown itself is behind a confirm."""
@@ -8242,25 +8269,7 @@ class BattleDashboard(discord.ui.View):
             # ==========================================
             current_weather = state.get('weather', {'type': 'none'})['type']
             
-            battle_file = await self.generate_battle_scene(
-                p_active['pokedex_id'], n_active['pokedex_id'], 
-                p_active['current_hp'], p_active['max_hp'], 
-                n_active['current_hp'], n_active['max_hp'],
-                player_shiny=p_active.get('is_shiny', False),
-                npc_shiny=n_active.get('is_shiny', False),
-                
-                # --- NEW OVERLAYS ---
-                weather=current_weather,
-                p_status=p_active.get('status_condition'),
-                n_status=n_active.get('status_condition'),
-                p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards'),
-                p_name=p_active.get('name'), p_level=p_active.get('level'),
-                p_gender=p_active.get('gender'), n_gender=n_active.get('gender'),
-                n_name=n_active.get('name'), n_level=n_active.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation'), p_active),
-                biome=state.get('warden_biome')
-            )
+            battle_file = await render_scene(state)
             # ==========================================
             await self.refresh_buttons()
             # Dynamically grab the new randomized filename!
@@ -8900,25 +8909,7 @@ class Combat(commands.Cog):
 
             # 5. Generate Initial Battle Canvas
             print("DEBUG: Calling generate_battle_scene...")
-            battle_file = await BattleDashboard.generate_battle_scene(
-                self,
-                player_id=p1_lead['pokedex_id'], 
-                npc_id=p2_lead['pokedex_id'],
-                p_hp=p1_lead['current_hp'], p_max_hp=p1_lead['max_hp'],
-                n_hp=p2_lead['current_hp'], n_max_hp=p2_lead['max_hp'],
-                player_shiny=p1_lead.get('is_shiny', False), 
-                npc_shiny=p2_lead.get('is_shiny', False),
-                weather=shared_state['weather']['type'],
-                p_status=p1_lead.get('status_condition'),
-                n_status=p2_lead.get('status_condition'),
-                p_hazards=shared_state['p1_hazards'],
-                n_hazards=shared_state['p2_hazards'],
-                p_name=p1_lead.get('name'), p_level=p1_lead.get('level'),
-                p_gender=p1_lead.get('gender'), n_gender=p2_lead.get('gender'),
-                n_name=p2_lead.get('name'), n_level=p2_lead.get('level'),
-                p_aura=battle_render.aura_for(shared_state.get('p1_adaptation'), p1_lead),
-                n_aura=battle_render.aura_for(shared_state.get('p2_adaptation'), p2_lead)
-            )
+            battle_file = await render_scene(shared_state)
 
             # 6. Render the UI
             print("DEBUG: Constructing UI Elements...")
@@ -10926,24 +10917,7 @@ class Combat(commands.Cog):
             embed.set_footer(text="Awaiting inputs from both researchers...")
 
             try:
-                battle_file = await BattleDashboard.generate_battle_scene(
-                    self,
-                    new_p1_active['pokedex_id'], new_p2_active['pokedex_id'], 
-                    new_p1_active['current_hp'], new_p1_active['max_hp'], 
-                    new_p2_active['current_hp'], new_p2_active['max_hp'],
-                    player_shiny=new_p1_active.get('is_shiny', False),
-                    npc_shiny=new_p2_active.get('is_shiny', False),
-                    weather=state['weather']['type'],
-                    p_status=new_p1_active.get('status_condition'),
-                    n_status=new_p2_active.get('status_condition'),
-                    p_hazards=state['p1_hazards'],
-                    n_hazards=state['p2_hazards'],
-                    p_name=new_p1_active.get('name'), p_level=new_p1_active.get('level'),
-                    p_gender=new_p1_active.get('gender'), n_gender=new_p2_active.get('gender'),
-                    n_name=new_p2_active.get('name'), n_level=new_p2_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('p1_adaptation'), new_p1_active),
-                    n_aura=battle_render.aura_for(state.get('p2_adaptation'), new_p2_active)
-                )
+                battle_file = await render_scene(state)
                 
                 scene = scene_attachment(embed, battle_file)
 
@@ -11055,21 +11029,7 @@ class Combat(commands.Cog):
 
             # Safely generate the image
             try:
-                battle_file = await BattleDashboard.generate_battle_scene(
-                    self,
-                    p1_active['pokedex_id'], p2_active['pokedex_id'], 
-                    p1_active['current_hp'], p1_active['max_hp'], 
-                    p2_active['current_hp'], p2_active['max_hp'],
-                    player_shiny=p1_active.get('is_shiny', False), npc_shiny=p2_active.get('is_shiny', False),
-                    weather=state['weather']['type'],
-                    p_status=p1_active.get('status_condition'), n_status=p2_active.get('status_condition'),
-                    p_hazards=state['p1_hazards'], n_hazards=state['p2_hazards'],
-                    p_name=p1_active.get('name'), p_level=p1_active.get('level'),
-                    p_gender=p1_active.get('gender'), n_gender=p2_active.get('gender'),
-                    n_name=p2_active.get('name'), n_level=p2_active.get('level'),
-                    p_aura=battle_render.aura_for(state.get('p1_adaptation'), p1_active),
-                    n_aura=battle_render.aura_for(state.get('p2_adaptation'), p2_active)
-                )
+                battle_file = await render_scene(state)
                 scene = scene_attachment(embed, battle_file)
             except Exception as img_err:
                 print(f"DEBUG: Image generation failed in Faint Phase: {img_err}")
@@ -11347,30 +11307,7 @@ class Combat(commands.Cog):
             current_weather = state.get('weather', {'type': 'none'})['type']
 
             # Generate the Battle Image
-            battle_file = await BattleDashboard.generate_battle_scene(
-                self,
-                player_id=p_lead['pokedex_id'], 
-                npc_id=n_lead['pokedex_id'],
-                p_hp=p_lead['current_hp'],
-                p_max_hp=p_lead['max_hp'],
-                n_hp=n_lead['current_hp'],
-                n_max_hp=n_lead['max_hp'],
-                player_shiny=p_lead.get('is_shiny', False), 
-                npc_shiny=n_lead.get('is_shiny', False),
-                # ==========================================
-                # PASSING THE OVERLAY DATA TO THE RENDERER
-                # ==========================================
-                weather=current_weather,
-                p_status=p_lead.get('status_condition'),
-                n_status=n_lead.get('status_condition'),
-                p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards'),
-                p_name=p_lead.get('name'), p_level=p_lead.get('level'),
-                p_gender=p_lead.get('gender'), n_gender=n_lead.get('gender'),
-                n_name=n_lead.get('name'), n_level=n_lead.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation'), p_lead),
-                biome=state.get('warden_biome')
-            )
+            battle_file = await render_scene(state)
 
             # Dynamically grab the new randomized filename!
             scene = scene_attachment(embed, battle_file)
@@ -12222,30 +12159,7 @@ class Combat(commands.Cog):
             # Since we just fired entry abilities, grab the latest weather from the state!
             current_weather = state.get('weather', {'type': 'none'})['type']
 
-            battle_file = await BattleDashboard.generate_battle_scene(
-                self,
-                player_id=p_lead['pokedex_id'], 
-                npc_id=n_lead['pokedex_id'],
-                p_hp=p_lead['current_hp'],
-                p_max_hp=p_lead['max_hp'],
-                n_hp=n_lead['current_hp'],
-                n_max_hp=n_lead['max_hp'],
-                player_shiny=p_lead.get('is_shiny', False), 
-                npc_shiny=n_lead.get('is_shiny', False),
-                # ==========================================
-                # PASSING THE OVERLAY DATA TO THE RENDERER
-                # ==========================================
-                weather=current_weather,
-                p_status=p_lead.get('status_condition'),
-                n_status=n_lead.get('status_condition'),
-                p_hazards=state.get('player_hazards'),
-                n_hazards=state.get('npc_hazards'),
-                p_name=p_lead.get('name'), p_level=p_lead.get('level'),
-                p_gender=p_lead.get('gender'), n_gender=n_lead.get('gender'),
-                n_name=n_lead.get('name'), n_level=n_lead.get('level'),
-                p_aura=battle_render.aura_for(state.get('adaptation'), p_lead),
-                biome=state.get('warden_biome')
-            )
+            battle_file = await render_scene(state)
 
             # Attach the file to the embed
             # Dynamically grab the new randomized filename!
