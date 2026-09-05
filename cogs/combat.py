@@ -2768,6 +2768,7 @@ async def settle_battle_card(state, log, *, title=None, accent=None, footer=None
     # matching what these paths did as embeds. A gallery pointing at a cleared
     # attachment would render as a broken image.
     card.scene_name = None
+    state['scene_name'] = None          # and the message no longer HAS a scene on it
     card.rebuild()
 
     message = state.get('message_obj')
@@ -2792,6 +2793,38 @@ async def settle_battle_card(state, log, *, title=None, accent=None, footer=None
     except Exception as send_error:
         print(f"⚠️ Could not send the follow-up view: {send_error!r}")
     return card
+
+
+async def refresh_battle_card(state, view, *, footer=None, log=None):
+    """
+    Redraw the card ON THE MESSAGE IT IS ALREADY ON, picture and all.
+
+    **A REBUILT CARD DOES NOT KNOW WHAT IS ATTACHED TO THE MESSAGE.** An edit re-sends
+    the components and nothing else, so the scene uploaded with the message is still
+    there - but a freshly built view starts with `scene_name = None`, and rebuilding one
+    that way draws a container with no gallery in it. The attachment stays on the message
+    and stops being shown.
+
+    That is exactly what happened to the PvP waiting notice: every time either player
+    committed, a new `PvPDashboard` was built to carry the "awaiting telemetry" line and
+    edited over the old card, and the battlefield vanished until the turn resolved and a
+    fresh card was posted with the file again.
+
+    The filename comes from the STATE, where `post_battle_card` writes it as it uploads,
+    because the state is the only thing that outlives the view.
+    """
+    state = state if isinstance(state, dict) else {}
+    message = state.get('message_obj')
+    if message is None:
+        return None
+    if log is not None:
+        view.log = log
+    if footer is not None:
+        view.footer = footer
+    view.scene_name = state.get('scene_name')
+    view.rebuild()
+    await message.edit(view=view)
+    return message
 
 
 async def dismiss_menu(interaction, notice=None):
@@ -2876,6 +2909,10 @@ async def post_battle_card(state, view, battle_file=None, *, interaction=None,
     # battle. The old message is then left up, which is the safe half to fail on.
     if message is not None:
         state['message_obj'] = message
+        # WHAT PICTURE IS ON THE CARD, recorded beside the card itself. A view built
+        # later to edit this same message cannot know: it is a new object, and a new
+        # card starts with no scene at all. See `refresh_battle_card`.
+        state['scene_name'] = getattr(battle_file, 'filename', None)
     if previous is not None and getattr(previous, 'id', None) != getattr(message, 'id', None):
         try:
             await previous.delete()
@@ -9605,25 +9642,16 @@ class Combat(commands.Cog):
         else:
             # SOMEONE IS STILL DECIDING.
             #
-            # **THE MESSAGE CONTENT, AND NOTHING ELSE.** This branch used to fetch the
+            # **ONE EDIT, CARRYING THE SCENE FORWARD.** This branch used to fetch the
             # message back, take its embed, rewrite the footer, rebind the image by name
             # and re-send the attachments - four operations to change eight words, every
-            # single time either player pressed a button. That is where the scene kept
-            # disappearing from: a fetched embed's image url is a signed CDN link rather
-            # than `attachment://battle.png`, so editing with it re-issues the attachment
-            # under a new signature and leaves the embed pointing at a dead one.
-            # `rebind_image` fixed that particular failure, but the shape was still wrong.
+            # single time either player pressed a button, and a race between them whenever
+            # both players committed in the same second.
             #
-            # Editing only `content` cannot move the picture, because nothing about the
-            # picture is sent. Discord leaves any field a PATCH does not mention alone,
-            # so the embed and the attachment are not merely restored correctly - they
-            # are never touched. It is also one API call instead of two, which closes a
-            # race that was live whenever both players committed within the same second:
-            # two overlapping fetch-then-edit cycles, the second built from a copy of the
-            # message taken before the first landed.
-            #
-            # The notice moves from the embed's footer to the line above the embed, which
-            # if anything is the more visible of the two.
+            # It is one edit now, but the picture still needs saying out loud: the
+            # attachment is untouched by an edit, and the container drawn over it has to
+            # point at the file by name or the battlefield simply stops being shown.
+            # `refresh_battle_card` is the only place that knows how.
             waiting_for = []
             if not p1_ready: waiting_for.append(state['p1'].display_name)
             if not p2_ready: waiting_for.append(state['p2'].display_name)
@@ -9632,12 +9660,11 @@ class Combat(commands.Cog):
             # outright, and the footer is where the card already says what it is
             # waiting for.
             try:
-                board = PvPDashboard(self, state)
-                board.log = state.get('last_log') or ''
-                board.footer = (f"⏳ Awaiting telemetry from: "
-                                f"{', '.join(waiting_for)}…")
-                board.rebuild()
-                await state['message_obj'].edit(view=board)
+                await refresh_battle_card(
+                    state, PvPDashboard(self, state),
+                    log=state.get('last_log') or '',
+                    footer=(f"⏳ Awaiting telemetry from: "
+                            f"{', '.join(waiting_for)}…"))
             except Exception as e:
                 print(f"DEBUG: Waiting notice failed: {e}")
 
