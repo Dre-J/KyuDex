@@ -29,7 +29,8 @@ PVP_ROSTER_COLUMNS = (
     "cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, "
     "cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, "
     "cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, "
-    "cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender, cp.happiness")
+    "cp.gmax_factor, cp.ability, cp.experience, up.slot, cp.gender, cp.happiness, "
+    "cp.nickname")
 
 # The NPC and Warden engines share one shape, which has no slot and puts gender and
 # happiness where PvP puts slot.
@@ -38,7 +39,8 @@ NPC_ROSTER_COLUMNS = (
     "cp.iv_hp, cp.iv_attack, cp.iv_defense, cp.iv_sp_atk, cp.iv_sp_def, cp.iv_speed, "
     "cp.ev_hp, cp.ev_attack, cp.ev_defense, cp.ev_sp_atk, cp.ev_sp_def, cp.ev_speed, "
     "cp.move_1, cp.move_2, cp.move_3, cp.move_4, cp.is_shiny, cp.held_item, "
-    "cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness")
+    "cp.gmax_factor, cp.ability, cp.experience, cp.gender, cp.happiness, "
+    "cp.nickname")
 from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies,
                              BATTLE_IDLE_TIMEOUT,
                              TM_CATALOG, type_badges, type_icon,
@@ -2410,7 +2412,9 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
                                 p_hazards=None, n_hazards=None,
                                 p_name=None, p_level=None, n_name=None, n_level=None,
                                 p_gender=None, n_gender=None,
-                                p_aura=None, n_aura=None, biome=None):
+                                p_aura=None, n_aura=None, biome=None,
+                                p_nickname=None, n_nickname=None,
+                                p_roster=(), n_roster=()):
     """
     Maps battle state onto the scene renderer in cogs/battle_render.py and
     returns the result as a Discord attachment.
@@ -2433,6 +2437,8 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
             sprite=battle_render.load_sprite(player_id, player_shiny, p_gender),
             aura=p_aura,
             hazards=p_hazards or {},
+            nickname=p_nickname,
+            roster=tuple(p_roster or ()),
         )
         opponent = battle_render.Combatant(
             name=n_name or f"#{npc_id}",
@@ -2443,6 +2449,8 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
             sprite=battle_render.load_sprite(npc_id, npc_shiny, n_gender),
             aura=n_aura,
             hazards=n_hazards or {},
+            nickname=n_nickname,
+            roster=tuple(n_roster or ()),
         )
         return battle_render.render_png(
             player, opponent,
@@ -2475,6 +2483,17 @@ async def generate_battle_scene(player_id, npc_id, p_hp, p_max_hp, n_hp, n_max_h
     # WebP wearing a .png name.
     new_filename = f"battle_{random.randint(10000, 99999)}.{battle_render.IMAGE_EXTENSION}"
     return discord.File(fp=buffer, filename=new_filename)
+
+
+def standing_marks(team):
+    """
+    One flag per specimen on a side, True while it is still standing.
+
+    The picture's ball row and the card's `roster_bar` are the same fact drawn twice -
+    once in Pokeballs and once in circles - so both read it from here rather than each
+    walking the team with its own idea of what counts as fainted.
+    """
+    return tuple(member.get('current_hp', 0) > 0 for member in team or [])
 
 
 async def render_scene(state):
@@ -2520,7 +2539,11 @@ async def render_scene(state):
         # PvP call sites used to pass.
         n_aura=battle_render.aura_for(side_adaptation(state, right_key), right),
         # Only a Warden fight sets one; everything else renders the default ground.
-        biome=state.get('warden_biome'))
+        biome=state.get('warden_biome'),
+        # What their trainers call them, and how much is left behind each of them.
+        p_nickname=left.get('nickname'), n_nickname=right.get('nickname'),
+        p_roster=standing_marks(side_team(state, left_key)),
+        n_roster=standing_marks(side_team(state, right_key)))
 
 
 # ==========================================
@@ -2553,9 +2576,13 @@ BATTLE_LOG_LIMIT = 2600
 
 
 def roster_bar(team):
-    """`🔴🔴⚫` - one mark per specimen, filled while it is still standing."""
-    return "".join("🔴" if member.get('current_hp', 0) > 0 else "⚫"
-                   for member in team or []) or "—"
+    """`🔴🔴⚫` - one mark per specimen, filled while it is still standing.
+
+    The same reading the scene draws as Pokeballs, so the card and the picture cannot
+    disagree about how many are left.
+    """
+    return "".join("🔴" if standing else "⚫"
+                   for standing in standing_marks(team)) or "—"
 
 
 def status_tag(specimen):
@@ -9444,9 +9471,10 @@ class Combat(commands.Cog):
                                 'is_shiny': row[21], 'held_item': row[22], 'gmax_factor': row[23], 
                                 'ability': row[24], 'types': p_types, 'experience': row[25], 'volatile_statuses': {},
                                 'gender': normalize_gender(row[27]),
-                                # Appended last in the SELECT, so it is read off the end
-                                # rather than renumbering every index above it.
-                                'happiness': row[-1]
+                                # Appended at the END of the SELECT, so they are read
+                                # off the tail rather than renumbering every index above.
+                                'happiness': row[-2],
+                                'nickname': row[-1]
                             })
                             
                         teams[uid] = player_team
@@ -11918,9 +11946,10 @@ class Combat(commands.Cog):
                             'held_item': held_item, 'gmax_factor': gmax_factor, 'ability': ability, 'types': p_types,
                             'experience': experience, 'volatile_statuses': {},
                             'gender': normalize_gender(row[26]),
-                            # Appended last in the SELECT, so it is read off the end
-                            # rather than renumbering every index above it.
-                            'happiness': row[-1]
+                            # Appended at the END of the SELECT, so they are read
+                            # off the tail rather than renumbering every index above.
+                            'happiness': row[-2],
+                            'nickname': row[-1]
                         })
 
                     # ==========================================
@@ -12754,9 +12783,10 @@ class Combat(commands.Cog):
                             'ivs': p_ivs,
                             'evs': p_evs,
                             'gender': normalize_gender(row[26]),
-                            # Appended last in the SELECT, so it is read off the end
-                            # rather than renumbering every index above it.
-                            'happiness': row[-1]
+                            # Appended at the END of the SELECT, so they are read
+                            # off the tail rather than renumbering every index above.
+                            'happiness': row[-2],
+                            'nickname': row[-1]
                         })
                 
                     # ==========================================

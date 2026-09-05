@@ -20,7 +20,7 @@ from functools import lru_cache
 from io import BytesIO
 from typing import Dict, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from utils.sprites import resolve_sprite, HOME, ARTWORK
 
@@ -325,6 +325,145 @@ class Combatant:
     aura: Optional[str] = None            # dynamax | gigantamax | mega | tera
     hazards: Dict = field(default_factory=dict)
     placeholder_hue: Tuple[int, int, int] = (120, 150, 200)
+    # What its trainer calls it. The panel prefers this to `name` when the font can
+    # actually draw it - see `panel_label`.
+    nickname: Optional[str] = None
+    # One flag per specimen on this side, True while it is still standing. Empty for a
+    # wild encounter, which has no team behind it and so gets no ball row at all.
+    roster: Tuple[bool, ...] = ()
+
+
+# ---------------------------------------------------------------- the name on the panel
+
+# The Latin a nickname may be written in: ASCII printable, Latin-1 Supplement, and the
+# Latin Extended-A block that carries the accented letters European names actually use.
+#
+# **THE FONT IS ASKED SEPARATELY.** A codepoint being Latin does not mean the resolved
+# font carries it - the same gap that drew the Mars and Venus signs as hollow boxes on a
+# host without Segoe UI Symbol. A name that would render as boxes is worse than the
+# species name, so both questions have to pass.
+_LATIN_RANGES = ((0x20, 0x7E), (0xA0, 0xFF), (0x100, 0x17F))
+
+NAME_FONT_ROLE = "bold"
+NAME_FONT_MAX = 15
+NAME_FONT_MIN = 9
+
+
+def is_latin(text) -> bool:
+    """Whether every character is one this renderer is willing to draw."""
+    text = str(text or '')
+    if not text.strip():
+        return False
+    return all(any(low <= ord(ch) <= high for low, high in _LATIN_RANGES)
+               for ch in text)
+
+
+def panel_label(mon) -> str:
+    """
+    What the HP panel calls this specimen.
+
+    A nickname when there is one the font can draw, and the species name otherwise -
+    including for the emoji and non-Latin names `!nickname` accepts without complaint,
+    which have no length or character validation of any kind behind them.
+
+    Form names like "charizard-mega-x" read as "CHARIZARD MEGA X". A nickname is left as
+    its owner typed it apart from the upper-casing, because the hyphens in a nickname are
+    the owner's rather than the species table's.
+    """
+    species = str(mon.name or "?").replace("-", " ").replace("_", " ").upper()
+    nickname = str(getattr(mon, 'nickname', None) or '').strip()
+    if not nickname or not is_latin(nickname):
+        return species
+    # **ASKED OF WHAT WILL ACTUALLY BE DRAWN**, which is the upper-cased form. Checking
+    # the raw nickname is a different question: a font carrying 'o' with an acute but not
+    # its capital would pass, and then draw a box.
+    shouted = nickname.upper()
+    if not all(has_glyph(NAME_FONT_ROLE, NAME_FONT_MAX, ch) for ch in shouted):
+        return species
+    return shouted
+
+
+def _fit_label(draw, label, max_width):
+    """
+    The label at the largest size that fits, truncated if even the smallest will not.
+
+    `!nickname` caps nothing, so a forty-character name would otherwise run off the panel
+    and across the battlefield. Truncating is right rather than falling back to the
+    species: the trainer asked for that name, and most of it is still their name.
+    """
+    f = _fit_font(draw, label, NAME_FONT_ROLE, NAME_FONT_MAX, NAME_FONT_MIN, max_width)
+    if draw.textlength(label, font=f) <= max_width:
+        return label, f
+    while label and draw.textlength(label + "…", font=f) > max_width:
+        label = label[:-1]
+    return (label + "…") if label else "", f
+
+
+# ---------------------------------------------------------------- the roster balls
+
+BALL_SPRITE = os.path.join("KyuSprites", "sprites", "items", "dream-world",
+                           "poke-ball.png")
+BALL_SIZE = 15            # output-space pixels, per ball
+BALL_GAP = 4
+BALL_MAX = 6              # a party cannot be larger, and the strip must not grow if it is
+BALL_FAINTED_ALPHA = 90   # out of 255
+
+
+@lru_cache(maxsize=4)
+def load_ball(size: int, fainted: bool = False):
+    """
+    The Poke Ball marker at the size it is drawn, or None if the file is missing.
+
+    Cached on both keys, because this is two file reads and two resizes per side per
+    turn otherwise - and unlike a sprite it is the SAME image every time, for every
+    battle on the host.
+
+    A fainted ball is desaturated and faded rather than replaced by a different picture:
+    the row has to read as "these are yours, and these three are out" at a glance and at
+    fifteen pixels, which greyscale does and a second icon does not.
+    """
+    try:
+        ball = Image.open(BALL_SPRITE).convert("RGBA")
+    except Exception as e:
+        print(f"battle_render: failed to load {BALL_SPRITE}: {e}")
+        return None
+
+    ball = ball.resize((size * SS, size * SS), Image.LANCZOS)
+    if not fainted:
+        return ball
+
+    grey = ImageOps.grayscale(ball.convert("RGB")).convert("RGBA")
+    grey.putalpha(ball.getchannel("A").point(
+        lambda a: int(a * BALL_FAINTED_ALPHA / 255)))
+    return grey
+
+
+def roster_strip_width(roster) -> int:
+    """How wide the ball row will be, in output-space pixels. 0 when there is none."""
+    count = min(len(roster or ()), BALL_MAX)
+    return 0 if count == 0 else count * BALL_SIZE + (count - 1) * BALL_GAP
+
+
+def draw_roster_balls(img, roster, right, y):
+    """
+    One ball per specimen on this side, right-aligned so it ends at `right`.
+
+    Right-aligned rather than left, because the hazard chips already flow rightwards from
+    the panel's left edge on this same line. The two grow towards each other and the
+    caller shrinks the hazards' allowance by exactly this width, so they cannot meet.
+    """
+    flags = list(roster or ())[:BALL_MAX]
+    if not flags:
+        return
+
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    x = (right - roster_strip_width(flags)) * SS
+    for standing in flags:
+        ball = load_ball(BALL_SIZE, not standing)
+        if ball is not None:
+            layer.alpha_composite(ball, (int(x), int(y * SS)))
+        x += (BALL_SIZE + BALL_GAP) * SS
+    img.alpha_composite(layer)
 
 
 # ---------------------------------------------------------------- scene parts
@@ -510,9 +649,9 @@ def draw_hp_panel(img, mon, box, show_numbers):
         d.text((right - lw, Y + 13 * SS), lvl, font=f_lvl, fill=(176, 186, 204, 255))
         right -= lw + 8 * SS
 
-    # Form names like "charizard-mega-x" read as "CHARIZARD MEGA X".
-    label = str(mon.name or "?").replace("-", " ").replace("_", " ").upper()
-    f_name = _fit_font(d, label, "bold", 15, 9, max(1, right - (X + pad)))
+    # The trainer's own name for it when the font can draw one, and the species name
+    # otherwise. Truncated rather than overflowing, because `!nickname` caps nothing.
+    label, f_name = _fit_label(d, panel_label(mon), max(1, right - (X + pad)))
     d.text((X + pad, Y + 10 * SS), label, font=f_name, fill=(255, 255, 255, 255))
 
     # HP track
@@ -841,11 +980,21 @@ def render_scene(player: Combatant, opponent: Combatant,
     draw_hp_panel(img, opponent, OPP_PANEL, show_numbers=False)
     draw_hp_panel(img, player, PLR_PANEL, show_numbers=True)
 
-    # Hazards sit under the panel belonging to the side they were laid on.
-    draw_hazard_chips(img, opponent.hazards,
-                      OPP_PANEL[0], OPP_PANEL[1] + OPP_PANEL[3] + 6, OPP_PANEL[2])
-    draw_hazard_chips(img, player.hazards,
-                      PLR_PANEL[0], PLR_PANEL[1] + PLR_PANEL[3] + 6, PLR_PANEL[2])
+    # Hazards sit under the panel belonging to the side they were laid on, and the ball
+    # row shares that line from the other end.
+    #
+    # **THE HAZARDS' ALLOWANCE SHRINKS BY EXACTLY WHAT THE BALLS TAKE.** The two grow
+    # towards each other - chips rightwards from the panel's left edge, balls leftwards
+    # from its right - so a full party beside four hazards is the case where they would
+    # otherwise overlap. `draw_hazard_chips` already stops at the width it is given, so
+    # a chip is dropped rather than drawn over the roster.
+    for mon, panel in ((opponent, OPP_PANEL), (player, PLR_PANEL)):
+        x, y, w, h = panel
+        strip_y = y + h + 6
+        strip = roster_strip_width(mon.roster)
+        draw_hazard_chips(img, mon.hazards, x, strip_y,
+                          w - (strip + 8 if strip else 0))
+        draw_roster_balls(img, mon.roster, x + w, strip_y)
 
     if weather in WEATHER:
         draw_weather_badge(img, weather)
