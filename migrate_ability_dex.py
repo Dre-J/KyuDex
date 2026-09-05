@@ -67,6 +67,40 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
 """
 
 
+# **FOUR ABILITIES THAT NO SPECIES TABLE MENTIONS.** Embody Aspect only exists once
+# Ogerpon Terastallises, so `base_pokemon_species` records Defiant, Water Absorb, Mold
+# Breaker and Sturdy for its four forms and nothing names the ability that replaces them.
+# PokeAPI has no entry under any of these spellings either, so the text is written out
+# here - the same treatment `migrate_move_dex.LOCAL_TEXT` gives Nihil Light, and for the
+# same reason: I implemented the behaviour and know exactly what it does.
+LOCAL_TEXT = {
+    'embody-aspect-teal': {
+        'display': 'Embody Aspect (Teal Mask)',
+        'short_effect': "Raises Speed by one stage when Ogerpon Terastallises.",
+        'generation': 9,
+    },
+    'embody-aspect-wellspring': {
+        'display': 'Embody Aspect (Wellspring Mask)',
+        'short_effect': "Raises Special Defense by one stage when Ogerpon Terastallises.",
+        'generation': 9,
+    },
+    'embody-aspect-hearthflame': {
+        'display': 'Embody Aspect (Hearthflame Mask)',
+        'short_effect': "Raises Attack by one stage when Ogerpon Terastallises.",
+        'generation': 9,
+    },
+    'embody-aspect-cornerstone': {
+        'display': 'Embody Aspect (Cornerstone Mask)',
+        'short_effect': "Raises Defense by one stage when Ogerpon Terastallises.",
+        'generation': 9,
+    },
+}
+
+for _name, _row in LOCAL_TEXT.items():
+    # The long text is the short one unless somebody writes a longer one.
+    _row.setdefault('effect', _row['short_effect'])
+
+
 def wanted_abilities(conn):
     """
     Every ability any species in this world can have, as a sorted list.
@@ -85,6 +119,8 @@ def wanted_abilities(conn):
         name = (hidden or '').strip().lower()
         if name and name != 'none':
             names.add(name)
+    # ...and the ones no species table mentions because they only exist mid-battle.
+    names.update(LOCAL_TEXT)
     return sorted(names)
 
 
@@ -115,6 +151,10 @@ def generation_number(slug):
 
 def fetch(name):
     """`(row, complaint)` for one ability. Never raises."""
+    if name in LOCAL_TEXT:
+        # Written here rather than asked for. No request, so a re-run costs nothing.
+        return dict(LOCAL_TEXT[name], name=name), None
+
     request = urllib.request.Request(API.format(name),
                                      headers={'User-Agent': USER_AGENT})
     for attempt in range(RETRIES):
