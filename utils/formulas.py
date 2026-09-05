@@ -203,7 +203,12 @@ def berries_are_blocked(opponent):
 # doing nothing. It is deliberately NOT in GROUNDING_MOVES: adding it would change how an
 # existing move behaves, and that was not asked for. One word, when it is.
 SMACKED_DOWN = 'smacked_down'
-GROUNDING_MOVES = {'thousand-arrows'}
+
+# **SMACK DOWN IS THE SAME EFFECT AND WAS SITTING IN `base_moves` DOING NOTHING.** It is
+# Rock rather than Ground, so it never needed the type chart opened for it - a Rock move
+# is super effective on a Flying type already - but it knocks its target out of the air
+# exactly as Thousand Arrows does, and now says so.
+GROUNDING_MOVES = {'thousand-arrows', 'smack-down'}
 
 # The two ways of being raised that live in volatiles. The other two - the Flying type and
 # Levitate - are read off the specimen itself and cannot be popped.
@@ -212,11 +217,16 @@ LIFTING_VOLATILES = ('magnet_rise', 'telekinesis')
 
 def is_raised(pokemon, ability=None):
     """
-    Whether this specimen is off the ground for a reason Thousand Arrows answers.
+    Whether this specimen is off the ground for a reason a grounding move answers.
 
-    NOT the same question as `not is_grounded`: an Air Balloon holder is off the ground
-    and this says no, because the four causes the move names are the Flying type,
-    Levitate, Magnet Rise and Telekinesis. The balloon keeps its holder clear.
+    **THE AIR BALLOON COUNTS.** It did not at first - the brief named the Flying type,
+    Levitate, Magnet Rise and Telekinesis, and the balloon is none of those - but the
+    games let Thousand Arrows through it, and being kept airborne is being kept airborne
+    however it is done. The balloon then pops on the hit like any other damaging move, so
+    a specimen is not both grounded and still holding one.
+
+    Still NOT the same question as `not is_grounded`: an Iron Ball holder is grounded and
+    was never raised, and anything already smacked down is on the floor for good.
     """
     if pokemon is None:
         return False
@@ -227,6 +237,8 @@ def is_raised(pokemon, ability=None):
         return True
     if (ability if ability is not None else get_active_ability(pokemon)) \
             in LEVITATION_ABILITIES:
+        return True
+    if get_active_item(pokemon) == 'air-balloon':
         return True
     return any(volatiles.get(key) for key in LIFTING_VOLATILES)
 
@@ -6721,6 +6733,11 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         # immunity table below are the other two, and a move that opened only one of them
         # would still be refused by whichever was left.
         drags_down = move_name in GROUNDING_MOVES
+        # **ASKED BEFORE THE HIT LANDS.** An Air Balloon pops on any damaging move, so by
+        # the time the grounding fires the hands are empty and `is_raised` says no - the
+        # target ends up grounded either way, but nothing announces it, and the reason is
+        # an unrelated item having burst. Read here, where it is still true.
+        was_raised = drags_down and is_raised(defender, def_ability)
 
         if move_type == 'ground' and not is_grounded(defender, gravity) \
                 and not (drags_down and is_raised(defender, def_ability)):
@@ -9263,9 +9280,10 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
     # Fly and Bounce are cancelled outright: the charge ends when its owner does.
     if move_name in GROUNDING_MOVES and damage > 0:
         _volatiles = defender.get('volatile_statuses') or {}
-        if not is_raised(defender, def_ability):
-            # Already on the floor. Nothing to knock down, and nothing to say about it -
-            # a Snorlax does not need telling it has been brought to earth.
+        if not was_raised:
+            # Already on the floor when the move was thrown. Nothing to knock down, and
+            # nothing to say about it - a Snorlax does not need telling it has been
+            # brought to earth.
             pass
         elif _volatiles.get('substitute'):
             pass
