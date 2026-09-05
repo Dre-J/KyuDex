@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 # utils.tera reaches back into this module for `mimicry_types`, and does it inside
 # its functions rather than at import - so this direction is the safe one.
 from utils.tera import (battle_types as tera_battle_types,
-                        stab_multiplier as tera_stab_multiplier)
+                        stab_multiplier as tera_stab_multiplier,
+                        active_tera_type as tera_active_type,
+                        stellar_effectiveness as tera_stellar_effectiveness)
 
 
 def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
@@ -15,7 +17,12 @@ def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
     Modifies the specimen's HP, stats, and status in-place. Returns the combat log string.
     """
     log = ""
-    types = specimen.get('types', [])
+    # **THE CURRENT TYPING, NOT THE ONE IT WAS BORN WITH.** A specimen that Terastallised
+    # into Steel walks into Stealth Rock as a Steel type, and one that Tera'd out of
+    # Flying now sets off the Spikes it used to float over. `battle_types` is the same
+    # door the damage calculation reads, so the two cannot disagree about what something
+    # counts as - which they did until Tera arrived and made it visible.
+    types = tera_battle_types(specimen)
 
     # ITEM PHASE 5: Heavy-Duty Boots walk over everything laid on this side of the field.
     # Answered before anything is read, because the boots do not care WHICH hazard it is.
@@ -283,7 +290,10 @@ def is_grounded(pokemon, gravity_active=False):
     # read this too, so an Iron Ball holder eats Spikes and stands in a Grassy Terrain.
     if item in GROUNDING_ITEMS: return True
 
-    if 'flying' in types: return False
+    # The typing it counts as NOW: Terastallising into Flying lifts a specimen over the
+    # Spikes, and out of Flying drops it into them. Asked through the same door the chart
+    # reads, so "what is it" has one answer.
+    if 'flying' in tera_battle_types(pokemon): return False
     if ability in LEVITATION_ABILITIES: return False
     if item == 'air-balloon': return False
 
@@ -6680,8 +6690,16 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             condition_power = CONDITION_BALL_MULTIPLIER
 
     # 🚨 TERA BLAST takes the user's Tera type once Terastallized, Normal otherwise
-    if move_name == 'tera-blast' and attacker.get('tera_type'):
-        move_type = attacker['tera_type']
+    # **ONCE THE CRYSTAL IS OUT, NOT BEFORE.** This read the stored column, so a specimen
+    # that had merely CHOSEN a Tera type threw a Tera Blast of that element without ever
+    # Terastallising - the move is Normal until the transformation happens.
+    #
+    # `active_tera_type` answers None until then, and Stellar is a real answer here: a
+    # Stellar Tera Blast is a Stellar-type move, which is the only way one is ever thrown.
+    if move_name == 'tera-blast':
+        _blast = tera_active_type(attacker)
+        if _blast:
+            move_type = _blast
 
     # ==========================================
     # 🎭 THE -ATE FAMILY, AND THE REST OF THE TYPE REWRITES
@@ -6854,6 +6872,14 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
                 and (defender.get('volatile_statuses') or {}).get(SMACKED_DOWN)):
             step = 1.0
         type_multiplier *= step
+
+    # **A STELLAR MOVE IS NOT ON THE CHART AT ALL.** `TYPE_CHART['stellar']` does not
+    # exist, so the loop above leaves every step at 1.0 and the answer is silently
+    # neutral. Stellar exists to punish Terastallisation, so it is asked directly and
+    # OVERRIDES the loop rather than multiplying with it.
+    _stellar = tera_stellar_effectiveness(move_type, defender)
+    if _stellar is not None:
+        type_multiplier = _stellar
 
 
     # ==========================================

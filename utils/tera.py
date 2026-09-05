@@ -66,9 +66,18 @@ def default_tera_type(specimen):
 
 
 def tera_type_of(specimen):
-    """The type this specimen would become, chosen or defaulted."""
+    """
+    The type this specimen would become: forced, then chosen, then defaulted.
+
+    A FORCED type outranks whatever is on file. Terapagos is always Stellar and an
+    Ogerpon is always its mask's element - neither can be bought out of with shards, and
+    a value stored before the rule existed must not win.
+    """
+    forced = (species_rule(specimen) or {}).get('forced')
+    if forced:
+        return forced
     stored = str((specimen or {}).get('tera_type') or '').strip().lower()
-    if stored and is_element(stored):
+    if stored and (is_element(stored) or stored == STELLAR):
         return stored
     return default_tera_type(specimen)
 
@@ -98,18 +107,55 @@ def may_terastallise(specimen, key_items=None, adaptation=None):
     return tera_type_of(specimen) is not None
 
 
+# How far a stat stage may be pushed. Embody Aspect is a +1 like any other, and a
+# specimen already at the ceiling gains nothing rather than overflowing.
+STAGE_CEILING = 6
+
+
 def terastallise(specimen):
     """
     Bring the crystal out. Returns the type it became, or None if it could not.
 
     Nothing is written to `types`: see the module docstring. The marker is what every
     reader asks about.
+
+    **THE SPECIES RULE IS READ FIRST AND APPLIED HERE**, except the form change, which
+    needs the database and belongs to the caller - see `form_for`. Reading the rule before
+    anything is written matters: it is keyed on the specimen's NAME, and a caller that
+    changed the form first would look up a rule for the form it had already become.
     """
     element = tera_type_of(specimen)
     if not specimen or not element:
         return None
     specimen[TERA_MARKER] = True
+
+    rule = species_rule(specimen)
+    if rule and rule.get('ability'):
+        # **EMBODY ASPECT REPLACES THE ABILITY**, and Teraform Zero replaces Tera Shell.
+        # Written onto the specimen rather than returned, because every reader of an
+        # ability asks the specimen.
+        specimen['ability'] = rule['ability']
+    if rule and rule.get('boost'):
+        stat, stages = rule['boost']
+        current = (specimen.setdefault('stat_stages', {})).get(stat, 0)
+        specimen['stat_stages'][stat] = min(STAGE_CEILING, current + stages)
     return element
+
+
+def form_for(specimen):
+    """
+    The species row this specimen becomes on Terastallising, or None.
+
+    Only Terapagos has one - `terapagos-terastal` unfolds into `terapagos-stellar`, which
+    has been sitting in `base_pokemon_species` since the import. Separated from
+    `terastallise` because changing a form needs the database and that function does not.
+    """
+    return (species_rule(specimen) or {}).get('form')
+
+
+def species_flavour(specimen):
+    """What to say about a species that does more than change type. "" for the rest."""
+    return (species_rule(specimen) or {}).get('flavour', '')
 
 
 def battle_types(specimen, terrain='none'):
@@ -123,7 +169,9 @@ def battle_types(specimen, terrain='none'):
     terrain, and asking both would give a Terastallised specimen two typings.
     """
     element = active_tera_type(specimen)
-    if element:
+    # **STELLAR IS THE EXCEPTION.** It changes what a specimen HITS with and not what it
+    # counts as - a Stellar Terapagos is still whatever it was, defensively.
+    if element and element != STELLAR:
         return [element]
     # Imported here rather than at module scope: utils.formulas imports this module, and
     # asking for it at the top would close the circle.
@@ -147,6 +195,10 @@ def stab_multiplier(attacker, move_type, adaptability=False, terrain='none'):
     Tera type once the crystal is out - that is correct for the chart and would lose the
     distinction between the first two rows here.
     """
+    stellar = stellar_boost(attacker, move_type, adaptability, terrain)
+    if stellar is not None:
+        return stellar
+
     from utils.formulas import mimicry_types
     ordinary = ADAPTABILITY_STAB if adaptability else 1.5
 
@@ -173,3 +225,117 @@ def change_is_affordable(inventory, element, cost=SHARDS_PER_CHANGE):
     """`(affordable, held, needed)` for changing a specimen to `element`."""
     held = shards_held(inventory, element)
     return held >= cost, held, cost
+
+
+# ==========================================
+# THE STELLAR TYPE
+# ==========================================
+# **STELLAR IS THE EXCEPTION TO EVERY RULE ABOVE**, which is why it is written out here
+# rather than folded into them:
+#
+#   * it does NOT replace the defensive typing - a Stellar Terapagos is still whatever it
+#     was, and takes damage as that;
+#   * its offence is a ONE-SHOT per element: the first move of each type gets the boost
+#     and every one after it is ordinary;
+#   * a Stellar MOVE is super effective against anything that has Terastallised and
+#     neutral against everything else - a matchup that lives nowhere in the type chart.
+#
+# It cannot be bought with shards. Terapagos is the only thing that has it, which is the
+# games' rule and the reason `!tera` never offers it.
+STELLAR = 'stellar'
+
+# The first move of each element gets this; matching an original type is worth more.
+STELLAR_STAB = 2.0
+STELLAR_OTHER = 1.2
+
+# Which elements this specimen has already spent its Stellar boost on. Kept ON THE
+# SPECIMEN rather than in the battle state, because it belongs to the specimen and has to
+# survive a switch out and back the way the Tera marker does.
+STELLAR_SPENT = '_stellar_spent'
+
+
+def is_stellar(specimen):
+    """Whether this specimen's Tera type is Stellar, chosen or forced."""
+    return tera_type_of(specimen) == STELLAR
+
+
+def stellar_boost(attacker, move_type, adaptability=False, terrain='none'):
+    """
+    What Stellar pays for this move, and SPENDS the element if it pays.
+
+    Returns None when Stellar is not in play, so the caller falls through to the ordinary
+    rules. Mutates the attacker deliberately: "once per type" has to be remembered
+    somewhere, and the specimen is the thing that remembers.
+    """
+    if not is_terastallised(attacker) or not is_stellar(attacker):
+        return None
+
+    from utils.formulas import mimicry_types
+    originals = mimicry_types(attacker, terrain)
+    spent = attacker.setdefault(STELLAR_SPENT, set())
+
+    if move_type in spent:
+        # Already cashed in. From here it is an ordinary move of its own element.
+        ordinary = ADAPTABILITY_STAB if adaptability else 1.5
+        return ordinary if move_type in originals else 1.0
+
+    spent.add(move_type)
+    return STELLAR_STAB if move_type in originals else STELLAR_OTHER
+
+
+def stellar_effectiveness(move_type, defender):
+    """
+    What a STELLAR-type move does, which the type chart has no row for.
+
+    Super effective against anything that has Terastallised - the type exists to punish
+    the mechanic - and neutral against everything else. None when the move is not Stellar,
+    so the caller reads the chart as usual.
+    """
+    if str(move_type or '').lower() != STELLAR:
+        return None
+    return 2.0 if is_terastallised(defender) else 1.0
+
+
+# ==========================================
+# WHAT TERASTALLISING CHANGES ABOUT A SPECIES
+# ==========================================
+# Two species do more than change type, and both were sitting in the database waiting:
+# `terapagos-stellar` (10277) and its Teraform Zero have existed since the import, and
+# Ogerpon's four masks each have an ability that only appears once the crystal is out.
+#
+#   forced   the Tera type this species always gets, whatever is on file
+#   form     the species row it becomes
+#   ability  what it starts answering to
+#   boost    (stat, stages) raised on transforming
+TERA_SPECIES_RULES = {
+    'terapagos-terastal': {
+        'forced': STELLAR, 'form': 'terapagos-stellar', 'ability': 'teraform-zero',
+        'flavour': 'unfolded into its Stellar Form',
+    },
+    # **EMBODY ASPECT.** Ogerpon's ability changes the moment it Terastallises, and which
+    # stat it raises depends on the mask it wears. Its Tera type is forced to the mask's
+    # element - an Ogerpon cannot Terastallise into anything else, which is why no shard
+    # buys it one.
+    'ogerpon': {
+        'forced': 'grass', 'ability': 'embody-aspect-teal',
+        'boost': ('speed', 1), 'flavour': 'embodied the Teal Mask',
+    },
+    'ogerpon-wellspring-mask': {
+        'forced': 'water', 'ability': 'embody-aspect-wellspring',
+        'boost': ('sp_def', 1), 'flavour': 'embodied the Wellspring Mask',
+    },
+    'ogerpon-hearthflame-mask': {
+        'forced': 'fire', 'ability': 'embody-aspect-hearthflame',
+        'boost': ('attack', 1), 'flavour': 'embodied the Hearthflame Mask',
+    },
+    'ogerpon-cornerstone-mask': {
+        'forced': 'rock', 'ability': 'embody-aspect-cornerstone',
+        'boost': ('defense', 1), 'flavour': 'embodied the Cornerstone Mask',
+    },
+}
+
+
+def species_rule(specimen):
+    """The Tera rule for the form this specimen is standing as, or None."""
+    return TERA_SPECIES_RULES.get(
+        str((specimen or {}).get('name') or '').lower().strip())

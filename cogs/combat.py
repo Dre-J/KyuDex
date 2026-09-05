@@ -54,7 +54,9 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              z_status_effect_for, expand_z_stats,
                              move_pierces_immunity)
 from utils.tera import (may_terastallise, terastallise, tera_type_of,
-                        active_tera_type, shard_for, TERA_MARKER, TERA_ORB)
+                        active_tera_type, shard_for, TERA_MARKER, TERA_ORB,
+                        form_for as tera_form_for,
+                        species_flavour as tera_species_flavour)
 from utils.directives import credit_cull, credit_evolution
 from utils.roster import party_filter
 from utils.prefs import trainer_skies
@@ -5832,18 +5834,32 @@ class BattleDashboard(BattleCard):
                 log_msg = f"🔴 **{old_name.capitalize()}** absorbed Galar particles and Dynamaxed!"
 
             elif form_name == 'tera':
-                # NO FORM CHANGE AND NO STAT REBUILD. The typing is computed rather than
-                # stored - `utils.tera.battle_types` is the door - so the marker IS the
-                # transformation, and this branch does not touch the database at all.
+                # THE TYPING IS COMPUTED RATHER THAN STORED - `utils.tera.battle_types` is
+                # the door - so for almost everything the marker IS the transformation and
+                # no stats are rebuilt.
+                #
+                # Two species do more: Terapagos unfolds into its Stellar Form and Ogerpon
+                # puts on Embody Aspect. Both rules are READ FIRST, because they are keyed
+                # on the name and `terastallise` may change what the specimen answers to.
+                new_form = tera_form_for(p_active)
+                flavour = tera_species_flavour(p_active)
+
                 element = terastallise(p_active)
                 if not element:
                     return await interaction.followup.send(
                         "💎 This specimen has no typing to crystallise.", ephemeral=True)
+
+                if new_form:
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        await assume_species_form(db, p_active, new_form)
+
                 state['adaptation'].update({
                     'used': True, 'active': True, 'type': 'tera', 'turns': -1,
                     'holder': battle_render.adaptation_holder(p_active)})
                 log_msg = (f"💎 **{old_name.capitalize()}** Terastallised into the "
                            f"**{element.title()}** type!")
+                if flavour:
+                    log_msg += f" It {flavour}!"
 
             else:
                 print("DEBUG: Applying Mega/G-Max logic. Connecting to DB...")
@@ -10021,7 +10037,13 @@ class Combat(commands.Cog):
                             # typing is COMPUTED rather than stored, so the marker IS the
                             # transformation. `turns: -1` because it lasts the battle.
                             elif form == 'tera':
+                                # Read before transforming: both rules are keyed on the
+                                # name, and terastallising may change what it answers to.
+                                _new_form = tera_form_for(active_poke)
+                                _flavour = tera_species_flavour(active_poke)
                                 element = terastallise(active_poke)
+                                if element and _new_form:
+                                    await assume_species_form(db, active_poke, _new_form)
                                 if element:
                                     adp_state.update({'used': True, 'active': True,
                                                       'type': 'tera', 'turns': -1,
@@ -10031,6 +10053,8 @@ class Combat(commands.Cog):
                                         f"{active_poke['name'].capitalize()} "
                                         f"Terastallised into the **{element.title()}** "
                                         f"type!\n")
+                                    if _flavour:
+                                        combat_log += f"   It {_flavour}!\n"
 
             # ==========================================
             # PHASE 1: TURN ORDER & SPEED RESOLUTION
