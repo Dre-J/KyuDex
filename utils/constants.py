@@ -2508,7 +2508,13 @@ MEGA_STONE_SPECIES = {
     'venusaurite': 'venusaur',
     'victreebelite': 'victreebel',
     'zeraorite': 'zeraora',
-    'zygardite': 'zygarde',
+    # THE ONLY STONE BOUND TO A FORM THE PLAYER CANNOT WALK IN WITH. Mega Zygarde comes
+    # from the 100% Complete Forme, and nothing owns that outside a battle: the Cube
+    # builds 10% and 50%, and only Power Construct assembles the rest of the cells, when
+    # its HP falls below half. So the stone does nothing until that happens - which is
+    # the transformation happening in the right order rather than a restriction on top
+    # of it.
+    'zygardite': 'zygarde-complete',
 }
 
 # Rayquaza is deliberately absent: it Mega Evolves by KNOWING Dragon Ascent rather than
@@ -2525,7 +2531,13 @@ MEGA_STONE_FREE_SPECIES = {'rayquaza'}
 # and must NOT reach Alolan Raichu, whose base name is also 'raichu'. The fallback that
 # makes one Tatsugiri row cover three forms is exactly what would let it through, so the
 # stones that mean "this form and no other" are named here.
-MEGA_STONE_EXACT_FORMS = frozenset({'raichunite-x', 'raichunite-y'})
+#
+# The Zygardite is here for the same reason as the Raichunites and a different one as
+# well. `zygarde-complete` never equals `zygarde`, so the fallback would refuse the 10%
+# and 50% Formes on its own - but "this form and no other" is the RULE here rather than
+# a consequence of how the two names happen to be spelled, and it should not quietly
+# stop being true if a form is ever renamed.
+MEGA_STONE_EXACT_FORMS = frozenset({'raichunite-x', 'raichunite-y', 'zygardite'})
 
 
 def mega_stone_binds_to(species_name, held_item):
