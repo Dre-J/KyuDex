@@ -12,6 +12,7 @@ from utils.constants import (DB_FILE, NATURES, CONSUMABLE_DATABASE, FIELD_MISSIO
                              EV_LOWERING_BERRIES, MAX_HAPPINESS,
                              STARTER_TOKENS, STARTER_ITEMS, STARTER_TMS,
                              STARTER_CAN_BE_SHINY, type_badges,
+                             super_effective_against,
                              scaled_rarity, roll_shiny, ecosystem_multiplier,
                              SHINY_SCORE_CEILING, RARITY_SCORE_CEILING,
                              shiny_chance, ECOSYSTEM_BASELINE,
@@ -1341,12 +1342,24 @@ class PokemonPaginator(TabbedCard):
                 f"{str(damage_class or '?').title():<9}"
                 f"{power if power else '—':>4}"
                 f"{f'{accuracy}%' if accuracy else '—':>7}   PP {pp if pp else '—'}")
-        coverage = type_badges(
-            list(dict.fromkeys(m[1] for m in self.moves if m[1]))) or "—"
+        # WHAT THE MOVES BEAT, rather than what they are. The table directly above
+        # already prints the element of every move, so listing those same elements again
+        # under "Coverage" was a line that told a trainer nothing. Status moves are left
+        # out of it: a Thunder Wave covers nothing, whatever colour it is.
+        offensive = [m[1] for m in self.moves if m[1] and (m[3] or 0) > 0]
+        beaten = super_effective_against(offensive)
+        if beaten:
+            coverage = type_badges(beaten)
+        elif offensive:
+            # A real answer, and one worth knowing: a Normal-only attacker is resisted
+            # or refused by three types and beats none.
+            coverage = "*nothing — no element it carries beats anything*"
+        else:
+            coverage = "*nothing — it knows no damaging moves*"
         return [text(
             "### 💥 Known Moves\n"
             f"```\n{chr(10).join(rows)}\n```\n"
-            f"**Coverage:** {coverage}\n"
+            f"**Super effective against:** {coverage}\n"
             "-# `!learn <move>` to teach · `!moveset` for everything it could learn")]
 
     def extras_panel(self):

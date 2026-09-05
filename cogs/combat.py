@@ -49,7 +49,8 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              mega_stone_binds_to, is_mega_stone,
                              MEGA_STONE_FREE_SPECIES, Z_HP_FRACTION_KEY,
                              ADRENALINE_ORB, ADRENALINE_ORB_STAGES,
-                             z_status_effect_for, expand_z_stats)
+                             z_status_effect_for, expand_z_stats,
+                             move_pierces_immunity)
 from utils.directives import credit_cull, credit_evolution
 from utils.roster import party_filter
 from utils.prefs import trainer_skies
@@ -1783,7 +1784,13 @@ async def pick_npc_move(db, available_moves, npc, foe, state, context='ATTACK'):
         if m_class != 'status' and m_power > 0:
             multiplier = 1.0
             for foe_type in foe_types:
-                multiplier *= TYPE_CHART.get(m_type, {}).get(foe_type, 1.0)
+                step = TYPE_CHART.get(m_type, {}).get(foe_type, 1.0)
+                # A move that walks through an immunity has to be scored as one, or the
+                # AI reads Nihil Light against a Fairy as zero damage and never fires
+                # the one move in the game that answers it.
+                if step == 0 and move_pierces_immunity(m['name'], m_type, foe_type):
+                    step = 1.0
+                multiplier *= step
 
             # STAB (Same Type Attack Bonus) calculation
             if m_type in npc_types:
