@@ -3335,6 +3335,12 @@ IMMUNITY_PIERCING_ITEMS = {
 # what "the calculation takes into account its other type" means.
 IMMUNITY_PIERCING_MOVES = {
     'nihil-light': ('dragon', ('fairy',)),
+    # Thousand Arrows reaches the sky. The chart's ground-vs-flying zero is only HALF of
+    # what keeps a Ground move off a Salamence, though - `is_grounded` is the other half,
+    # and it answers for Levitate, Magnet Rise and Telekinesis. Both are opened for this
+    # move; see GROUNDING_MOVES in utils/formulas.py, which also knocks the target down
+    # and keeps it there.
+    'thousand-arrows': ('ground', ('flying',)),
 }
 
 

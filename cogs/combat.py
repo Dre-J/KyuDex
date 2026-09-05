@@ -12552,62 +12552,10 @@ class Combat(commands.Cog):
             traceback.print_exc()
             await ctx.send(f"\U0001f6a8 **Engine Crash Detected!**\n```py\n{e}\n```\nCheck your terminal for the full traceback.")
 
-    @commands.command(name="movedex", aliases=["move", "attackinfo", "technique"])
-    @checks.has_started()
-    @checks.is_authorized()
-    async def move_lookup(self, ctx, *, move_name: str):
-        # Format the user's input to match the database standard (e.g., "Solar Beam" -> "solar-beam")
-        formatted_name = move_name.lower().replace(" ", "-")
-        
-        async with aiosqlite.connect(DB_FILE) as db:
-
-            # Query the universal move dictionary
-            async with db.execute("""
-                SELECT name, type, power, accuracy, damage_class, pp 
-                FROM base_moves 
-                WHERE name = ?
-            """, (formatted_name,)) as cursor:
-                move_data = await cursor.fetchone()
-        
-        if not move_data:
-            return await ctx.send(f"⚠️ The behavior **{move_name.title()}** is not recognized in the standard ecological compendium.")
-            
-        name, move_type, power, accuracy, dmg_class, pp = move_data
-        
-        # Format the data for display
-        pwr_display = power if power and power > 0 else "-"
-        acc_display = f"{accuracy}%" if accuracy else "-"
-        
-        # Assign standard icons based on the damage classification
-        if dmg_class == 'physical':
-            dmg_icon = "💥"
-            embed_color = discord.Color.orange()
-        elif dmg_class == 'special':
-            dmg_icon = "☄️"
-            embed_color = discord.Color.purple()
-        else:
-            dmg_icon = "🛡️"
-            embed_color = discord.Color.light_grey()
-
-        # Build the UI
-        embed = discord.Embed(title=f"📖 Field Guide: {name.replace('-', ' ').title()}", color=embed_color)
-        
-        embed.add_field(name="Elemental Type", value=type_badges([move_type]), inline=True)
-        embed.add_field(name="Classification", value=f"{dmg_icon} {dmg_class.capitalize()}", inline=True)
-        embed.add_field(name="Base Power", value=str(pwr_display), inline=True)
-        
-        embed.add_field(name="Accuracy", value=acc_display, inline=True)
-        embed.add_field(name="Max PP", value=str(pp), inline=True)
-        
-        # Add a quick tip based on the damage class!
-        if dmg_class == 'physical':
-            embed.set_footer(text="Physical attacks calculate damage using the user's Attack stat.")
-        elif dmg_class == 'special':
-            embed.set_footer(text="Special attacks calculate damage using the user's Special Attack stat.")
-        else:
-            embed.set_footer(text="Status moves apply biological effects, stat changes, or environmental hazards.")
-
-        await ctx.send(embed=embed)
+    # `!movedex` LIVES IN cogs/dex.py NOW. It was an embed of six numbers here - type,
+    # class, power, accuracy, PP - which is everything base_moves has and nothing that
+    # says what a move DOES. It is a reference lookup rather than combat, and it is the
+    # fourth of four beside !dex, !abilitydex and !itemdex, sharing their card.
 
     @commands.command(name="npcduel", aliases=["battle_npc", "rival"])
     @checks.has_started()

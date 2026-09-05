@@ -41,6 +41,7 @@ from utils import checks
 from utils import abilities as A
 from utils import dex as D
 from utils import items as I
+from utils import moves as MV
 
 DEX_COLOUR = discord.Colour(0x41F097)
 SHINY_GOLD = discord.Colour(0xF1C40F)
@@ -447,6 +448,145 @@ class AbilityCard(TabbedCard):
         return "\n\n".join(blocks)
 
 
+class MoveCard(TabbedCard):
+    """
+    One move: its numbers, what it does, and the fine print.
+
+    **THE OLD `!movedex` WAS AN EMBED OF SIX NUMBERS.** Type, class, power, accuracy, PP -
+    everything `base_moves` had, which is everything the engine needs to RESOLVE a move
+    and nothing that says what it does. A trainer could be told Thousand Arrows is Ground
+    and 90 power, and not that it drags fliers out of the sky.
+
+    Lives here rather than in `cogs/combat.py` because it is a reference lookup, not
+    combat - the fourth of four, beside `!dex`, `!abilitydex` and `!itemdex`, sharing
+    their card and their "a thinner card beats a crash" rule about missing tables.
+    """
+
+    TABS = {
+        'effect': ("Full rules", "📜"),
+        'detail': ("Fine print", "🔬"),
+    }
+    ACCENT = DEX_COLOUR
+    NOT_YOURS = "📖 That is somebody else's field guide. Run `!movedex` for your own."
+
+    CLASS_ICONS = {'physical': "💥", 'special': "☄️", 'status': "🛡️"}
+
+    def __init__(self, owner_id, name, **kwargs):
+        super().__init__(owner_id, **kwargs)
+        self.name = name
+        self.stats = {}
+        self.described = None
+        self.imported = False
+
+    async def load(self):
+        async with aiosqlite.connect(f"file:{DB_FILE}?mode=ro", uri=True) as db:
+            self.stats = await MV.stats(db, self.name) or {}
+            self.described = await MV.describe(db, self.name)
+            self.imported = await MV.text_table_ready(db)
+        return self
+
+    def display(self):
+        return (self.described or {}).get('display') or MV.pretty_move(self.name)
+
+    def header(self):
+        stats = self.stats
+        damage_class = stats.get('damage_class') or 'status'
+        icon = self.CLASS_ICONS.get(damage_class, "❔")
+
+        power = stats.get('power') or 0
+        accuracy = stats.get('accuracy')
+        numbers = [
+            type_badges([stats['type']]) if stats.get('type') else "❔ Unknown",
+            f"{icon} {damage_class.title()}",
+            f"💪 {power}" if power else "💪 —",
+            f"🎯 {accuracy}%" if accuracy else "🎯 —",
+            f"🔋 {stats.get('pp') or '—'} PP",
+        ]
+        priority = stats.get('priority') or 0
+        if priority:
+            # Only when it is not zero: "Priority 0" is true of almost every move and
+            # says nothing, and the ones where it matters are the reason to look.
+            numbers.append(f"⚡ Priority {priority:+d}")
+
+        lines = [f"### 📖 {self.display()}", "  ·  ".join(numbers)]
+
+        short = (self.described or {}).get('short_effect')
+        if short:
+            lines.append(short)
+        elif self.imported:
+            # THE DESCRIPTIONS ARE IMPORTED AND THIS MOVE STILL HAS NONE. Forty-two of
+            # them have no PokeAPI entry to import - every Z-Move, and the Starmobile
+            # torques - so telling anybody to run the migration would be advice that
+            # cannot help.
+            lines.append("*No description exists for this move.*")
+        else:
+            lines.append("*No descriptions on file — run `migrate_move_dex.py`.*")
+
+        generation = (self.described or {}).get('generation')
+        if generation:
+            lines.append(f"-# Generation {generation} · `{self.name}`")
+        else:
+            lines.append(f"-# `{self.name}`")
+        return [text("\n".join(lines))]
+
+    def panel(self, tab):
+        if tab == 'effect':
+            described = self.described or {}
+            full = described.get('effect')
+            if not full:
+                return [text("### 📜 Full rules\n*Nothing on file for this move.*")]
+            block = f"### 📜 Full rules\n{full}"
+            flavour = described.get('flavour')
+            if flavour and flavour != full:
+                block += f"\n\n-# *{flavour}*"
+            return [text(block)]
+
+        if tab == 'detail':
+            return [text("### 🔬 Fine print\n" + "\n".join(self.fine_print()))]
+        return []
+
+    def fine_print(self):
+        """
+        The columns the engine reads and the old embed never showed.
+
+        Only the ones that are SET: a move with no ailment, no stat change, no drain and
+        no healing would otherwise draw six lines of "none", which is how the old embed
+        came to be six numbers in the first place.
+        """
+        stats = self.stats
+        lines = []
+
+        ailment = stats.get('ailment')
+        if ailment and ailment not in ('none', 'unknown'):
+            chance = stats.get('ailment_chance') or 0
+            odds = f" ({chance}%)" if 0 < chance < 100 else ""
+            lines.append(f"🧪 Inflicts **{ailment.replace('-', ' ')}**{odds}")
+        elif ailment == 'unknown':
+            # PokeAPI's way of saying "a secondary effect with no enum for it" - which is
+            # exactly the case where the prose above is doing the work.
+            lines.append("🧪 Carries an effect the tables have no name for")
+
+        stat_name = stats.get('stat_name')
+        if stat_name and stat_name != 'none' and stats.get('stat_change'):
+            chance = stats.get('stat_chance') or 0
+            odds = f" ({chance}%)" if 0 < chance < 100 else ""
+            lines.append(f"📊 **{stat_name.replace('-', ' ').title()}** "
+                         f"{stats['stat_change']:+d}{odds}")
+
+        if stats.get('drain'):
+            drain = stats['drain']
+            lines.append(f"🩸 {'Drains' if drain > 0 else 'Recoils for'} "
+                         f"**{abs(drain)}%** of the damage")
+        if stats.get('healing'):
+            lines.append(f"💚 Restores **{stats['healing']}%** of maximum HP")
+
+        target = stats.get('target')
+        if target and target != 'selected-pokemon':
+            lines.append(f"🎯 Targets **{target.replace('-', ' ')}**")
+
+        return lines or ["*Nothing beyond the numbers above.*"]
+
+
 class ItemCard(TabbedCard):
     """
     One item: what it does, what it costs, and what else sits on its shelf.
@@ -661,6 +801,25 @@ class Dex(commands.Cog):
 
     # NOT `gear`: `!backpack` in cogs/economy.py already answers to it, and discord.py
     # refuses the whole extension rather than the one clash - the cog stops loading.
+    @commands.command(name="movedex", aliases=["move", "attackinfo", "technique"])
+    @checks.has_started()
+    @checks.is_authorized()
+    async def movedex(self, ctx, *, move: str = None):
+        """
+        Look a move up. `!movedex thousand-arrows`.
+
+        The buttons open its full rules and the fine print the numbers never carried -
+        what it inflicts, what it drains, and what it targets.
+        """
+        name, complaint = await MV.lookup(move)
+        if complaint:
+            return await ctx.send(complaint)
+
+        card = await MoveCard(ctx.author.id, name).load()
+        if not card.stats:
+            return await ctx.send("📖 That move has no record in the archive.")
+        await ctx.send(view=card.rebuild())
+
     @commands.command(name="itemdex", aliases=["iteminfo"])
     @checks.has_started()
     @checks.is_authorized()

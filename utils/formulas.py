@@ -192,9 +192,71 @@ def berries_are_blocked(opponent):
     """Unnerve, read off the specimen standing opposite."""
     return bool(opponent) and get_active_ability(opponent) in BERRY_BLOCKING_ABILITIES
 
+# ==========================================
+# 🏹 KNOCKED OUT OF THE AIR
+# ==========================================
+# Thousand Arrows drags a raised specimen down and KEEPS IT DOWN for the rest of the
+# battle - so this is a volatile rather than a one-off, and `is_grounded` has to honour
+# it or the grounding would last exactly as long as the turn it happened in.
+#
+# Named for Smack Down, which is the same effect and is already sitting in `base_moves`
+# doing nothing. It is deliberately NOT in GROUNDING_MOVES: adding it would change how an
+# existing move behaves, and that was not asked for. One word, when it is.
+SMACKED_DOWN = 'smacked_down'
+GROUNDING_MOVES = {'thousand-arrows'}
+
+# The two ways of being raised that live in volatiles. The other two - the Flying type and
+# Levitate - are read off the specimen itself and cannot be popped.
+LIFTING_VOLATILES = ('magnet_rise', 'telekinesis')
+
+
+def is_raised(pokemon, ability=None):
+    """
+    Whether this specimen is off the ground for a reason Thousand Arrows answers.
+
+    NOT the same question as `not is_grounded`: an Air Balloon holder is off the ground
+    and this says no, because the four causes the move names are the Flying type,
+    Levitate, Magnet Rise and Telekinesis. The balloon keeps its holder clear.
+    """
+    if pokemon is None:
+        return False
+    volatiles = pokemon.get('volatile_statuses') or {}
+    if volatiles.get(SMACKED_DOWN):
+        return False
+    if 'flying' in (pokemon.get('types') or []):
+        return True
+    if (ability if ability is not None else get_active_ability(pokemon)) \
+            in LEVITATION_ABILITIES:
+        return True
+    return any(volatiles.get(key) for key in LIFTING_VOLATILES)
+
+
+def ground_specimen(pokemon):
+    """
+    Knock it down and keep it there. Returns whether anything actually changed.
+
+    Magnet Rise and Telekinesis are POPPED rather than merely overruled, because they are
+    counted down elsewhere and a specimen that is already on the floor should not still be
+    told its Magnet Rise has three turns left.
+    """
+    if pokemon is None:
+        return False
+    volatiles = pokemon.setdefault('volatile_statuses', {})
+    if volatiles.get(SMACKED_DOWN):
+        return False
+    volatiles[SMACKED_DOWN] = True
+    for key in LIFTING_VOLATILES:
+        volatiles.pop(key, None)
+    return True
+
+
 def is_grounded(pokemon, gravity_active=False):
     """Evaluates if a specimen is physically touching the battlefield."""
     if gravity_active: return True # 🚨 Gravity grounds everything!
+    # Knocked out of the air and kept there. Read before the Iron Ball for the same
+    # reason the Iron Ball is read before the Flying type: it is the fact that settles
+    # the question, whatever else is true.
+    if (pokemon.get('volatile_statuses') or {}).get(SMACKED_DOWN): return True
     types = pokemon.get('types', [])
     ability = get_active_ability(pokemon)
     item = get_active_item(pokemon)
@@ -2570,11 +2632,30 @@ def can_be_trapped(pokemon):
     return 'ghost' not in (pokemon.get('types') or [])
 
 
-def apply_trap(pokemon):
-    """Pin a specimen in place. Returns whether it actually took hold."""
+def trapper_mark(pokemon):
+    """Who is doing the holding, as something that survives being copied about."""
+    if pokemon is None:
+        return True
+    return pokemon.get('instance_id') or pokemon.get('name') or True
+
+
+def apply_trap(pokemon, trapper=None):
+    """
+    Pin a specimen in place. Returns whether it actually took hold.
+
+    **THE TRAP BELONGS TO WHOEVER SET IT.** "Prevents the target from fleeing or
+    switching out, AS LONG AS THE USER REMAINS IN BATTLE" is the whole of Thousand Waves,
+    and of Mean Look, Block and Spider Web before it - and the flag was a bare True, so a
+    trapper that walked away left its victim pinned by nobody for the rest of the battle.
+
+    Recorded rather than released on the way out, because `leave_field` is called from ten
+    places and knows only the specimen that is leaving. `is_trapped` already takes the
+    opponent, so the question "is the one who caught you still standing there" can be
+    answered where it is asked instead.
+    """
     if not can_be_trapped(pokemon):
         return False
-    pokemon.setdefault('volatile_statuses', {})['hard_trapped'] = True
+    pokemon.setdefault('volatile_statuses', {})['hard_trapped'] = trapper_mark(trapper)
     return True
 
 
@@ -2608,8 +2689,19 @@ def is_trapped(pokemon, opponent=None):
     if not can_be_trapped(pokemon):
         return False
 
-    if volatiles.get('partially_trapped', 0) > 0 or volatiles.get('hard_trapped'):
+    if volatiles.get('partially_trapped', 0) > 0:
         return True
+
+    # A HARD TRAP LASTS ONLY WHILE ITS SETTER IS STILL THERE. The stored value names the
+    # specimen that set it, so a Mean Look whose owner has since been withdrawn stops
+    # holding anybody. `True` is the old shape, kept meaningful: a trap with no owner
+    # recorded holds unconditionally, which is what every trap did before this.
+    held_by = volatiles.get('hard_trapped')
+    if held_by:
+        if held_by is True or opponent is None:
+            return True
+        if trapper_mark(opponent) == held_by:
+            return True
 
     # What the specimen OPPOSITE is holding it with. Shadow Tag holds everything; Arena
     # Trap only reaches what is standing on the ground, and Magnet Pull only Steel - so
@@ -6624,7 +6716,14 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         # holding one took full damage from Earthquake.
         #
         # Asked once now, and the cause only decides the wording.
-        if move_type == 'ground' and not is_grounded(defender, gravity):
+        # **THOUSAND ARROWS ANSWERS THREE SEPARATE REFUSALS, NOT ONE.** The chart's
+        # ground-vs-flying zero is handled by IMMUNITY_PIERCING_MOVES; this block and the
+        # immunity table below are the other two, and a move that opened only one of them
+        # would still be refused by whichever was left.
+        drags_down = move_name in GROUNDING_MOVES
+
+        if move_type == 'ground' and not is_grounded(defender, gravity) \
+                and not (drags_down and is_raised(defender, def_ability)):
             lifted = (defender.get('volatile_statuses') or {})
             if lifted.get('magnet_rise') or lifted.get('telekinesis'):
                 return 0, (f"🪂 {defender['name'].capitalize()} is airborne - the attack "
@@ -6637,8 +6736,18 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
 
         immunity_data = BIOLOGICAL_TRAITS['immunities'].get(def_ability)
         
-        # If the defender has an immunity AND the incoming attack matches its element
-        if immunity_data and move_type == immunity_data['type']:
+        # If the defender has an immunity AND the incoming attack matches its element.
+        #
+        # **LEVITATE IS ANSWERED HERE RATHER THAN ABOVE**, so the airborne exemption has
+        # to be made a second time - and for two different reasons. A move that drags a
+        # levitating specimen down reaches it; and a specimen ALREADY dragged down is not
+        # levitating any more, so the ordinary Earthquake that follows reaches it too.
+        # Without the second clause, Thousand Arrows grounds a Gengar and its own ability
+        # goes on refusing every Ground move afterwards.
+        _levitating = def_ability in LEVITATION_ABILITIES
+        if immunity_data and move_type == immunity_data['type'] \
+                and not (_levitating
+                         and (drags_down or not is_raised(defender, def_ability))):
             ability_name = def_ability.replace('-', ' ').title()
             
             # A. Adrenaline Stat Boosts (Sap Sipper, Motor Drive, Well-Baked Body)
@@ -6711,6 +6820,13 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         # other half of a dual type still has its say.
         if step == 0 and move_pierces_immunity(move_name, move_type, def_type):
             step = 1.0
+        # ...and the fourth: the DEFENDER has been knocked out of the air and stays
+        # there. Being grounded has to open the chart as well as `is_grounded`, or
+        # Thousand Arrows drags a Salamence down and the Earthquake that follows still
+        # passes harmlessly underneath it - which is the whole point of dragging it down.
+        if (step == 0 and move_type == 'ground' and def_type == 'flying'
+                and (defender.get('volatile_statuses') or {}).get(SMACKED_DOWN)):
+            step = 1.0
         type_multiplier *= step
 
 
@@ -6732,6 +6848,12 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
             pass # Earthquake hits Digging targets! (Damage doubled later in Phase 1)
         elif defender_invuln == 'air' and move_name in ['gust', 'twister', 'thunder', 'hurricane']:
             pass # Thunder and Hurricane hit Flying targets!
+        elif defender_invuln == 'air' and move_name in GROUNDING_MOVES:
+            # Thousand Arrows reaches a specimen mid-Fly or mid-Bounce and brings it
+            # down, which cancels the move it was charging. Sky Drop is in the air too
+            # and is hit the same way, but is NOT knocked down - that exception lives
+            # with the grounding itself, below, rather than here.
+            pass
         elif defender_invuln == 'underwater' and move_name in ['surf', 'whirlpool']:
             pass 
         elif is_max_move:
@@ -8504,7 +8626,8 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
     # These only apply if the move is a status move, or if the kinetic strike dealt damage!
     if damage > 0 or move.get('class') == 'status':
         if move_name in HARD_TRAP_MOVES:
-            if apply_trap(defender):
+            # The attacker is named, so the hold ends when it does.
+            if apply_trap(defender, attacker):
                 msg += f" 🛑 {defender['name'].capitalize()} can no longer escape!"
             else:
                 msg += f" 👻 {defender['name'].capitalize()} slipped free - Ghosts cannot be held!"
@@ -9124,6 +9247,36 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         if taken:
             msg += (f" 🔮 {defender['name'].capitalize()}'s "
                     f"{sapped.replace('-', ' ').title()} lost {taken} PP!")
+
+    # 🏹 THOUSAND ARROWS: the damage is only half of it. What lands is the grounding, and
+    # it lasts the rest of the battle.
+    #
+    # THREE THINGS IT DOES NOT KNOCK DOWN, and each is a real case rather than a
+    # hypothetical:
+    #
+    #   * a SUBSTITUTE takes the damage in its owner's place and the owner stays in the
+    #     air - the doll is what was hit;
+    #   * a specimen mid-SKY DROP is hit but not brought down, because it is being held
+    #     up by somebody else rather than flying under its own power;
+    #   * anything already on the ground, which has nothing to knock down.
+    #
+    # Fly and Bounce are cancelled outright: the charge ends when its owner does.
+    if move_name in GROUNDING_MOVES and damage > 0:
+        _volatiles = defender.get('volatile_statuses') or {}
+        if not is_raised(defender, def_ability):
+            # Already on the floor. Nothing to knock down, and nothing to say about it -
+            # a Snorlax does not need telling it has been brought to earth.
+            pass
+        elif _volatiles.get('substitute'):
+            pass
+        elif _volatiles.get('charging') == 'sky-drop':
+            msg += (f" 🏹 {defender['name'].capitalize()} was struck out of the sky, "
+                    f"but stayed aloft!")
+        elif ground_specimen(defender):
+            msg += f" 🏹 {defender['name'].capitalize()} was knocked to the ground!"
+            if _volatiles.get('charging') in ('fly', 'bounce'):
+                end_charge(defender)
+                msg += " Its flight was cut short!"
 
     # 🚨 CORE ENFORCER: only bites if the target has already taken its turn. Moving second
     # is the price of the suppression, so a slower Core Enforcer is the one that lands it.
