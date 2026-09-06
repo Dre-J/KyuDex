@@ -339,3 +339,54 @@ def species_rule(specimen):
     """The Tera rule for the form this specimen is standing as, or None."""
     return TERA_SPECIES_RULES.get(
         str((specimen or {}).get('name') or '').lower().strip())
+
+
+# ==========================================
+# THE EXCHANGE
+# ==========================================
+# **THE TWO WAYS TO EARN A SHARD BOTH PAY IN TYPES NOBODY ASKED FOR.** A field mission
+# yields its habitat's element and a defeated specimen leaves its own, so a trainer
+# chasing fifty Water Shards accumulates piles of Grass and Bug on the way. Without
+# somewhere for those to go they are dead weight; with one, every shard is worth
+# something even when it is the wrong one.
+#
+# Four to one, and the loss is the point: the exchange is a floor under bad luck, not a
+# way around the fifty. Converting a full fifty of one element into a full fifty of
+# another costs two hundred, which is far more than simply going and earning them.
+EXCHANGE_RATE = 4
+
+
+def parse_exchange(text):
+    """
+    `(from, to, count)` for `grass fire` or `grass fire 3`, else None.
+
+    Read from the RAW words rather than a flattened blueprint name, because
+    `!refine grass fire` arrives at the command as `grass-fire` and there is no way back
+    from that - `grass-fire` is indistinguishable from a hyphenated blueprint.
+
+    None for anything that is not two elements, which is what lets this share a verb with
+    the blueprints: an unrecognised pair simply falls through to the recipe lookup.
+    """
+    words = str(text or '').replace('-', ' ').split()
+    if len(words) not in (2, 3):
+        return None
+
+    source, target = words[0].lower(), words[1].lower()
+    if not (is_element(source) and is_element(target)):
+        return None
+    if source == target:
+        # Not a refusal to report - a trainer who typed the same element twice meant
+        # something, and the command says what. Returned so the caller can say it.
+        return source, target, 0
+
+    count = 1
+    if len(words) == 3:
+        if not words[2].isdigit():
+            return None
+        count = int(words[2])
+    return source, target, count
+
+
+def exchange_cost(count, rate=EXCHANGE_RATE):
+    """How many shards `count` of another element costs."""
+    return max(0, int(count)) * rate

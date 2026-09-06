@@ -48,7 +48,8 @@ from utils.limits import (EXPEDITION, EXPEDITION_CATCH, EXPEDITION_SOFT_CAP,
 from utils import directives as D
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs, pretty_item
 import re
-from utils.tera import SHARDS_PER_CHANGE, shard_for, tera_type_of
+from utils.tera import (SHARDS_PER_CHANGE, shard_for, tera_type_of,
+                        parse_exchange, exchange_cost, EXCHANGE_RATE)
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
@@ -6161,12 +6162,79 @@ class Ecology(commands.Cog):
             embed.set_footer(text="They have been temporarily removed from your PC. Use !return to recall the team.")
             await ctx.send(embed=embed)
 
+    async def exchange_shards(self, ctx, source, target, count):
+        """
+        Trade shards of one element for another, at a loss.
+
+        **THE LOSS IS THE POINT.** Both ways of earning a shard pay in whatever element
+        the work happened to involve, so a trainer chasing one type accumulates piles of
+        others. This is a floor under bad luck rather than a way around the fifty:
+        converting a full fifty costs two hundred, which is far dearer than earning them.
+        """
+        user_id = str(ctx.author.id)
+
+        if source == target:
+            return await ctx.send(
+                f"⚗️ {type_icon(source)} **{source.title()}** is already what you have. "
+                f"Name a different element to trade for — `!refine {source} water`.")
+        if count < 1:
+            return await ctx.send("⚗️ Refine how many? `!refine grass fire 3`.")
+
+        from_shard, to_shard = shard_for(source), shard_for(target)
+        price = exchange_cost(count)
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT quantity FROM user_inventory "
+                    "WHERE user_id = ? AND item_name = ?", (user_id, from_shard)) as cur:
+                row = await cur.fetchone()
+            held = int(row[0]) if row else 0
+
+            if held < price:
+                return await ctx.send(
+                    f"⚗️ {price} {type_icon(source)} **{source.title()} Tera Shards** are "
+                    f"needed for {count} {type_icon(target)} **{target.title()}**, and "
+                    f"you hold **{held}**.\n"
+                    f"-# {EXCHANGE_RATE} of one element make 1 of another.")
+
+            # SPENT, THEN GRANTED - the same order `!tera` uses. Failing after the spend
+            # costs a trainer shards; failing after the grant hands out free ones.
+            await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - ? "
+                "WHERE user_id = ? AND item_name = ?", (price, user_id, from_shard))
+            await db.execute("""
+                INSERT INTO user_inventory (user_id, item_name, quantity)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + ?
+            """, (user_id, to_shard, count, count))
+            await db.commit()
+
+        await ctx.send(
+            f"⚗️ Refined {price} {type_icon(source)} **{source.title()}** into "
+            f"{count} {type_icon(target)} **{target.title()}**.\n"
+            f"-# {held - price} {source.title()} left · `!tera` to see the rest.")
+
     @commands.command(name="refine", aliases=["craft", "synthesize"])
     @checks.has_started()
     @checks.is_authorized()
     async def refine_item(self, ctx, *, blueprint: str):
-        """Refines raw geological or biological materials into specialized research equipment."""
+        """
+        Refines raw materials into research equipment — or one Tera Shard into another.
+
+        `!refine mega-bracelet` builds a key item from its material.
+        `!refine grass fire` trades four Grass Shards for one Fire Shard.
+        `!refine grass fire 3` does that three times over.
+        """
         user_id = str(ctx.author.id)
+
+        # **THE SHARD EXCHANGE SHARES THIS VERB**, and is read from the RAW words before
+        # they are flattened: `!refine grass fire` becomes `grass-fire` below, which is
+        # indistinguishable from a hyphenated blueprint name. Anything that is not two
+        # elements returns None and falls through to the recipe lookup untouched.
+        swap = parse_exchange(blueprint)
+        if swap:
+            return await self.exchange_shards(ctx, *swap)
+
         blueprint_name = blueprint.lower().replace(" ", "-")
         
         # We can easily expand this dictionary later for Dynamax Bands and Z-Rings!
