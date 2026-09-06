@@ -19,7 +19,8 @@ entry hazards most notably, so a Terastallised specimen still takes Stealth Rock
 original typing. Documented rather than hidden; fixing it means auditing every direct
 reader and belongs in its own change.
 """
-from utils.constants import ADAPTABILITY_STAB, TYPE_CHART, TERA_SHARD_TYPES
+from utils.constants import (ADAPTABILITY_STAB, TYPE_CHART, TERA_SHARD_TYPES,
+                             BIOLOGICAL_TRAITS, MULTI_STRIKE_MOVES)
 
 # The flag on a combatant, set when the crystal comes out and never unset - Tera lasts the
 # rest of the battle in the games, which is what makes it a decision rather than a toggle.
@@ -281,6 +282,78 @@ def stellar_boost(attacker, move_type, adaptability=False, terrain='none'):
 
     spent.add(move_type)
     return STELLAR_STAB if move_type in originals else STELLAR_OTHER
+
+
+# ==========================================
+# THE LOW-POWER FLOOR
+# ==========================================
+# **A WEAK MOVE OF THE MATCHING ELEMENT IS RAISED TO 60 BASE POWER.** Terastallising into
+# your own type is otherwise only a bigger STAB multiplier, and a 40-power move multiplied
+# harder is still a 40-power move; the floor is what makes the crystal worth spending on a
+# specimen whose best coverage is cheap.
+#
+# The exceptions all say the same thing in different ways: **the floor is for moves whose
+# power is genuinely low, not for moves whose power is low RIGHT NOW.**
+#
+#   - The listed moves compute their power from something else - weight, speed, remaining
+#     HP, the held item. Flooring Gyro Ball would pay a slow Pokemon for being fast.
+#   - A multi-hit move's power is per strike, and 60 x5 is not a low-power move.
+#   - A priority move trades power for going first, and the floor would refund the trade.
+#   - Technician already pays for being under sixty. Measured AFTER Technician, so a
+#     40-power move that Technician has taken to 60 is not raised again - but a 30-power
+#     one, which Technician only takes to 45, still is.
+TERA_POWER_FLOOR = 60
+
+FLOORLESS_MOVES = frozenset({
+    'crush-grip', 'dragon-energy', 'electro-ball', 'eruption', 'flail', 'fling',
+    'grass-knot', 'gyro-ball', 'hard-press', 'heat-crash', 'heavy-slam', 'low-kick',
+    'reversal', 'water-spout',
+})
+
+
+def technician_power(power, ability):
+    """
+    What Technician makes of this power, or the power unchanged.
+
+    Read out of `BIOLOGICAL_TRAITS` rather than restated here, so the threshold this
+    checks against and the threshold the damage calculation applies cannot drift apart.
+    """
+    trait = (BIOLOGICAL_TRAITS.get('damage_multipliers') or {}).get(
+        str(ability or '').strip().lower())
+    if not trait or trait.get('condition') != 'power_cap':
+        return power
+    if 0 < power <= trait.get('threshold', 0):
+        return power * trait.get('multiplier', 1.0)
+    return power
+
+
+def power_floor(attacker, move, move_type, power, ability=None):
+    """
+    The base power a Terastallised specimen's matching move actually starts from.
+
+    Returns `power` untouched in every case that is not the floor, so the caller can
+    assign the result unconditionally rather than growing a branch of its own.
+    """
+    if not is_terastallised(attacker) or move_type != active_tera_type(attacker):
+        return power
+
+    move = move or {}
+    if move.get('class') == 'status':
+        return power
+
+    power = int(power or 0)
+    if power <= 0 or power >= TERA_POWER_FLOOR:
+        return power
+
+    name = str(move.get('name') or '').strip().lower()
+    if name in FLOORLESS_MOVES or name in MULTI_STRIKE_MOVES:
+        return power
+    if int(move.get('priority') or 0) > 0:
+        return power
+    if technician_power(power, ability) >= TERA_POWER_FLOOR:
+        return power
+
+    return TERA_POWER_FLOOR
 
 
 def stellar_effectiveness(move_type, defender):

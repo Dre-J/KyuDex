@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 from utils.tera import (battle_types as tera_battle_types,
                         stab_multiplier as tera_stab_multiplier,
                         active_tera_type as tera_active_type,
-                        stellar_effectiveness as tera_stellar_effectiveness)
+                        stellar_effectiveness as tera_stellar_effectiveness,
+                        is_stellar as tera_is_stellar,
+                        is_terastallised as tera_is_out,
+                        power_floor as tera_power_floor)
 
 
 def apply_entry_hazards(specimen, hazards, type_chart, owner_prefix="Your"):
@@ -8042,6 +8045,18 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         if move.get('name') in GMAX_FIXED_POWER:
             move_power = GMAX_FIXED_POWER[move['name']]
 
+        # 🚨 THE TERA LOW-POWER FLOOR
+        # A move of the element the crystal is showing starts from 60 if it started from
+        # less. Here rather than lower down because it is a BASE power floor: Facade's
+        # doubling and Weather Ball's condition both multiply what this leaves behind,
+        # which is what the games do and the only reading under which the floor is worth
+        # sixty rather than sixty-ish.
+        #
+        # Read AFTER the dynamic override on purpose. The exception list is mostly moves
+        # that compute their own power, and a floor applied before the computation would
+        # be silently overwritten by it - which would look like it worked.
+        move_power = tera_power_floor(attacker, move, move_type, move_power, atk_ability)
+
         # Weather Ball and Terrain Pulse double when the conditions that gave them their
         # element are actually present. Set up above, beside the type rewrite, so the
         # element and the power can never disagree about whether it was in effect.
@@ -9011,6 +9026,19 @@ def _resolve_damage(attacker, defender, move, weather='none', terrain='none', ta
         'esper-wing': [('attacker', 'speed', 1)],
         'rapid-spin': [('attacker', 'speed', 1)]
     }
+
+    # **STELLAR TERA BLAST PAYS FOR ITSELF**, and only Stellar's does. An ordinary Tera
+    # Blast has no drawback at all, so this cannot live in the table above as a fixed
+    # row - it is a property of the crystal rather than of the move, and the same move
+    # thrown by a Water-Tera specimen must come away clean.
+    #
+    # Both offences, because Tera Blast picks the higher one: dropping only the stat it
+    # happened to use would leave a specimen with one clean attack to switch to.
+    if (move_name == 'tera-blast' and tera_is_out(attacker)
+            and tera_is_stellar(attacker)):
+        COMPLEX_STAT_MOVES['tera-blast'] = [('attacker', 'attack', -1),
+                                            ('attacker', 'special-attack', -1)]
+
     # 1. Complex Stat Anomalies
     if move_name in COMPLEX_STAT_MOVES:
         # Kinetic stat drops (like Close Combat) only trigger if the attack actually lands!
