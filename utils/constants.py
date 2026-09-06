@@ -920,6 +920,12 @@ TYPE_EMOJI = {
     # mark would look like a bug rather than like a move nothing can learn. There is no
     # custom badge because the uploaded set is the eighteen real types.
     'shadow': '🌒',
+    # And the twentieth entry, which IS reachable: Stellar is a real Tera type a specimen
+    # can be wearing, so it turns up in shard listings, on the battle card and in
+    # `!tera`. Same reason as Shadow for having no custom badge - the uploaded set is the
+    # eighteen elements - and the same reason for being here at all, since `type_icon`
+    # would otherwise render it as a question mark at every one of those sites.
+    'stellar': '🌠',
 }
 
 # ==========================================
@@ -3072,6 +3078,12 @@ TERA_SHARD_TYPES = {f'{element}-tera-shard': element for element in sorted(TYPE_
 assert len(TERA_SHARD_TYPES) == 18, (
     f"expected 18 Tera Shards, built {len(TERA_SHARD_TYPES)}")
 
+# The nineteenth, kept OUT of the table above. Stellar is not an element - it has no
+# habitat, no specimen that carries it, no row in the type chart and no sector - and
+# every system that pays a shard steers by an element. Named here so the one place that
+# does spend it has a vocabulary; see `utils.tera.ALL_TERA_SHARDS`.
+STELLAR_TERA_SHARD = 'stellar-tera-shard'
+
 
 # ==========================================
 # 🧬 THE PHASE 8 SHELF
@@ -3177,9 +3189,31 @@ def build_phase8_stock():
             "purchasable": False,
         }
 
+    # **THE NINETEENTH, AND IT IS NOT IN `TERA_SHARD_TYPES` ON PURPOSE.** Stellar is not
+    # an element: it has no habitat to be deployed into, no specimen that leaves one on
+    # fainting, no row in the type chart for a cull directive to name, and no sector to
+    # pay it. Every one of those systems reads `TERA_SHARD_TYPES`, and putting Stellar in
+    # it would need a special case in all of them - and would silently raise the Crystal
+    # Seed's price from eighteen shards to nineteen.
+    #
+    # So it gets a catalogue row and nothing else. `!refine` cannot reach it (the exchange
+    # gates on `is_element`), which is the point: two hundred Fire Shards must not launder
+    # into the type that punishes Terastallisation.
+    shelf[STELLAR_TERA_SHARD] = {
+        "name": "Stellar Tera Shard",
+        "price": 0,
+        "desc": ("Fifty of these change a specimen's Tera type to Stellar. Shed by "
+                 "Terapagos alone."),
+        "emoji": "🌠",
+        "category": "keyitems",
+        "purchasable": False,
+    }
+
     assert not any(shelf[shard].get('purchasable', True)
-                   for shard in TERA_SHARD_TYPES), (
+                   for shard in list(TERA_SHARD_TYPES) + [STELLAR_TERA_SHARD]), (
         "Tera Shards are earned, not bought")
+    assert STELLAR_TERA_SHARD not in TERA_SHARD_TYPES, (
+        "Stellar is not an element and must stay out of the eighteen")
     return shelf
 
 
