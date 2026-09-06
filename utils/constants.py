@@ -547,7 +547,7 @@ EQUIPMENT_CATALOG = {
     "sparkling-stone":  {"name": "Sparkling Stone", "price": 0, "desc": "Exchange with `!refine` to make a Z-Ring.", "emoji": "☀️", "category": "keyitems", "purchasable": False},
     # The fourth gimmick's key item and its material, sitting beside the other three so
     # Terastallisation costs an entry the way Mega, Dynamax and Z-Power all do.
-    "crystal-seed":  {"name": "Crystal Seed", "price": 0, "desc": "Exchange with `!refine` to make a Tera Orb.", "emoji": "💠", "category": "keyitems", "purchasable": False},
+    "crystal-seed":  {"name": "Crystal Seed", "price": 0, "desc": "Fused from one Tera Shard of every element with `!refine seed`. Two make a Tera Orb.", "emoji": "💠", "category": "keyitems", "purchasable": False},
     "tera-orb":  {"name": "Tera Orb", "price": 0, "desc": "Lets a specimen Terastallise once per battle.", "emoji": "💎", "category": "keyitems", "purchasable": False},
     "nugget":  {"name": "Nugget", "price": 0, "desc": "Exchange for Eco-Tokens", "emoji": "💵", "category": "keyitems", "purchasable": False, "sell_price": 5000},
     "memory-spore":  {"name": "Memory Spore", "price": 0, "desc": "Allows a pokemon to learn a tutor move.", "emoji": "🧬", "category": "keyitems", "purchasable": False},

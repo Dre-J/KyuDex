@@ -390,3 +390,74 @@ def parse_exchange(text):
 def exchange_cost(count, rate=EXCHANGE_RATE):
     """How many shards `count` of another element costs."""
     return max(0, int(count)) * rate
+
+
+# ==========================================
+# THE SEED
+# ==========================================
+# **THE TERA ORB SHIPPED BEHIND A DOOR WITH NO KEY.** `crystal-seed` had a catalogue row
+# and a place in `LAB_BLUEPRINTS`, and nothing anywhere in the world granted one - so the
+# Orb was uncraftable and the gimmick unreachable by any route.
+#
+# The other three gimmick materials are anomaly rolls on a PvE victory, and they are rolls
+# because Mega, Z and Dynamax have no economy of their own to draw on. Tera does. So its
+# material is **made of** the currency it unlocks: one shard of each of the eighteen
+# elements, fused.
+#
+# That makes BREADTH the price rather than luck, which is the one thing this economy
+# actually needs. A trainer cannot farm a single habitat to the Orb - and the five
+# expedition sectors between them cover all eighteen elements exactly once, so the sector
+# map is also the map of what is still missing. Whatever luck is left over is answered by
+# the exchange above: four of a drowning element buy the one that never turned up.
+#
+# Eighteen is deliberately UNDER `SHARDS_PER_CHANGE`. The door costs less than the first
+# room, or nobody reaches the mechanic to spend fifty on it.
+SEED_ITEM = 'crystal-seed'
+SEED_SHARDS_EACH = 1
+
+
+def seed_elements():
+    """Every element a seed wants, which is every element a shard exists for."""
+    return sorted(TERA_SHARD_TYPES.values())
+
+
+def parse_seed(text):
+    """
+    How many seeds `seed`, `seeds 2` or `crystal seed` asks for, else None.
+
+    Shares `!refine` with the blueprints and the exchange, and cannot collide with
+    either: `crystal-seed` is a MATERIAL rather than a recipe, so no blueprint answers to
+    this name, and neither word is an element.
+    """
+    words = str(text or '').replace('-', ' ').lower().split()
+    if words[:1] == ['crystal']:
+        words = words[1:]
+    if words[:1] not in (['seed'], ['seeds']):
+        return None
+
+    if len(words) == 1:
+        return 1
+    if len(words) == 2 and words[1].isdigit():
+        return int(words[1])
+    return None
+
+
+def seed_recipe(count=1, each=SEED_SHARDS_EACH):
+    """`{element: shards}` for `count` seeds - one of everything, times the count."""
+    wanted = max(0, int(count)) * each
+    return {element: wanted for element in seed_elements()}
+
+
+def seed_shortfall(held, count=1, each=SEED_SHARDS_EACH):
+    """
+    `[(element, has, needs)]` for every element the ledger is short of.
+
+    `held` is keyed by ITEM NAME, the shape a `user_inventory` read returns, rather than
+    by element - so the caller passes the rows straight in.
+    """
+    short = []
+    for element, needed in sorted(seed_recipe(count, each).items()):
+        has = int(held.get(shard_for(element), 0) or 0)
+        if has < needed:
+            short.append((element, has, needed))
+    return short
