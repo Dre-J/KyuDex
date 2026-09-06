@@ -49,6 +49,95 @@ def token_side(amount):
     """
     return [{'tokens': int(amount)}]
 
+
+def item_side(items):
+    """
+    A pile of items, shaped the same way money is, for the same reason.
+
+    An entry carries the KEY and the quantity rather than a display name, because the
+    ledger is read back by people reconstructing an incident and a display name is the
+    one field a catalogue rename would quietly rewrite.
+    """
+    return [{'item': key, 'quantity': int(qty)}
+            for key, qty in sorted((items or {}).items()) if int(qty) > 0]
+
+
+def parse_item_offer(text):
+    """
+    `({key: quantity}, [complaints])` for `2 rare candy, 20 fire tera shard, 0 potion`.
+
+    **SET, NOT ADD.** A quantity replaces whatever was offered of that item, and zero
+    takes it off the table - so one modal both adds and removes and there is no second
+    button to keep in step with the first. A bare name means one.
+
+    Both halves come back: the items that parsed AND the lines that did not, so a trainer
+    who mistypes one of five entries is told which one rather than losing the lot.
+    """
+    from utils.items import resolve
+
+    wanted, complaints = {}, []
+    for chunk in str(text or '').replace('\n', ',').split(','):
+        words = chunk.strip().split()
+        if not words:
+            continue
+
+        count = 1
+        if words[0].lstrip('-').isdigit():
+            count, words = int(words[0]), words[1:]
+        elif len(words) > 1 and words[-1].lower().lstrip('x').isdigit() \
+                and words[-1].lower().startswith('x'):
+            count, words = int(words[-1][1:]), words[:-1]
+
+        if not words:
+            complaints.append(f"`{chunk.strip()}` names a number but no item.")
+            continue
+        if count < 0:
+            complaints.append(f"`{chunk.strip()}` asks for a negative quantity.")
+            continue
+
+        key, refusal = resolve(" ".join(words))
+        if not key:
+            complaints.append(refusal)
+            continue
+        wanted[key] = count
+
+    return wanted, complaints
+
+
+async def move_items(cursor, items, sender, receiver):
+    """
+    Move a pile of items from one ledger to another, or refuse the whole trade.
+
+    **THE DEDUCTION CARRIES ITS OWN GUARD.** `quantity >= ?` in the WHERE clause rather
+    than a SELECT beforehand, because between reading a balance and writing it a trainer
+    can spend the same potion somewhere else - and a trade window is a live message that
+    can sit open for five minutes. A row that does not update raises, which rolls the
+    whole transaction back, which is the only acceptable outcome: an item that leaves one
+    ledger without arriving in the other is the fault worth never having.
+
+    Does NOT commit; the caller owns the transaction.
+    """
+    from utils.items import pretty_item
+
+    for key, qty in sorted((items or {}).items()):
+        qty = int(qty)
+        if qty <= 0:
+            continue
+
+        await cursor.execute("""
+            UPDATE user_inventory SET quantity = quantity - ?
+            WHERE user_id = ? AND item_name = ? AND quantity >= ?
+        """, (qty, str(sender), key, qty))
+        if cursor.rowcount == 0:
+            raise ValueError(f"{qty}x {pretty_item(key)} is no longer in the offering "
+                             f"trainer's bag.")
+
+        await cursor.execute("""
+            INSERT INTO user_inventory (user_id, item_name, quantity)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + ?
+        """, (str(receiver), key, qty, qty))
+
 # How long a trade record is kept. Twelve months, set by the operator rather than
 # guessed at here: the ledger exists to reconstruct incidents, and a duplication bug or
 # a scam report can surface months after the fact, but "we keep it because we might want
@@ -215,6 +304,13 @@ def describe_side(entries):
         # stops being worth reading.
         if 'tokens' in e:
             parts.append(f"🪙 **{int(e['tokens']):,}** Eco Tokens")
+            continue
+        # An item entry, for the same reason money needs one: run through the specimen
+        # formatter it would read "? (Lv ?)".
+        if 'item' in e:
+            from utils.items import pretty_item
+            parts.append(f"📦 **{int(e.get('quantity', 1))}x** "
+                         f"{pretty_item(e['item'])}")
             continue
         parts.append(
             f"{'✨ ' if e.get('shiny') else ''}"
