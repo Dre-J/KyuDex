@@ -3,7 +3,9 @@ from discord.ext import commands
 from utils.constants import DB_FILE
 from utils.accounts import wipe_user
 from utils.trading import (announce_trade, blocked_from_trading, first_blocked,
-                           log_trade, snapshot)
+                           log_trade, snapshot, item_side, parse_item_offer,
+                           move_items)
+from utils.items import pretty_item
 from utils.limits import (ENERGY_MAX, ENERGY_BANK_CAP, ENERGY_REGEN_PER_HOUR,
                           describe_energy, regenerate_energy)
 from utils.constants import BIOME_ORDER, biome_label, current_skies
@@ -485,6 +487,78 @@ class AddSpecimenModal(discord.ui.Modal, title="Add Specimen(s) to Exchange"):
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ A critical database error occurred while processing your offer.", ephemeral=True)
 
+class OfferItemsModal(discord.ui.Modal, title="Offer Items"):
+    """
+    The item half of an exchange.
+
+    **SET RATHER THAN ADD, WHICH IS WHY THERE IS ONE BUTTON AND NOT TWO.** A quantity
+    replaces whatever was offered of that item and `0` takes it off the table, so adding
+    and removing are the same gesture. The specimen half keeps its two modals because a
+    Pokemon is not a quantity - you cannot offer three of one.
+    """
+    item_input = discord.ui.TextInput(
+        label="Items and quantities",
+        placeholder="e.g. 20 fire tera shard, 3 rare candy, 0 potion",
+        style=discord.TextStyle.paragraph,
+        min_length=1,
+        max_length=300,
+        required=True,
+    )
+
+    def __init__(self, trade_view, user):
+        super().__init__()
+        self.trade_view = trade_view
+        self.user = user
+
+    async def on_submit(self, interaction: discord.Interaction):
+        wanted, complaints = parse_item_offer(self.item_input.value)
+        if not wanted and complaints:
+            return await interaction.response.send_message(
+                "\n".join(complaints[:4]), ephemeral=True)
+
+        user_id = str(self.user.id)
+        offering = (self.trade_view.p1_items if self.user == self.trade_view.player1
+                    else self.trade_view.p2_items)
+
+        # **CHECKED AS IT IS OFFERED**, the same way a starter is refused at the offer
+        # rather than at the confirmation - so the other trainer never watches twenty
+        # shards appear and then vanish. Checked AGAIN at the write, because a trade
+        # window sits open for five minutes and a bag can empty in that time.
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT item_name, quantity FROM user_inventory "
+                    "WHERE user_id = ?", (user_id,)) as cursor:
+                held = {name: qty for name, qty in await cursor.fetchall()}
+
+        for key, qty in sorted(wanted.items()):
+            if qty <= 0:
+                offering.pop(key, None)
+                continue
+            if int(held.get(key, 0) or 0) < qty:
+                complaints.append(
+                    f"You hold **{int(held.get(key, 0) or 0)}x** {pretty_item(key)}, "
+                    f"not {qty}.")
+                continue
+            offering[key] = qty
+
+        if complaints:
+            await interaction.response.send_message(
+                "\n".join(complaints[:4]), ephemeral=True)
+            # The lines that DID parse have already been taken, so the window still has
+            # to be redrawn - through the message rather than the interaction, which has
+            # now been used to answer.
+            self.trade_view.p1_ready = False
+            self.trade_view.p2_ready = False
+            if self.trade_view.message:
+                await self.trade_view.message.edit(
+                    embed=self.trade_view.generate_embed(), view=self.trade_view)
+            return
+
+        self.trade_view.p1_ready = False
+        self.trade_view.p2_ready = False
+        await self.trade_view.update_ui(interaction)
+
+
 class ActiveTradeView(discord.ui.View):
     def __init__(self, player1, player2, active_trades):
         super().__init__(timeout=300) # 5 minute timeout
@@ -496,6 +570,10 @@ class ActiveTradeView(discord.ui.View):
         # Trade State
         self.p1_offer = []
         self.p2_offer = []
+        # The item halves. `{catalog key: quantity}` rather than a list, because an item
+        # offer is a quantity and a list would have to be de-duplicated on every add.
+        self.p1_items = {}
+        self.p2_items = {}
         self.p1_ready = False
         self.p2_ready = False
 
@@ -605,9 +683,12 @@ class ActiveTradeView(discord.ui.View):
             user_a_id = str(self.player1.id)
             user_b_id = str(self.player2.id)
             
-            # If both arrays are empty, there's nothing to trade!
-            if not self.p1_offer and not self.p2_offer:
-                return await interaction.response.edit_message(content="⚠️ Trade canceled: No biological data was offered.", view=None)
+            # If every side is empty, there's nothing to trade! Items count as something
+            # offered - a pile of shards for a pile of berries is a whole trade with no
+            # specimen anywhere in it.
+            if not (self.p1_offer or self.p2_offer
+                    or self.p1_items or self.p2_items):
+                return await interaction.response.edit_message(content="⚠️ Trade canceled: Nothing was offered.", view=None)
 
             try:
                 # 1. LOCK THE ECOSYSTEM (Start Transaction)
@@ -625,8 +706,10 @@ class ActiveTradeView(discord.ui.View):
 
                     # Snapshot both sides BEFORE anything moves, so the record survives
                     # the evolutions this trade is about to trigger.
-                    snap_a = await snapshot(db, [p['tag'] for p in self.p1_offer])
-                    snap_b = await snapshot(db, [p['tag'] for p in self.p2_offer])
+                    snap_a = (await snapshot(db, [p['tag'] for p in self.p1_offer])
+                              + item_side(self.p1_items))
+                    snap_b = (await snapshot(db, [p['tag'] for p in self.p2_offer])
+                              + item_side(self.p2_items))
 
                     await db.execute("BEGIN TRANSACTION")
 
@@ -700,6 +783,16 @@ class ActiveTradeView(discord.ui.View):
                                 # box - very often in front of their starter.
                                 await bump_to_end_of_box(cursor, tag)
                                 
+                            # 3b. MOVE THE ITEMS, both ways, inside the same
+                            # transaction as the specimens. A trade that half-happens is
+                            # the fault worth never having, and `move_items` raises
+                            # rather than writing a negative balance if a bag emptied
+                            # while the window sat open.
+                            await move_items(cursor, self.p1_items,
+                                             user_a_id, user_b_id)
+                            await move_items(cursor, self.p2_items,
+                                             user_b_id, user_a_id)
+
                             # 4. ACTIVE PARTNER SAFETY SWEEP
                             p1_tags = [p['tag'] for p in self.p1_offer]
                             p2_tags = [p['tag'] for p in self.p2_offer]
@@ -753,23 +846,22 @@ class ActiveTradeView(discord.ui.View):
                 self.active_trades.discard(self.player2.id)
 
     def generate_embed(self):
-        embed = discord.Embed(title="🤝 Active Specimen Exchange", color=discord.Color.blue())
-        
-        # Format Player 1's side
+        embed = discord.Embed(title="🤝 Active Exchange", color=discord.Color.blue())
+
+        def side(offer, items):
+            text = ""
+            for p in offer:
+                # Display Box Number instead of the Tag
+                text += f"• **{p['name'].capitalize()}** (Lvl {p['level']}) | Box `#{p['box']}`\n"
+            for key, qty in sorted(items.items()):
+                text += f"• 📦 **{qty}x** {pretty_item(key)}\n"
+            return text or "*Nothing offered yet.*"
+
         p1_status = "✅ READY" if self.p1_ready else "⏳ Deciding..."
-        p1_text = ""
-        for p in self.p1_offer:
-            # Display Box Number instead of the Tag
-            p1_text += f"• **{p['name'].capitalize()}** (Lvl {p['level']}) | Box `#{p['box']}`\n"
-        if not p1_text: p1_text = "*Nothing offered yet.*"
-        
-        # Format Player 2's side
+        p1_text = side(self.p1_offer, self.p1_items)
+
         p2_status = "✅ READY" if self.p2_ready else "⏳ Deciding..."
-        p2_text = ""
-        for p in self.p2_offer:
-            # Display Box Number instead of the Tag
-            p2_text += f"• **{p['name'].capitalize()}** (Lvl {p['level']}) | Box `#{p['box']}`\n"
-        if not p2_text: p2_text = "*Nothing offered yet.*"
+        p2_text = side(self.p2_offer, self.p2_items)
 
         embed.add_field(name=f"{self.player1.display_name} ({p1_status})", value=p1_text, inline=True)
         embed.add_field(name=f"{self.player2.display_name} ({p2_status})", value=p2_text, inline=True)
@@ -798,6 +890,13 @@ class ActiveTradeView(discord.ui.View):
             
         # Open the modal so they can type the tag
         await interaction.response.send_modal(AddSpecimenModal(self, interaction.user))
+
+    @discord.ui.button(label="📦 Offer Items", style=discord.ButtonStyle.secondary, row=1)
+    async def items_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user not in [self.player1, self.player2]:
+            return await interaction.response.send_message("You are not part of this exchange.", ephemeral=True)
+
+        await interaction.response.send_modal(OfferItemsModal(self, interaction.user))
 
     @discord.ui.button(label="✔️ Toggle Ready", style=discord.ButtonStyle.primary)
     async def ready_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1174,6 +1273,12 @@ class Social(commands.Cog):
     @checks.is_authorized()
     @checks.is_not_in_combat() # Can't trade while fighting!
     async def start_trade(self, ctx, target_user: discord.Member):
+        """
+        Open an exchange window with another trainer.
+
+        Either side may put up specimens, items, or both - a pile of Tera Shards for a
+        pile of berries is a whole trade with no Pokemon in it.
+        """
         author_id = ctx.author.id
         target_id = target_user.id
 
