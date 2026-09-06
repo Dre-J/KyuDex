@@ -49,7 +49,9 @@ from utils import directives as D
 from utils.formulas import get_xp_requirement, get_planetary_cycle, calculate_real_stat, generate_biometrics, roll_gender, gender_icon, roll_starter_ivs, pretty_item
 import re
 from utils.tera import (SHARDS_PER_CHANGE, shard_for, tera_type_of,
-                        parse_exchange, exchange_cost, EXCHANGE_RATE)
+                        parse_exchange, exchange_cost, EXCHANGE_RATE,
+                        parse_seed, seed_recipe, seed_shortfall, seed_elements,
+                        SEED_ITEM)
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
@@ -6214,6 +6216,69 @@ class Ecology(commands.Cog):
             f"{count} {type_icon(target)} **{target.title()}**.\n"
             f"-# {held - price} {source.title()} left · `!tera` to see the rest.")
 
+    async def fuse_seed(self, ctx, count):
+        """
+        Fuse one shard of every element into a Crystal Seed.
+
+        **THE MATERIAL IS MADE OF THE CURRENCY IT UNLOCKS.** Nothing in the world granted
+        a Crystal Seed before this, so the Tera Orb - which needs two of them - could not
+        be built by any route at all. The other three gimmick materials fall out of an
+        anomaly roll because their gimmicks have no economy; Tera has one, and using it
+        means the Orb is earned by doing the thing rather than by rolling well.
+
+        Breadth is the price. Eighteen elements cannot come from one habitat, and the
+        refusal below says exactly which ones are missing so the next expedition has
+        somewhere to go.
+        """
+        user_id = str(ctx.author.id)
+
+        if count < 1:
+            return await ctx.send("💠 Fuse how many seeds? `!refine seed` or `!refine seed 2`.")
+
+        recipe = seed_recipe(count)
+        async with aiosqlite.connect(DB_FILE) as db:
+            async with db.execute(
+                    "SELECT item_name, quantity FROM user_inventory "
+                    "WHERE user_id = ?", (user_id,)) as cur:
+                held = {name: qty for name, qty in await cur.fetchall()}
+
+            short = seed_shortfall(held, count)
+            if short:
+                # WHAT IS MISSING, NOT HOW MUCH IS SHORT IN TOTAL. A trainer eleven
+                # elements away wants the list of eleven, because that is a route.
+                # NAMED, not only iconed. `type_icon` returns a custom guild emoji, so a
+                # list of eighteen of them is unreadable to anyone whose client has not
+                # resolved them - and this list is the route, so it has to be legible.
+                lines = " · ".join(
+                    f"{type_icon(element)} **{element.title()}** `{has}/{needs}`"
+                    for element, has, needs in short)
+                return await ctx.send(
+                    f"💠 A **Crystal Seed** fuses one shard of **every element**"
+                    f"{f' — {count} of each, for {count} seeds' if count > 1 else ''}."
+                    f"\nStill wanted ({len(short)}):\n{lines}\n"
+                    f"-# `!refine grass fire` trades {EXCHANGE_RATE} spare of one "
+                    f"element for 1 of another.")
+
+            # SPENT, THEN GRANTED - the order the exchange and `!tera` both use.
+            for element, needed in sorted(recipe.items()):
+                await db.execute(
+                    "UPDATE user_inventory SET quantity = quantity - ? "
+                    "WHERE user_id = ? AND item_name = ?",
+                    (needed, user_id, shard_for(element)))
+            await db.execute("""
+                INSERT INTO user_inventory (user_id, item_name, quantity)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + ?
+            """, (user_id, SEED_ITEM, count, count))
+            await db.commit()
+
+        spent = sum(recipe.values())
+        seeds = int(held.get(SEED_ITEM, 0) or 0) + count
+        await ctx.send(
+            f"💠 Fused {spent} shards — one of every element — into "
+            f"**{count}x Crystal Seed**.\n"
+            f"-# {seeds} held · 2 make a Tera Orb with `!refine tera-orb`.")
+
     @commands.command(name="refine", aliases=["craft", "synthesize"])
     @checks.has_started()
     @checks.is_authorized()
@@ -6224,6 +6289,7 @@ class Ecology(commands.Cog):
         `!refine mega-bracelet` builds a key item from its material.
         `!refine grass fire` trades four Grass Shards for one Fire Shard.
         `!refine grass fire 3` does that three times over.
+        `!refine seed` fuses one shard of every element into a Crystal Seed.
         """
         user_id = str(ctx.author.id)
 
@@ -6234,6 +6300,13 @@ class Ecology(commands.Cog):
         swap = parse_exchange(blueprint)
         if swap:
             return await self.exchange_shards(ctx, *swap)
+
+        # ...and so does the fusion, for the same reason. `crystal-seed` is a MATERIAL
+        # rather than a recipe, so no blueprint answers to this name and nothing is
+        # shadowed by reading it here.
+        seeds = parse_seed(blueprint)
+        if seeds is not None:
+            return await self.fuse_seed(ctx, seeds)
 
         blueprint_name = blueprint.lower().replace(" ", "-")
         
