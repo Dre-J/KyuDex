@@ -26,6 +26,7 @@ import random
 
 from utils.constants import (BREEDING_ITEMS, EVOLUTION_ITEMS, GRIND_ITEMS,
                              EQUIPMENT_CATALOG)
+from utils.tera import shard_for
 
 EVOLUTION_OBJECTIVE = 'trigger_mutation'
 CULL_OBJECTIVE = 'cull_type'
@@ -49,6 +50,23 @@ OBJECTIVES = (CULL_OBJECTIVE, SURVEY_OBJECTIVE, EVOLUTION_OBJECTIVE)
 # `utils.limits.directive_yield` thins the fifth claim of a day so twenty banked
 # directives cannot be cashed at full price in one sitting.
 CULL_TOKENS_PER_KILL = 50
+
+# **THE CULL DIRECTIVE IS THE ONLY THING IN THE WORLD THAT NAMES AN ELEMENT AND ASKS FOR
+# WORK AGAINST IT.** Field missions pay their habitat's element and battle residue pays
+# whatever happened to faint, so both are steered only loosely; a directive that says
+# "eight Fire types" is a trainer choosing to chase Fire Shards and being told the price
+# up front. The reward is rolled and STORED at issue time, so `!survey` shows
+# "Cull 8 Fire -> 8 Fire Shards" before any of the work is done.
+#
+# Like the token grant, this scales with the work rather than with the tier: twelve
+# knockouts is twelve knockouts whatever the roll said. The uncommon tier doubles it,
+# which is what a tier is for.
+#
+# Expected yield is roughly 2-3 shards of a NAMED element per cull directive issued.
+# That is deliberately a supplement to the missions rather than a replacement - the
+# directive system caps at 4/day and only a third of them are culls.
+CULL_SHARDS_PER_KILL = 1
+UNCOMMON_SHARD_MULTIPLIER = 2
 
 
 # ------------------------------------------
@@ -146,11 +164,16 @@ LOOT_TABLES = {
             ('eco_tokens', None, 1, 1),
             ('item', HEALING, 3, 5),
             ('item', 'ultraball', 3, 5),
+            # A shard of the element the directive NAMED - the payload is decided at
+            # grant time from `target_variable`, which is why this entry carries no
+            # payload of its own.
+            ('shard', None, 1, 1),
         ],
         TIER_UNCOMMON: [
             ('item', VITAMINS, 3, 6),
             ('item', EV_BERRIES, 3, 6),
             ('item', 'rare-candy', 3, 5),
+            ('shard', None, 1, 1),
         ],
         TIER_RARE: [
             ('item', GRIND_ITEMS, 1, 1),
@@ -201,7 +224,7 @@ def _pick_payload(payload, rng):
     return rng.choice(sorted(payload))
 
 
-def roll_reward(objective, required_amount, rng=random):
+def roll_reward(objective, required_amount, rng=random, target=None):
     """
     What one directive pays, as `(reward_type, reward_payload, amount, tier)`.
 
@@ -210,15 +233,35 @@ def roll_reward(objective, required_amount, rng=random):
     already exist on the live database and every one of them is a row of the old shape,
     so the new `reward_amount` column carries the quantity for items and is simply 1 for
     a cash grant rather than the two fields having to be read together.
+
+    **A SHARD ENTRY RESOLVES AGAINST `target`, AND LEAVES AS AN ORDINARY ITEM ROW.** The
+    cull directive already names an element in `target_variable`; the shard is that
+    element's. Nothing downstream learns a new reward type - `!survey`, `!claim` and
+    `describe_reward` all keep reading an item key and a quantity - which is the whole
+    reason this is worth doing here rather than at the grant.
+
+    A `target` that is not an element takes the shard entries off the table rather than
+    producing a broken row. No caller does that today; culls always name one.
     """
     tier = roll_tier(objective, required_amount, rng)
     table = LOOT_TABLES.get(objective) or LOOT_TABLES[SURVEY_OBJECTIVE]
-    kind, payload, low, high = rng.choice(table[tier])
+
+    shard = shard_for(target)
+    entries = [e for e in table[tier] if shard or e[0] != 'shard']
+    kind, payload, low, high = rng.choice(entries)
 
     if kind == 'eco_tokens':
         # Cash scales with the work rather than with the tier: twelve knockouts is
         # twelve knockouts whatever the roll said.
         return 'eco_tokens', str(int(required_amount) * CULL_TOKENS_PER_KILL), 1, tier
+
+    if kind == 'shard':
+        # Shards scale with the work for the same reason cash does, and the tier is what
+        # doubles them rather than a second range to keep in step with the first.
+        amount = max(1, int(required_amount) * CULL_SHARDS_PER_KILL)
+        if tier != TIER_COMMON:
+            amount *= UNCOMMON_SHARD_MULTIPLIER
+        return 'item', shard, amount, tier
 
     return 'item', _pick_payload(payload, rng), rng.randint(low, high), tier
 

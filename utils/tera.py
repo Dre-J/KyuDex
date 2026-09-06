@@ -461,3 +461,48 @@ def seed_shortfall(held, count=1, each=SEED_SHARDS_EACH):
         if has < needed:
             short.append((element, has, needed))
     return short
+
+
+# ==========================================
+# WHAT A WARDEN IS WORTH IN SHARDS
+# ==========================================
+# **THE SECTORS ARE ALREADY A MAP OF THE ELEMENTS.** `EXPEDITION_BIOMES` gives each of the
+# five a tuple of types, and between them those tuples cover all eighteen exactly once -
+# no duplicates and none missing. So a Warden needs no element invented for it: it pays
+# its sector's, and which sector to go and beat for a given element is a thing a trainer
+# can look up rather than guess.
+#
+# That makes apex - dragon, and nothing else at all - the reliable route to the element
+# that is otherwise the hardest to steer towards. Which is the right shape for the last
+# sector a Warden opens.
+#
+# **PER ELEMENT, NOT PER BUNDLE.** Sprawl has six elements and apex has one, so a fixed
+# total per Warden would make apex six times better per element - and fifty of ONE is
+# what a type change costs. Equal per element is the only rule that treats the five
+# sectors alike.
+#
+# A first clear is the large one. Repeat clears - the sparring loop that already pays 500
+# tokens - pay a quarter of it, which keeps a Warden worth re-fighting without turning
+# the deepest sector into a shard farm: fifty Dragon is seventeen apex clears at that
+# rate, against a real team, and energy is spent on every one of them.
+WARDEN_FIRST_CLEAR_SHARDS = 12
+WARDEN_REPEAT_SHARDS = 3
+
+
+def warden_bundle(biome, first_clear=True):
+    """`{shard: quantity}` a sector's Warden pays, or `{}` for a sector with no map."""
+    from utils.constants import EXPEDITION_BIOMES
+
+    sector = EXPEDITION_BIOMES.get(str(biome or '').strip().lower())
+    if not sector:
+        return {}
+
+    each = WARDEN_FIRST_CLEAR_SHARDS if first_clear else WARDEN_REPEAT_SHARDS
+    return {shard_for(element): each for element in sorted(sector['types'])
+            if shard_for(element)}
+
+
+def describe_bundle(bundle):
+    """`12x Water · 12x Ice`, for the victory screen."""
+    return " · ".join(f"{qty}x {(element_of(shard) or '').title()} Shards"
+                      for shard, qty in bundle.items())

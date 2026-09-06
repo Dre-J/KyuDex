@@ -5109,7 +5109,12 @@ class Ecology(commands.Cog):
             target_var = 'any'
             req_amt = random.randint(*D.OBJECTIVE_RANGE[D.EVOLUTION_OBJECTIVE])
 
-        rev_type, rev_payload, rev_amount, tier = D.roll_reward(chosen_obj, req_amt)
+        # The target goes in because a cull directive's shard is the element it NAMED,
+        # and the reward is decided here rather than at the claim. The other two
+        # objectives pass a species or `any`, which takes the shard entries off the
+        # table on their own.
+        rev_type, rev_payload, rev_amount, tier = D.roll_reward(
+            chosen_obj, req_amt, target=target_var)
 
         cursor = await db.execute("""
             INSERT INTO field_directives
