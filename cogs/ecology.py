@@ -51,7 +51,8 @@ import re
 from utils.tera import (SHARDS_PER_CHANGE, shard_for, tera_type_of,
                         parse_exchange, exchange_cost, EXCHANGE_RATE,
                         parse_seed, seed_recipe, seed_shortfall, seed_elements,
-                        SEED_ITEM)
+                        SEED_ITEM, STELLAR, tera_shard_for, tera_element_of,
+                        locked_type, stellar_catch_bundle)
 from utils import checks
 from utils.accounts import may_choose_starter, grant_starter_licence
 from utils.regions import (REGIONS, STARTABLE_REGIONS, region_label, set_region,
@@ -3120,11 +3121,15 @@ class Ecology(commands.Cog):
                 return await ctx.send(
                     "💎 No Tera Shards yet. They come from field missions — `!deploy` a "
                     "specimen to a habitat and it brings back that habitat's element.")
+            # **READ THROUGH THE NINETEEN, NOT THE EIGHTEEN.** The query above matches
+            # any `%-tera-shard`, so a Stellar Shard is fetched either way - filtered
+            # through `TERA_SHARD_TYPES` it would be fetched and then silently dropped,
+            # and a trainer holding fifty of them would be told they had none.
             lines = "\n".join(
-                f"{type_icon(TERA_SHARD_TYPES[item])} **{TERA_SHARD_TYPES[item].title()}** "
-                f"— {qty}/{SHARDS_PER_CHANGE}"
+                f"{type_icon(tera_element_of(item))} "
+                f"**{tera_element_of(item).title()}** — {qty}/{SHARDS_PER_CHANGE}"
                 + ("  ✅" if qty >= SHARDS_PER_CHANGE else "")
-                for item, qty in held if item in TERA_SHARD_TYPES)
+                for item, qty in held if tera_element_of(item))
             return await ctx.send(f"### 💎 Tera Shards\n{lines}\n"
                                   f"-# {SHARDS_PER_CHANGE} of one element changes a "
                                   f"specimen's Tera type. `!tera 4 water`")
@@ -3160,10 +3165,20 @@ class Ecology(commands.Cog):
             types = [t for t in str(row[1] or '').split(',') if t]
             label = nickname or species.replace('-', ' ').title()
 
-            current = tera_type_of({'tera_type': stored, 'types': types})
+            # **THE NAME GOES IN.** Without it `species_rule` finds nothing and the
+            # forced types never apply, so this reported what an Ogerpon's stored column
+            # said rather than what it will actually become.
+            current = tera_type_of({'name': species, 'tera_type': stored,
+                                    'types': types})
+            locked = locked_type(species)
 
             # --- `!tera 4`: what it would become --------------------------------
             if element is None:
+                if locked:
+                    return await ctx.send(
+                        f"💎 **{label}** always Terastallises into "
+                        f"**{str(locked).title()}** — its form decides, and no shards "
+                        f"will change it.")
                 chosen = "chosen" if stored else "its primary type, unchanged"
                 return await ctx.send(
                     f"💎 **{label}** would Terastallise into "
@@ -3173,9 +3188,19 @@ class Ecology(commands.Cog):
 
             # --- `!tera 4 water`: spend the shards -------------------------------
             wanted = element.strip().lower()
-            shard = shard_for(wanted)
+
+            # **REFUSED BEFORE ANYTHING IS SPENT.** Ogerpon's mask and Terapagos's shell
+            # decide their Tera type, and the battle reads the rule rather than the
+            # column - so without this the fifty shards came off the ledger and bought a
+            # value that would never once be used.
+            if locked:
+                return await ctx.send(
+                    f"💎 **{label}**'s Tera type is locked to "
+                    f"**{str(locked).title()}** by its form. No shards were spent.")
+
+            shard = tera_shard_for(wanted)
             if not shard:
-                return await ctx.send(f"⚠️ `{element}` is not an element.")
+                return await ctx.send(f"⚠️ `{element}` is not a Tera type.")
             if wanted == current:
                 return await ctx.send(
                     f"💎 **{label}** already crystallises into "
@@ -4760,6 +4785,27 @@ class Ecology(commands.Cog):
                     found_tokens = max(1, int(random.randint(5, 150) * haul))
                     await db.execute("UPDATE users SET eco_tokens = eco_tokens + ? WHERE user_id = ?", (found_tokens, user_id))
 
+                # ==========================================
+                # THE NINETEENTH TYPE, TAKEN RATHER THAN FOUND
+                # ==========================================
+                # **STELLAR HAS EXACTLY ONE OWNER IN THIS WORLD.** Every other shard is
+                # steered by an element - a habitat, a defeated specimen, a named cull, a
+                # sector - and Stellar is in none of those maps, so it comes off the only
+                # thing that carries it.
+                #
+                # NOT scaled by `haul`. The diminishing return exists to thin the
+                # incidental haul of a farmed expedition; this is a fixed bundle off a
+                # 0.1% encounter, and thinning it would mean a Terapagos caught late in
+                # the day bought less than the same Terapagos caught early.
+                stellar = stellar_catch_bundle(pokemon_name)
+                for shard, qty in stellar.items():
+                    await db.execute("""
+                        INSERT INTO user_inventory (user_id, item_name, quantity)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, item_name)
+                        DO UPDATE SET quantity = quantity + ?
+                    """, (user_id, shard, qty, qty))
+
                 await db.commit()
                 
                 if is_private_spawn:
@@ -4825,6 +4871,16 @@ class Ecology(commands.Cog):
                 
                 if loot_text:
                     base_desc += f"\n🎁 **Recovered:** {', '.join(loot_text)}"
+
+                # Its own line rather than folded into the haul above, because it is not
+                # incidental: it is the only route to the nineteenth Tera type, and a
+                # trainer who reads past it will not find out any other way.
+                if stellar:
+                    base_desc += (
+                        f"\n🌠 **Stellar Crystals:** its shell shed "
+                        f"**{sum(stellar.values())}x Stellar Tera Shards** — exactly "
+                        f"enough to give one other specimen the nineteenth type. "
+                        f"`!tera <box> stellar`")
 
                 shiny_icon = "🌟" if is_shiny else "🌿"
                 

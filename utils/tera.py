@@ -20,7 +20,8 @@ original typing. Documented rather than hidden; fixing it means auditing every d
 reader and belongs in its own change.
 """
 from utils.constants import (ADAPTABILITY_STAB, TYPE_CHART, TERA_SHARD_TYPES,
-                             BIOLOGICAL_TRAITS, MULTI_STRIKE_MOVES)
+                             BIOLOGICAL_TRAITS, MULTI_STRIKE_MOVES,
+                             STELLAR_TERA_SHARD)
 
 # The flag on a combatant, set when the crystal comes out and never unset - Tera lasts the
 # rest of the battle in the games, which is what makes it a decision rather than a toggle.
@@ -260,6 +261,53 @@ def is_stellar(specimen):
     return tera_type_of(specimen) == STELLAR
 
 
+# ==========================================
+# THE NINETEENTH SHARD, AND THE LINE AROUND IT
+# ==========================================
+# **STELLAR IS NOT AN ELEMENT, AND EVERY SOURCE OF A SHARD STEERS BY ONE.** A field
+# mission pays its habitat's element, residue pays what fainted, a cull directive names a
+# row of the type chart, and a Warden pays its sector's - and the five sectors partition
+# the eighteen exactly once, which is the property that makes them worth beating for a
+# named type. Stellar is in none of those maps.
+#
+# So it stays out of `TERA_SHARD_TYPES` and gets one door of its own. `shard_for` and
+# `element_of` still answer for the eighteen and only the eighteen, which is what keeps
+# the exchange, the seed recipe, the missions and the directives from ever seeing it:
+# two hundred Fire Shards must not launder into the type that punishes Terastallisation.
+#
+# `ALL_TERA_SHARDS` is for the ONE place that spends a shard - `!tera` - and for the bag
+# listing, which has to be able to name what it is holding.
+ALL_TERA_SHARDS = dict(TERA_SHARD_TYPES)
+ALL_TERA_SHARDS[STELLAR_TERA_SHARD] = STELLAR
+
+# Exactly one type change, and no more. Terapagos is the only thing in the world that
+# carries Stellar and it spawns at a tenth of a percent; the bundle it sheds buys ONE
+# other specimen the nineteenth type, which is the whole reward. A second one needs a
+# second Terapagos.
+TERAPAGOS = 'terapagos'
+TERAPAGOS_STELLAR_SHARDS = SHARDS_PER_CHANGE
+
+
+def tera_shard_for(element):
+    """The shard that buys this Tera type, Stellar included. None for anything else."""
+    wanted = str(element or '').strip().lower()
+    if wanted == STELLAR:
+        return STELLAR_TERA_SHARD
+    return shard_for(wanted)
+
+
+def tera_element_of(shard):
+    """The Tera type a shard buys, Stellar included. None for anything else."""
+    return ALL_TERA_SHARDS.get(str(shard or '').strip().lower())
+
+
+def stellar_catch_bundle(species):
+    """`{shard: quantity}` catching this species sheds. Empty for everything else."""
+    if str(species or '').strip().lower() != TERAPAGOS:
+        return {}
+    return {STELLAR_TERA_SHARD: TERAPAGOS_STELLAR_SHARDS}
+
+
 def stellar_boost(attacker, move_type, adaptability=False, terrain='none'):
     """
     What Stellar pays for this move, and SPENDS the element if it pays.
@@ -381,6 +429,14 @@ def stellar_effectiveness(move_type, defender):
 #   ability  what it starts answering to
 #   boost    (stat, stages) raised on transforming
 TERA_SPECIES_RULES = {
+    # **THE FORM A TRAINER ACTUALLY OWNS.** Only base `terapagos` spawns; the Terastal
+    # form is something it becomes on entering a battle. So the rule below covered the
+    # form in the field and left the one sitting in the box unlocked - and the box is
+    # exactly where shards are spent. It carries `forced` alone: the ability, the form
+    # change and the flavour belong to the Terastal form, and repeating them here would
+    # unfold it twice.
+    'terapagos': {'forced': STELLAR},
+    'terapagos-stellar': {'forced': STELLAR},
     'terapagos-terastal': {
         'forced': STELLAR, 'form': 'terapagos-stellar', 'ability': 'teraform-zero',
         'flavour': 'unfolded into its Stellar Form',
@@ -412,6 +468,19 @@ def species_rule(specimen):
     """The Tera rule for the form this specimen is standing as, or None."""
     return TERA_SPECIES_RULES.get(
         str((specimen or {}).get('name') or '').lower().strip())
+
+
+def locked_type(species):
+    """
+    The Tera type this SPECIES cannot be bought out of, by name, or None.
+
+    By name rather than by specimen because the caller that most needs it is `!tera`,
+    which is holding a database row and a species string rather than a battle specimen -
+    and which was selling Ogerpon a Tera type it could never use. Fifty shards, spent,
+    for a column the battle overrules on sight.
+    """
+    return (TERA_SPECIES_RULES.get(
+        str(species or '').lower().strip().replace(' ', '-')) or {}).get('forced')
 
 
 # ==========================================
