@@ -55,6 +55,7 @@ from utils.constants import (BATTLE_BAG_ITEMS, BATTLE_BAG_MEDICAL, current_skies
                              move_pierces_immunity)
 from utils.tera import (may_terastallise, terastallise, tera_type_of,
                         active_tera_type, shard_for, TERA_MARKER, TERA_ORB,
+                        warden_bundle, describe_bundle,
                         form_for as tera_form_for,
                         species_flavour as tera_species_flavour)
 from utils.directives import credit_cull, credit_evolution
@@ -1580,6 +1581,36 @@ async def collect_crystal_residue(executor, fallen, user_id, rng=random):
         log += (f"\n💎 **{specimen['name'].capitalize()}** left behind a "
                 f"**{shard.replace('-', ' ').title()}**.")
     return log
+
+
+async def award_warden_bundle(executor, biome, user_id, first_clear=True):
+    """
+    A Sector Warden's shard bundle. Returns a log fragment, or "".
+
+    **THE ONE SOURCE THAT HANDS OVER A NAMED ELEMENT IN BULK.** Residue is steered only
+    by what a trainer chooses to fight and a field mission pays its habitat's element;
+    a Warden pays its SECTOR's, and the five sectors between them cover all eighteen
+    elements exactly once - so apex, which is dragon and nothing else, is the reliable
+    route to the element hardest to steer towards by any other means.
+
+    Paid on repeat clears as well as first ones, at a quarter of the rate. The sparring
+    loop is what makes a beaten Warden worth returning to, and a first-clear-only bundle
+    would make the deepest sector a one-off.
+
+    Lives out here rather than inside the victory branch for the same reason the residue
+    does: the branch it was written in is unreachable without a whole battle around it.
+    """
+    bundle = warden_bundle(biome, first_clear)
+    for shard, qty in bundle.items():
+        await executor.execute("""
+            INSERT INTO user_inventory (user_id, item_name, quantity)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, item_name) DO UPDATE SET quantity = quantity + ?
+        """, (user_id, shard, qty, qty))
+
+    if not bundle:
+        return ""
+    return f"\n💎 **Sector Crystals:** {describe_bundle(bundle)}."
 
 
 async def collect_field_spoils(executor, team, user_id):
@@ -8660,6 +8691,14 @@ class BattleDashboard(BattleCard):
                             
                             current_visas = user_data[0] if user_data and user_data[0] else "canopy"
                             
+                            # --- THE SHARD BUNDLE ---
+                            # Granted on both branches below, at two different rates, so
+                            # it is settled here where the first-clear question is
+                            # already being asked.
+                            crystals = await award_warden_bundle(
+                                db, biome, self.user_id,
+                                next_biome not in current_visas.split(','))
+
                             # --- THE ANTI-FARMING LOGIC ---
                             if next_biome not in current_visas.split(','):
                                 # FIRST TIME CLEAR!
@@ -8676,13 +8715,15 @@ class BattleDashboard(BattleCard):
                                 rewards_log = f"\n\n🎖️ **WARDEN DEFEATED!** You have proven your ecological mastery against the {w_data['title']}!\n"
                                 rewards_log += f"🛂 **Clearance Granted:** You secured the Visa for the **{next_biome.title()}** sector!\n"
                                 rewards_log += f"🎁 **First-Clear Bonus:** You received **{r_qty}x {r_item.replace('-', ' ').title()}**!"
+                                rewards_log += crystals
                             else:
                                 # REPEAT CLEAR (SPARRING)
                                 await db.execute("UPDATE users SET eco_tokens = eco_tokens + 500 WHERE user_id = ?", (self.user_id,))
                                 
                                 rewards_log = f"\n\n🎖️ **WARDEN DEFEATED!** You proved your continued mastery against the {w_data['title']}!\n"
-                                rewards_log += "💰 You received **500 Eco Tokens** for the sparring session.\n"
-                                rewards_log += "*(Note: Sector Visas and unique equipment are only granted on the first clear.)*"
+                                rewards_log += "💰 You received **500 Eco Tokens** for the sparring session."
+                                rewards_log += crystals
+                                rewards_log += "\n*(Note: Sector Visas and unique equipment are only granted on the first clear.)*"
                             
                             await db.commit() # Lock the transaction!
                         
