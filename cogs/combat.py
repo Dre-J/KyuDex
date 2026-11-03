@@ -12795,7 +12795,17 @@ class Combat(commands.Cog):
         # The duel goes ahead either way; `energy_haul` is what it will pay when it is
         # won, and it is carried on the state because the rewards engine runs many turns
         # later in a different object.
-        combat_log = f"*{msg}*\n\n"
+        # NOT WRAPPED IN ITALICS. `msg` arrives carrying its own emphasis - the spend is
+        # bold, and a banked or spent reserve appends ` · *note*` - so a `*` either side
+        # of it put an odd number of markers in front of everything that follows. The
+        # closing one fused with the note's own into `**`, which Discord then paired
+        # with the `**` opening the rival's name: every bold in the opening log shifted
+        # by one, so "They sent out" came out bold and the specimen's name did not, and
+        # the last marker had nothing to pair with and printed as a literal `**`.
+        #
+        # It is also what `ctx.send(msg)` does on the refusal path above, so the duel log
+        # and the refusal now show this line the same way.
+        combat_log = f"{msg}\n\n"
         # ==========================================
 
         try:
